@@ -155,7 +155,14 @@ document.addEventListener('DOMContentLoaded', () => {
                             citationText = source.citation;
                         } else if (source.source_type === 'pdf') {
                             // Fallback for PDF without citation
-                            citationText = `${source.title} (page ${source.page})`;
+                            if (source.pages && source.pages.length > 0) {
+                                // Use the pages array if available
+                                const pageText = source.pages.length === 1 ? 'page' : 'pages';
+                                citationText = `${source.title} (${pageText} ${source.pages.join(', ')})`;
+                            } else {
+                                // Fallback to single page if no pages array
+                                citationText = `${source.title} (page ${source.page})`;
+                            }
                         } else {
                             // Fallback for website without citation
                             citationText = `${source.title}. Retrieved from ${source.url}`;

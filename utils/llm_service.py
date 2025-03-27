@@ -48,7 +48,8 @@ def generate_response(query, context_documents):
     try:
         # Prepare context from retrieved documents
         context = ""
-        sources = []
+        all_sources = []
+        pdf_sources = {}  # Track PDF sources by title
         
         # Sort documents by relevance score (lower is better in FAISS)
         # This ensures the most relevant documents are included first
@@ -57,6 +58,7 @@ def generate_response(query, context_documents):
         # Limit to top 5 most relevant documents
         context_documents = sorted_docs[:5]
         
+        # First pass: Create source info and track PDFs
         for i, doc in enumerate(context_documents):
             # Add document to context with citation marker
             context += f"\nDocument [{i+1}]:\n{doc['text']}\n"
@@ -64,22 +66,74 @@ def generate_response(query, context_documents):
             # Prepare source information for citation
             source_info = {
                 "source_type": doc["metadata"].get("source_type", "unknown"),
-                "content": doc["text"][:200] + ("..." if len(doc["text"]) > 200 else "")
+                "content": doc["text"][:200] + ("..." if len(doc["text"]) > 200 else ""),
+                "doc_id": i+1  # Keep track of the document ID in context
             }
             
             # Include citation if available
             if doc["metadata"].get("citation"):
                 source_info["citation"] = doc["metadata"].get("citation")
             
-            # Include other metadata fields for fallback
+            # Handle different source types
             if doc["metadata"].get("source_type") == "pdf":
-                source_info["title"] = f"{doc['metadata'].get('title', 'Unnamed PDF')}"
-                source_info["page"] = doc['metadata'].get('page', 'unknown')
+                title = doc["metadata"].get("title", "Unnamed PDF")
+                page = doc["metadata"].get("page", "unknown")
+                source_info["title"] = title
+                source_info["page"] = page
+                
+                # Track PDFs by title
+                if title in pdf_sources:
+                    # Add this page to the existing PDF source
+                    pdf_sources[title]["pages"].add(str(page))
+                    # We'll still add this to all_sources for context tracking
+                else:
+                    # Create a new PDF entry
+                    pdf_sources[title] = {
+                        "title": title,
+                        "citation": source_info.get("citation", ""),
+                        "source_type": "pdf",
+                        "pages": {str(page)},
+                        "doc_ids": [i+1]
+                    }
             else:
                 source_info["title"] = doc["metadata"].get("title", "Unnamed Source")
                 source_info["url"] = doc["metadata"].get("url", "#")
             
-            sources.append(source_info)
+            all_sources.append(source_info)
+            
+        # Second pass: Create deduplicated sources for display
+        sources = []
+        
+        # First add all deduplicated PDF sources
+        for title, pdf_info in pdf_sources.items():
+            # Create a combined citation with page numbers
+            pdf_source = {
+                "source_type": "pdf",
+                "title": title,
+                "pages": sorted(pdf_info["pages"], key=lambda x: int(x) if x.isdigit() else 0),
+                "doc_ids": pdf_info["doc_ids"]
+            }
+            
+            # Include the citation if available
+            if pdf_info["citation"]:
+                pdf_source["citation"] = pdf_info["citation"]
+                
+            # Add page numbers to the citation
+            page_str = ", ".join(pdf_source["pages"])
+            if "citation" in pdf_source:
+                # If citation exists, append page numbers to it
+                if " (page " not in pdf_source["citation"]:
+                    pdf_source["citation"] += f" (page{'' if len(pdf_source['pages']) == 1 else 's'} {page_str})"
+            else:
+                # Create a basic citation with page numbers
+                pdf_source["citation"] = f"{title} (page{'' if len(pdf_source['pages']) == 1 else 's'} {page_str})"
+                
+            sources.append(pdf_source)
+        
+        # Then add all non-PDF sources
+        for source in all_sources:
+            if source["source_type"] != "pdf":
+                sources.append(source)
         
         # Log the query and context for debugging
         logger.debug(f"Query: {query}")
