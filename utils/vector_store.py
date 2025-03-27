@@ -75,8 +75,25 @@ class VectorStore:
         Args:
             text (str): Text content to add
             metadata (dict): Metadata associated with the text
+            
+        Returns:
+            str: Document ID if successful
+            
+        Raises:
+            Exception: If an error occurs
         """
         try:
+            # Skip empty or very short text
+            if not text or len(text) < 10:
+                logger.warning("Skipped adding very short or empty text")
+                return None
+                
+            # Limit text length to prevent issues with very large texts
+            max_text_length = 10000
+            if len(text) > max_text_length:
+                logger.warning(f"Text truncated from {len(text)} to {max_text_length} characters")
+                text = text[:max_text_length] + "..."
+            
             # Generate embedding for the text
             embedding = self._get_embedding(text)
             
@@ -96,13 +113,39 @@ class VectorStore:
             source_type = metadata.get('source_type', 'unknown') if metadata else 'unknown'
             self.document_counts[source_type] += 1
             
-            # Save updated index and data
-            self._save()
+            # Save updated index and data - don't save every time to improve performance
+            # Only save every 10 documents or if we have key metadata document types
+            if len(self.documents) % 10 == 0 or source_type in ['website', 'pdf']:
+                self._save()
+                logger.debug("Vector store saved to disk")
             
             logger.debug(f"Added document {doc_id} to vector store")
             return doc_id
         except Exception as e:
             logger.exception(f"Error adding text to vector store: {str(e)}")
+            # If the error is related to embedding, we can try to continue with a simplified version
+            try:
+                if "embed" in str(e).lower():
+                    logger.warning("Attempting to clean and retry adding text")
+                    # Clean and simplify text
+                    clean_text = ' '.join(text.split())[:5000]  # Simplify and limit length
+                    
+                    # Try again with cleaned text
+                    embedding = self._get_embedding(clean_text)
+                    doc_id = str(uuid.uuid4())
+                    self.index.add(np.array([embedding], dtype=np.float32))
+                    self.documents[doc_id] = {
+                        'text': clean_text,
+                        'metadata': metadata or {}
+                    }
+                    source_type = metadata.get('source_type', 'unknown') if metadata else 'unknown'
+                    self.document_counts[source_type] += 1
+                    logger.debug(f"Successfully added document {doc_id} after cleaning")
+                    return doc_id
+            except Exception as retry_error:
+                logger.exception(f"Error during retry: {str(retry_error)}")
+            
+            # If we couldn't recover, raise the original exception
             raise
     
     def search(self, query, top_k=5):

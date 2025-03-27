@@ -21,42 +21,73 @@ def process_pdf(file_path, file_name):
     logger.debug(f"Processing PDF: {file_path}")
     
     try:
+        # Check file size - prevent processing extremely large files
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        logger.debug(f"PDF file size: {file_size_mb:.2f} MB")
+        
+        if file_size_mb > 50:  # Limit to 50MB
+            raise Exception(f"PDF file too large ({file_size_mb:.2f} MB). Maximum size is 50 MB.")
+        
         # Extract text from PDF
         with open(file_path, 'rb') as file:
             pdf_reader = PyPDF2.PdfReader(file)
             num_pages = len(pdf_reader.pages)
             
-            logger.debug(f"PDF has {num_pages} pages")
+            # Limit number of pages to prevent timeout
+            max_pages = 100
+            if num_pages > max_pages:
+                logger.warning(f"PDF has {num_pages} pages, limiting to first {max_pages} pages")
+                num_pages = max_pages
+            else:
+                logger.debug(f"PDF has {num_pages} pages")
             
-            # Extract text from each page
+            # Extract text from each page with progress reporting
             all_text = []
             for page_num in range(num_pages):
-                page = pdf_reader.pages[page_num]
-                text = page.extract_text()
-                if text:
-                    all_text.append({
-                        "page": page_num + 1,
-                        "text": text
-                    })
+                if page_num % 10 == 0:
+                    logger.debug(f"Processing page {page_num+1}/{num_pages}")
+                
+                try:
+                    page = pdf_reader.pages[page_num]
+                    text = page.extract_text()
+                    if text:
+                        all_text.append({
+                            "page": page_num + 1,
+                            "text": text
+                        })
+                except Exception as page_error:
+                    logger.warning(f"Error extracting text from page {page_num+1}: {str(page_error)}")
+                    # Continue processing other pages
+            
+            logger.debug(f"Extracted text from {len(all_text)} pages")
             
             # Create chunks from the extracted text
             chunks = []
             for page_data in all_text:
-                page_chunks = chunk_text(page_data["text"], max_length=1000, overlap=200)
-                
-                for i, chunk in enumerate(page_chunks):
-                    chunks.append({
-                        "text": chunk,
-                        "metadata": {
-                            "source_type": "pdf",
-                            "title": file_name,
-                            "page": page_data["page"],
-                            "chunk_index": i,
-                            "total_pages": num_pages
-                        }
-                    })
+                try:
+                    page_chunks = chunk_text(page_data["text"], max_length=1000, overlap=200)
+                    
+                    for i, chunk in enumerate(page_chunks):
+                        chunks.append({
+                            "text": chunk,
+                            "metadata": {
+                                "source_type": "pdf",
+                                "title": file_name,
+                                "page": page_data["page"],
+                                "chunk_index": i,
+                                "total_pages": num_pages
+                            }
+                        })
+                except Exception as chunk_error:
+                    logger.warning(f"Error chunking text from page {page_data['page']}: {str(chunk_error)}")
+                    # Continue processing other pages
             
             logger.debug(f"Created {len(chunks)} chunks from PDF")
+            
+            # If no chunks were created, return an error
+            if not chunks:
+                raise Exception("Could not extract any text from the PDF. The file may be scanned images or protected.")
+                
             return chunks
             
     except Exception as e:
