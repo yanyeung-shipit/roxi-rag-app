@@ -617,9 +617,21 @@ def get_collections():
 def create_collection():
     """Create a new collection."""
     try:
+        logger.debug(f"Collection creation request received: {request.get_data(as_text=True)}")
+        
+        # Check content type
+        if request.content_type != 'application/json':
+            logger.warning(f"Incorrect content type: {request.content_type}")
+            return jsonify({
+                'success': False,
+                'message': 'Content-Type must be application/json'
+            }), 400
+        
         data = request.json
+        logger.debug(f"Parsed JSON data: {data}")
         
         if not data or 'name' not in data:
+            logger.warning("Name is missing from the request")
             return jsonify({
                 'success': False,
                 'message': 'Collection name is required'
@@ -628,9 +640,12 @@ def create_collection():
         name = data.get('name')
         description = data.get('description', '')
         
+        logger.info(f"Creating collection with name: '{name}', description: '{description}'")
+        
         # Check if collection with this name already exists
         existing = Collection.query.filter_by(name=name).first()
         if existing:
+            logger.warning(f"Collection with name '{name}' already exists")
             return jsonify({
                 'success': False,
                 'message': f'Collection with name "{name}" already exists'
@@ -645,13 +660,15 @@ def create_collection():
         db.session.add(new_collection)
         db.session.commit()
         
+        logger.info(f"Collection created successfully with ID: {new_collection.id}")
+        
         return jsonify({
             'success': True,
             'message': f'Collection "{name}" created successfully',
             'collection_id': new_collection.id
         })
     except Exception as e:
-        logger.exception("Error creating collection")
+        logger.exception(f"Error creating collection: {str(e)}")
         return jsonify({
             'success': False, 
             'message': f'Error creating collection: {str(e)}'

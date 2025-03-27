@@ -358,55 +358,113 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Create a new collection
     async function createCollection() {
-        console.log("Creating collection...");
-        const collectionName = document.getElementById('collectionName').value.trim();
-        const description = document.getElementById('collectionDescription').value.trim();
+        console.log("Creating collection function called");
+        
+        // Get a reference to the form and button
+        const collectionNameInput = document.getElementById('collectionName');
+        const descriptionInput = document.getElementById('collectionDescription');
+        const createButton = document.getElementById('createCollectionBtn');
+        
+        // Check if elements were found
+        if (!collectionNameInput) {
+            console.error("Collection name input not found");
+            alert('Error: Collection name input not found');
+            return;
+        }
+        
+        const collectionName = collectionNameInput.value.trim();
+        const description = descriptionInput ? descriptionInput.value.trim() : '';
         
         if (!collectionName) {
+            console.warn("Collection name is empty");
             alert('Please enter a collection name');
             return;
         }
         
         try {
             // Disable the button to prevent multiple submissions
-            const createButton = document.getElementById('createCollectionBtn');
             if (createButton) {
                 createButton.disabled = true;
                 createButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating...';
-            }
-            
-            console.log("Sending data:", { name: collectionName, description });
-            
-            const response = await fetch('/collections', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    name: collectionName,
-                    description: description
-                })
-            });
-            
-            const data = await response.json();
-            console.log("Response:", data);
-            
-            if (data.success) {
-                // Close modal - use jQuery method since Bootstrap might not be accessible directly
-                $('#newCollectionModal').modal('hide');
-                
-                // Clear form
-                document.getElementById('collectionName').value = '';
-                document.getElementById('collectionDescription').value = '';
-                
-                // Reload collections
-                loadCollections();
-                
-                // Show success message
-                alert(`Collection "${collectionName}" created successfully`);
+                console.log("Button disabled and spinner shown");
             } else {
-                alert(`Error: ${data.message}`);
+                console.error("Create button not found");
             }
+            
+            const payload = {
+                name: collectionName,
+                description: description
+            };
+            console.log("Sending data:", payload);
+            
+            // Make the API request
+            try {
+                const response = await fetch('/collections', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+                
+                console.log("Response status:", response.status);
+                
+                // Try to parse the response as JSON
+                let data;
+                try {
+                    data = await response.json();
+                    console.log("Response data:", data);
+                } catch (parseError) {
+                    console.error("Error parsing JSON response:", parseError);
+                    const responseText = await response.text();
+                    console.log("Raw response:", responseText);
+                    throw new Error("Invalid response format");
+                }
+                
+                if (data.success) {
+                    console.log("Collection created successfully:", data.collection_id);
+                    
+                    // Close modal - try different approaches
+                    try {
+                        console.log("Trying to close modal with jQuery");
+                        $('#newCollectionModal').modal('hide');
+                    } catch (modalError1) {
+                        console.error("jQuery close failed:", modalError1);
+                        try {
+                            console.log("Trying to close modal with Bootstrap API");
+                            const modal = bootstrap.Modal.getInstance(document.getElementById('newCollectionModal'));
+                            if (modal) modal.hide();
+                        } catch (modalError2) {
+                            console.error("Bootstrap close failed:", modalError2);
+                            // Last resort - manipulate DOM directly
+                            try {
+                                console.log("Trying to close modal by manipulating DOM");
+                                const modalElement = document.getElementById('newCollectionModal');
+                                if (modalElement) {
+                                    modalElement.classList.remove('show');
+                                    modalElement.style.display = 'none';
+                                    document.body.classList.remove('modal-open');
+                                    const backdrop = document.querySelector('.modal-backdrop');
+                                    if (backdrop) backdrop.parentNode.removeChild(backdrop);
+                                }
+                            } catch (modalError3) {
+                                console.error("DOM manipulation failed:", modalError3);
+                            }
+                        }
+                    }
+                    
+                    // Clear form
+                    if (collectionNameInput) collectionNameInput.value = '';
+                    if (descriptionInput) descriptionInput.value = '';
+                    
+                    // Show success message
+                    alert(`Collection "${collectionName}" created successfully`);
+                    
+                    // Reload collections
+                    loadCollections();
+                } else {
+                    alert(`Error: ${data.message}`);
+                }
         } catch (error) {
             alert(`Error creating collection: ${error.message}`);
         }
