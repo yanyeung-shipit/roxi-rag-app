@@ -150,7 +150,8 @@ class VectorStore:
     
     def search(self, query, top_k=5):
         """
-        Search for documents similar to the query.
+        Search for documents similar to the query using a hybrid approach
+        that combines semantic search with basic keyword matching.
         
         Args:
             query (str): Query text
@@ -167,14 +168,14 @@ class VectorStore:
             # Generate embedding for the query
             query_embedding = self._get_embedding(query)
             
-            # Perform search
-            k = min(top_k, len(self.documents))
+            # Perform semantic search with a larger k to increase recall
+            initial_k = min(top_k * 3, len(self.documents))
             distances, indices = self.index.search(
-                np.array([query_embedding], dtype=np.float32), k
+                np.array([query_embedding], dtype=np.float32), initial_k
             )
             
-            # Format results
-            results = []
+            # Format initial results
+            initial_results = []
             for i, idx in enumerate(indices[0]):
                 if idx < 0 or idx >= len(self.documents):
                     continue
@@ -183,14 +184,32 @@ class VectorStore:
                 doc_id = list(self.documents.keys())[idx]
                 doc = self.documents[doc_id]
                 
-                results.append({
+                initial_results.append({
                     'id': doc_id,
                     'text': doc['text'],
                     'metadata': doc['metadata'],
                     'score': float(distances[0][i])
                 })
             
-            logger.debug(f"Search returned {len(results)} results")
+            # Pre-process query for keyword matching
+            query_tokens = set(word.lower() for word in query.split())
+            
+            # Re-rank results using keyword matching
+            for result in initial_results:
+                # Count keyword matches
+                text_tokens = set(word.lower() for word in result['text'].split())
+                keyword_matches = len(query_tokens.intersection(text_tokens))
+                
+                # Apply a boost based on keyword matches
+                # This helps surface documents with explicit keyword matches
+                if keyword_matches > 0:
+                    boost_factor = 0.1 * keyword_matches  # Adjust this factor as needed
+                    result['score'] = max(0, result['score'] - boost_factor)  # Lower score is better
+            
+            # Sort by adjusted score and limit to top_k
+            results = sorted(initial_results, key=lambda x: x['score'])[:top_k]
+            
+            logger.debug(f"Search returned {len(results)} results from initial pool of {len(initial_results)}")
             return results
         except Exception as e:
             logger.exception(f"Error searching vector store: {str(e)}")
@@ -203,11 +222,23 @@ class VectorStore:
         Returns:
             dict: Statistics about the vector store
         """
+        # Count unique PDF sources
+        pdf_sources = set()
+        website_sources = set()
+        
+        for doc_id, doc in self.documents.items():
+            if doc['metadata'].get('source_type') == 'pdf':
+                # Use the title as a unique identifier for PDFs
+                pdf_sources.add(doc['metadata'].get('title', 'unknown'))
+            elif doc['metadata'].get('source_type') == 'website':
+                # Use the URL as a unique identifier for websites
+                website_sources.add(doc['metadata'].get('url', 'unknown'))
+        
         return {
             'total_documents': len(self.documents),
             'chunks': len(self.documents),
-            'websites': self.document_counts.get('website', 0),
-            'pdfs': self.document_counts.get('pdf', 0)
+            'websites': len(website_sources),
+            'pdfs': len(pdf_sources)
         }
     
     def clear(self):
