@@ -147,15 +147,29 @@ document.addEventListener('DOMContentLoaded', () => {
                         sourceItem.className = 'source-item';
                         sourceItem.id = `source-${index + 1}`;
                         
+                        // Get citation text - use APA citation if available, otherwise use default
+                        let citationText = '';
+                        
+                        if (source.citation) {
+                            // Use provided citation in APA format
+                            citationText = source.citation;
+                        } else if (source.source_type === 'pdf') {
+                            // Fallback for PDF without citation
+                            citationText = `${source.title} (page ${source.page})`;
+                        } else {
+                            // Fallback for website without citation
+                            citationText = `${source.title}. Retrieved from ${source.url}`;
+                        }
+                        
                         sourceItem.innerHTML = `
                             <div class="source-title">
                                 <span class="badge bg-info me-2">${index + 1}</span>
                                 ${source.source_type === 'pdf' ? 
-                                    `<i class="fas fa-file-pdf me-1"></i> ${source.title}` : 
-                                    `<i class="fas fa-globe me-1"></i> <a href="${source.url}" target="_blank">${source.title}</a>`
+                                    `<i class="fas fa-file-pdf me-1"></i>` : 
+                                    `<i class="fas fa-globe me-1"></i>`
                                 }
                             </div>
-                            <div class="source-content">${source.content}</div>
+                            <div class="source-citation">${citationText}</div>
                         `;
                         
                         sourcesList.appendChild(sourceItem);

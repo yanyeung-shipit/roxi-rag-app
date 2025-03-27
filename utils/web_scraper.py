@@ -1,6 +1,8 @@
 import trafilatura
 import logging
 import urllib.parse
+from datetime import datetime
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -40,6 +42,9 @@ def scrape_website(url):
         # Extract title
         title = extract_title(downloaded, url)
         
+        # Generate APA citation for the website
+        citation = generate_website_citation(title, url)
+        
         # Chunk the content
         text_chunks = chunk_text(text, max_length=1000, overlap=200)
         
@@ -52,7 +57,8 @@ def scrape_website(url):
                     "source_type": "website",
                     "title": title,
                     "url": url,
-                    "chunk_index": i
+                    "chunk_index": i,
+                    "citation": citation
                 }
             })
         
@@ -88,6 +94,40 @@ def extract_title(html, url):
         # Use domain name as fallback
         parsed_url = urllib.parse.urlparse(url)
         return parsed_url.netloc
+        
+def generate_website_citation(title, url):
+    """
+    Generate an APA style citation for a website.
+    
+    Args:
+        title (str): Website title
+        url (str): Website URL
+        
+    Returns:
+        str: APA formatted citation for the website
+    """
+    # Extract domain for organization name
+    parsed_url = urllib.parse.urlparse(url)
+    domain = parsed_url.netloc
+    
+    # Remove www. if present
+    if domain.startswith('www.'):
+        domain = domain[4:]
+    
+    # Split by dots and capitalize
+    parts = domain.split('.')
+    organization = ' '.join([part.capitalize() for part in parts[:-1]])
+    
+    # If no organization name could be extracted, use domain
+    if not organization:
+        organization = domain
+        
+    # Format date for citation
+    current_date = datetime.now()
+    retrieval_date = current_date.strftime("%B %d, %Y")
+    
+    # Generate the citation
+    return f"{organization}. ({current_date.year}). {title}. Retrieved {retrieval_date}, from {url}"
 
 def chunk_text(text, max_length=1000, overlap=200):
     """

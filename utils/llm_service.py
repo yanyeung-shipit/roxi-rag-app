@@ -67,8 +67,14 @@ def generate_response(query, context_documents):
                 "content": doc["text"][:200] + ("..." if len(doc["text"]) > 200 else "")
             }
             
+            # Include citation if available
+            if doc["metadata"].get("citation"):
+                source_info["citation"] = doc["metadata"].get("citation")
+            
+            # Include other metadata fields for fallback
             if doc["metadata"].get("source_type") == "pdf":
-                source_info["title"] = f"{doc['metadata'].get('title', 'Unnamed PDF')} (page {doc['metadata'].get('page', 'unknown')})"
+                source_info["title"] = f"{doc['metadata'].get('title', 'Unnamed PDF')}"
+                source_info["page"] = doc['metadata'].get('page', 'unknown')
             else:
                 source_info["title"] = doc["metadata"].get("title", "Unnamed Source")
                 source_info["url"] = doc["metadata"].get("url", "#")
