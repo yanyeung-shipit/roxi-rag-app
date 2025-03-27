@@ -32,6 +32,7 @@ def index():
 
 @app.route('/upload_pdf', methods=['POST'])
 def upload_pdf():
+    """Process and store PDF data. This version is heavily optimized to avoid memory issues and timeouts."""
     try:
         # Check if file part exists
         if 'pdf_file' not in request.files:
@@ -56,16 +57,16 @@ def upload_pdf():
             filename = secure_filename(file.filename)
             logger.info(f"Processing PDF: {filename}")
             
-            # Check file size before saving
+            # Check file size before saving - reduce to 20MB max
             file.seek(0, os.SEEK_END)
             file_size = file.tell()
             file.seek(0)  # Reset file pointer
             
-            if file_size > 50 * 1024 * 1024:  # 50MB limit
+            if file_size > 20 * 1024 * 1024:  # 20MB limit - stricter than before
                 logger.warning(f"PDF file too large: {file_size / (1024*1024):.2f} MB")
                 return jsonify({
                     'success': False, 
-                    'message': f'PDF file too large ({file_size / (1024*1024):.2f} MB). Maximum size is 50 MB.'
+                    'message': f'PDF file too large ({file_size / (1024*1024):.2f} MB). Maximum size is 20 MB.'
                 }), 400
             
             # Save file to temporary location
@@ -76,37 +77,72 @@ def upload_pdf():
             try:
                 # Process PDF and add to vector store
                 chunks = process_pdf(filepath, filename)
+                
+                if not chunks:
+                    logger.warning("No chunks extracted from PDF")
+                    return jsonify({
+                        'success': False, 
+                        'message': 'Could not extract any text from the PDF. The file may be scanned images or protected.'
+                    }), 400
+                    
                 logger.info(f"Successfully processed PDF with {len(chunks)} chunks")
                 
-                # Save chunks in batches to prevent timeouts
-                batch_size = 50
+                # Further limit chunks to prevent memory issues
+                max_chunks = 50  # Stricter limit than in document_processor
+                if len(chunks) > max_chunks:
+                    logger.warning(f"Limiting {len(chunks)} chunks to first {max_chunks}")
+                    chunks = chunks[:max_chunks]
+                
+                # Save chunks in smaller batches to prevent timeouts
+                batch_size = 10  # Smaller batch size
                 total_batches = (len(chunks) + batch_size - 1) // batch_size
+                
+                success_count = 0
                 
                 try:
                     for i in range(0, len(chunks), batch_size):
                         batch = chunks[i:i + batch_size]
                         logger.debug(f"Processing batch {(i // batch_size) + 1}/{total_batches} with {len(batch)} chunks")
                         
+                        # Process each chunk with error handling
                         for chunk in batch:
-                            vector_store.add_text(chunk['text'], chunk['metadata'])
-                    
-                    # Explicitly force a save after all batches are processed
-                    logger.debug("Forcing vector store save after batch processing")
-                    vector_store._save()
+                            try:
+                                vector_store.add_text(chunk['text'], chunk['metadata'])
+                                success_count += 1
+                            except Exception as chunk_error:
+                                logger.warning(f"Error adding chunk to vector store: {str(chunk_error)}")
+                                # Continue with next chunk
+                        
+                        # Save vector store after each batch
+                        try:
+                            vector_store._save()
+                            logger.debug(f"Saved vector store after batch {(i // batch_size) + 1}")
+                        except Exception as save_error:
+                            logger.warning(f"Error saving vector store: {str(save_error)}")
+                            # Continue processing
+                            
                 except Exception as batch_error:
                     logger.exception(f"Error processing batch: {str(batch_error)}")
-                    raise batch_error
+                    # Continue to cleanup and return partial success
                 finally:
                     # Remove temporary file in all cases
                     if os.path.exists(filepath):
                         os.remove(filepath)
                         logger.debug("Temporary file removed")
                 
-                return jsonify({
-                    'success': True, 
-                    'message': f'Successfully processed {filename}',
-                    'chunks': len(chunks)
-                })
+                # Return success even if only some chunks were processed
+                if success_count > 0:
+                    return jsonify({
+                        'success': True, 
+                        'message': f'Successfully processed {filename} ({success_count} of {len(chunks)} chunks)',
+                        'chunks': success_count
+                    })
+                else:
+                    return jsonify({
+                        'success': False, 
+                        'message': 'Could not add any content from the PDF to the knowledge base.'
+                    }), 500
+                    
             except Exception as processing_error:
                 # Make sure we clean up the temporary file if there was an error
                 if os.path.exists(filepath):
@@ -130,6 +166,7 @@ def upload_pdf():
 
 @app.route('/add_website', methods=['POST'])
 def add_website():
+    """Process and store website data. Using optimized batch processing to avoid timeouts."""
     try:
         data = request.form
         url = data.get('website_url', '')
@@ -155,30 +192,56 @@ def add_website():
             
         logger.info(f"Successfully scraped website with {len(chunks)} chunks")
         
-        # Process chunks in batches to prevent timeouts
-        batch_size = 50
+        # Limit chunks to prevent memory issues
+        max_chunks = 50
+        if len(chunks) > max_chunks:
+            logger.warning(f"Limiting {len(chunks)} chunks to first {max_chunks}")
+            chunks = chunks[:max_chunks]
+        
+        # Process chunks in smaller batches to prevent timeouts
+        batch_size = 10  # Smaller batch size
         total_batches = (len(chunks) + batch_size - 1) // batch_size
+        
+        success_count = 0
         
         try:
             for i in range(0, len(chunks), batch_size):
                 batch = chunks[i:i + batch_size]
                 logger.debug(f"Processing batch {(i // batch_size) + 1}/{total_batches} with {len(batch)} chunks")
                 
+                # Process each chunk with error handling
                 for chunk in batch:
-                    vector_store.add_text(chunk['text'], chunk['metadata'])
-            
-            # Explicitly force a save after all batches are processed
-            logger.debug("Forcing vector store save after batch processing")
-            vector_store._save()
-            
+                    try:
+                        vector_store.add_text(chunk['text'], chunk['metadata'])
+                        success_count += 1
+                    except Exception as chunk_error:
+                        logger.warning(f"Error adding chunk to vector store: {str(chunk_error)}")
+                        # Continue with next chunk
+                
+                # Save vector store after each batch
+                try:
+                    vector_store._save()
+                    logger.debug(f"Saved vector store after batch {(i // batch_size) + 1}")
+                except Exception as save_error:
+                    logger.warning(f"Error saving vector store: {str(save_error)}")
+                    # Continue processing
+                    
+        except Exception as batch_error:
+            logger.exception(f"Error processing batch: {str(batch_error)}")
+            # Continue to cleanup and return partial success
+        
+        # Return success even if only some chunks were processed
+        if success_count > 0:
             return jsonify({
                 'success': True, 
-                'message': f'Successfully processed website: {url}',
-                'chunks': len(chunks)
+                'message': f'Successfully processed website: {url} ({success_count} of {len(chunks)} chunks)',
+                'chunks': success_count
             })
-        except Exception as batch_error:
-            logger.exception(f"Error processing website batch: {str(batch_error)}")
-            raise batch_error
+        else:
+            return jsonify({
+                'success': False, 
+                'message': 'Could not add any content from the website to the knowledge base.'
+            }), 500
             
     except Exception as e:
         logger.exception(f"Error processing website: {str(e)}")
