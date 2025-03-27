@@ -35,15 +35,19 @@ def upload_pdf():
     try:
         # Check if file part exists
         if 'pdf_file' not in request.files:
-            flash('No file part')
-            return redirect(request.url)
+            return jsonify({
+                'success': False, 
+                'message': 'No file part in the request'
+            }), 400
         
         file = request.files['pdf_file']
         
         # Check if file was selected
         if file.filename == '':
-            flash('No file selected')
-            return redirect(request.url)
+            return jsonify({
+                'success': False, 
+                'message': 'No file selected'
+            }), 400
         
         # Process valid file
         if file and allowed_file(file.filename):
