@@ -358,6 +358,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Create a new collection
     async function createCollection() {
+        console.log("Creating collection...");
         const collectionName = document.getElementById('collectionName').value.trim();
         const description = document.getElementById('collectionDescription').value.trim();
         
@@ -367,6 +368,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         try {
+            // Disable the button to prevent multiple submissions
+            const createButton = document.getElementById('createCollectionBtn');
+            if (createButton) {
+                createButton.disabled = true;
+                createButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating...';
+            }
+            
+            console.log("Sending data:", { name: collectionName, description });
+            
             const response = await fetch('/collections', {
                 method: 'POST',
                 headers: {
@@ -379,11 +389,11 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             
             const data = await response.json();
+            console.log("Response:", data);
             
             if (data.success) {
-                // Close modal
-                const modal = bootstrap.Modal.getInstance(document.getElementById('newCollectionModal'));
-                modal.hide();
+                // Close modal - use jQuery method since Bootstrap might not be accessible directly
+                $('#newCollectionModal').modal('hide');
                 
                 // Clear form
                 document.getElementById('collectionName').value = '';
@@ -498,9 +508,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
             
-            // Close modal
-            const modal = bootstrap.Modal.getInstance(document.getElementById('addToCollectionModal'));
-            modal.hide();
+            // Close modal using jQuery
+            $('#addToCollectionModal').modal('hide');
             
             // Show result
             if (successfullyAdded.length > 0) {
@@ -541,9 +550,8 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const data = await response.json();
             
-            // Close the modal
-            const modal = bootstrap.Modal.getInstance(document.getElementById('deleteDocumentModal'));
-            modal.hide();
+            // Close the modal using jQuery
+            $('#deleteDocumentModal').modal('hide');
             
             if (data.success) {
                 // Reload documents
