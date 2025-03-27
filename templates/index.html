@@ -1,0 +1,116 @@
+{% extends 'layout.html' %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-12 mb-4">
+        <div class="card bg-dark border-secondary">
+            <div class="card-header bg-dark text-light">
+                <h4><i class="fas fa-brain me-2"></i>Knowledge Assistant</h4>
+            </div>
+            <div class="card-body">
+                <p class="lead">
+                    Ask questions about your documents and websites. The assistant will retrieve relevant information and provide responses with citations.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card bg-dark border-secondary mb-4">
+            <div class="card-header bg-dark text-light">
+                <h5><i class="fas fa-globe me-2"></i>Add Website</h5>
+            </div>
+            <div class="card-body">
+                <form id="websiteForm">
+                    <div class="mb-3">
+                        <label for="website_url" class="form-label">Website URL</label>
+                        <input type="url" class="form-control" id="website_url" name="website_url" placeholder="https://example.com" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="addWebsiteBtn">
+                        <i class="fas fa-plus-circle me-1"></i> Add Website
+                    </button>
+                </form>
+                <div id="websiteResult" class="mt-3"></div>
+            </div>
+        </div>
+
+        <div class="card bg-dark border-secondary mb-4">
+            <div class="card-header bg-dark text-light">
+                <h5><i class="fas fa-file-pdf me-2"></i>Upload PDF</h5>
+            </div>
+            <div class="card-body">
+                <form id="pdfForm" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label for="pdf_file" class="form-label">PDF Document</label>
+                        <input class="form-control" type="file" id="pdf_file" name="pdf_file" accept=".pdf" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="uploadPdfBtn">
+                        <i class="fas fa-upload me-1"></i> Upload PDF
+                    </button>
+                </form>
+                <div id="pdfResult" class="mt-3"></div>
+            </div>
+        </div>
+
+        <div class="card bg-dark border-secondary mb-4">
+            <div class="card-header bg-dark text-light">
+                <h5><i class="fas fa-chart-bar me-2"></i>Knowledge Base Stats</h5>
+            </div>
+            <div class="card-body">
+                <div id="statsContent">
+                    <p>Loading stats...</p>
+                </div>
+                <div class="mt-3">
+                    <button id="clearKnowledgeBtn" class="btn btn-danger">
+                        <i class="fas fa-trash me-1"></i> Clear Knowledge Base
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-8">
+        <div class="card bg-dark border-secondary mb-4">
+            <div class="card-header bg-dark text-light">
+                <h5><i class="fas fa-question-circle me-2"></i>Ask a Question</h5>
+            </div>
+            <div class="card-body">
+                <form id="queryForm">
+                    <div class="mb-3">
+                        <label for="query" class="form-label">Your Question</label>
+                        <textarea class="form-control" id="query" name="query" rows="3" placeholder="Ask about the content in your documents and websites..." required></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="submitQueryBtn">
+                        <i class="fas fa-search me-1"></i> Ask Question
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card bg-dark border-secondary">
+            <div class="card-header bg-dark text-light">
+                <h5><i class="fas fa-comment-dots me-2"></i>Answer</h5>
+            </div>
+            <div class="card-body">
+                <div id="answerContainer">
+                    <div id="answerContent" class="mb-4">
+                        <p class="text-muted text-center">Ask a question to see the answer here.</p>
+                    </div>
+                    <div id="sourcesContainer">
+                        <h6 class="border-bottom pb-2 mb-3 d-none" id="sourcesHeader">
+                            <i class="fas fa-book me-2"></i>Sources
+                        </h6>
+                        <div id="sourcesList"></div>
+                    </div>
+                </div>
+                <div id="answerSpinner" class="text-center d-none">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-2">Processing your question...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,66 @@
+/* Additional styling beyond Bootstrap */
+
+/* Smooth transitions for hover effects */
+.card {
+    transition: all 0.3s ease;
+}
+
+/* Source citation styling */
+.source-item {
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    border-radius: 0.25rem;
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.source-title {
+    font-weight: bold;
+    color: var(--bs-info);
+}
+
+.source-content {
+    font-style: italic;
+    padding: 0.5rem;
+    margin-top: 0.5rem;
+    border-left: 3px solid var(--bs-info);
+    background-color: rgba(255, 255, 255, 0.02);
+}
+
+/* Highlighting for search terms in source content */
+.highlight {
+    background-color: rgba(255, 193, 7, 0.3);
+    padding: 0 0.2rem;
+    border-radius: 0.2rem;
+}
+
+/* Error and success message styling */
+.alert {
+    margin-top: 1rem;
+}
+
+/* Spinner animation speed */
+.spinner-border {
+    animation-duration: 0.8s;
+}
+
+/* Make code blocks more readable */
+pre, code {
+    background-color: rgba(0, 0, 0, 0.2);
+    padding: 0.2rem 0.4rem;
+    border-radius: 0.2rem;
+}
+
+/* Improve readability of answer text */
+#answerContent {
+    line-height: 1.6;
+}
+
+/* Style for citation numbers */
+.citation {
+    font-size: 0.75rem;
+    vertical-align: super;
+    color: var(--bs-info);
+    cursor: pointer;
+    margin-left: 0.15rem;
+    font-weight: bold;
+}
