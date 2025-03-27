@@ -1,12 +1,15 @@
 import os
 import logging
 import tempfile
+import datetime
 from flask import Flask, render_template, request, jsonify, flash, redirect, url_for
 from werkzeug.utils import secure_filename
+from werkzeug.security import safe_join
 from utils.document_processor import process_pdf
 from utils.web_scraper import scrape_website
 from utils.vector_store import VectorStore
 from utils.llm_service import generate_response
+from models import db, Document, DocumentChunk, Collection
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -15,6 +18,18 @@ logger = logging.getLogger(__name__)
 # Initialize Flask app
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET")
+
+# Configure database
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+db.init_app(app)
+
+# Create uploads directory if it doesn't exist
+UPLOAD_FOLDER = os.path.join(app.root_path, 'uploads')
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20MB limit
 
 # Initialize vector store
 vector_store = VectorStore()
@@ -30,9 +45,14 @@ def allowed_file(filename):
 def index():
     return render_template('index.html')
 
+@app.route('/manage')
+def manage():
+    """Document management interface."""
+    return render_template('manage.html')
+
 @app.route('/upload_pdf', methods=['POST'])
 def upload_pdf():
-    """Process and store PDF data. This version is heavily optimized to avoid memory issues and timeouts."""
+    """Process and store PDF data. This version is optimized and saves to database."""
     try:
         # Check if file part exists
         if 'pdf_file' not in request.files:
@@ -62,21 +82,39 @@ def upload_pdf():
             file_size = file.tell()
             file.seek(0)  # Reset file pointer
             
-            if file_size > 20 * 1024 * 1024:  # 20MB limit - stricter than before
+            if file_size > 20 * 1024 * 1024:  # 20MB limit
                 logger.warning(f"PDF file too large: {file_size / (1024*1024):.2f} MB")
                 return jsonify({
                     'success': False, 
                     'message': f'PDF file too large ({file_size / (1024*1024):.2f} MB). Maximum size is 20 MB.'
                 }), 400
             
-            # Save file to temporary location
-            filepath = os.path.join(TEMP_FOLDER, filename)
-            file.save(filepath)
-            logger.debug(f"Saved file temporarily to {filepath}")
+            # Save file to permanent storage in uploads folder
+            # Create a unique filename to avoid overwriting
+            # Use timestamp and original filename
+            timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+            unique_filename = f"{timestamp}_{filename}"
+            file_path = safe_join(app.config['UPLOAD_FOLDER'], unique_filename)
+            file.save(file_path)
+            logger.debug(f"Saved file to {file_path}")
+            
+            # Create a new document record in the database
+            new_document = Document(
+                filename=filename,
+                title=filename,  # We can update this later with better metadata
+                file_type="pdf",
+                file_path=file_path,
+                file_size=file_size,
+                processed=False  # Mark as unprocessed initially
+            )
+            
+            db.session.add(new_document)
+            db.session.commit()
+            logger.info(f"Created document record with ID: {new_document.id}")
             
             try:
                 # Process PDF and add to vector store
-                chunks = process_pdf(filepath, filename)
+                chunks = process_pdf(file_path, filename)
                 
                 if not chunks:
                     logger.warning("No chunks extracted from PDF")
@@ -87,17 +125,24 @@ def upload_pdf():
                     
                 logger.info(f"Successfully processed PDF with {len(chunks)} chunks")
                 
+                # Update document with page count if available
+                if chunks and 'page_count' in chunks[0]['metadata']:
+                    new_document.page_count = chunks[0]['metadata']['page_count']
+                    db.session.commit()
+                    logger.debug(f"Updated document with page count: {new_document.page_count}")
+                
                 # Further limit chunks to prevent memory issues
-                max_chunks = 50  # Stricter limit than in document_processor
+                max_chunks = 50
                 if len(chunks) > max_chunks:
                     logger.warning(f"Limiting {len(chunks)} chunks to first {max_chunks}")
                     chunks = chunks[:max_chunks]
                 
                 # Save chunks in smaller batches to prevent timeouts
-                batch_size = 10  # Smaller batch size
+                batch_size = 10
                 total_batches = (len(chunks) + batch_size - 1) // batch_size
                 
                 success_count = 0
+                chunk_records = []
                 
                 try:
                     for i in range(0, len(chunks), batch_size):
@@ -105,9 +150,19 @@ def upload_pdf():
                         logger.debug(f"Processing batch {(i // batch_size) + 1}/{total_batches} with {len(batch)} chunks")
                         
                         # Process each chunk with error handling
-                        for chunk in batch:
+                        for chunk_index, chunk in enumerate(batch):
                             try:
+                                # Add to vector store
                                 vector_store.add_text(chunk['text'], chunk['metadata'])
+                                
+                                # Create database record for this chunk
+                                chunk_record = DocumentChunk(
+                                    document_id=new_document.id,
+                                    chunk_index=i + chunk_index,
+                                    page_number=chunk['metadata'].get('page', None),
+                                    text_content=chunk['text']
+                                )
+                                chunk_records.append(chunk_record)
                                 success_count += 1
                             except Exception as chunk_error:
                                 logger.warning(f"Error adding chunk to vector store: {str(chunk_error)}")
@@ -117,40 +172,50 @@ def upload_pdf():
                         try:
                             vector_store._save()
                             logger.debug(f"Saved vector store after batch {(i // batch_size) + 1}")
+                            
+                            # Commit chunk records to database in batches
+                            if chunk_records:
+                                db.session.add_all(chunk_records)
+                                db.session.commit()
+                                logger.debug(f"Saved {len(chunk_records)} chunk records to database")
+                                chunk_records = []  # Clear for next batch
+                                
                         except Exception as save_error:
-                            logger.warning(f"Error saving vector store: {str(save_error)}")
+                            logger.warning(f"Error saving batch: {str(save_error)}")
                             # Continue processing
                             
                 except Exception as batch_error:
                     logger.exception(f"Error processing batch: {str(batch_error)}")
-                    # Continue to cleanup and return partial success
+                    # Continue to mark document as processed and return partial success
                 finally:
-                    # Remove temporary file in all cases
-                    if os.path.exists(filepath):
-                        os.remove(filepath)
-                        logger.debug("Temporary file removed")
+                    # Mark document as processed if any chunks were successful
+                    if success_count > 0:
+                        new_document.processed = True
+                        db.session.commit()
+                        logger.debug("Document marked as processed")
                 
                 # Return success even if only some chunks were processed
                 if success_count > 0:
                     return jsonify({
                         'success': True, 
                         'message': f'Successfully processed {filename} ({success_count} of {len(chunks)} chunks)',
+                        'document_id': new_document.id,
                         'chunks': success_count
                     })
                 else:
+                    # Document processing failed, but file was saved
                     return jsonify({
                         'success': False, 
-                        'message': 'Could not add any content from the PDF to the knowledge base.'
+                        'message': 'File was saved but could not add any content to the knowledge base.'
                     }), 500
                     
             except Exception as processing_error:
-                # Make sure we clean up the temporary file if there was an error
-                if os.path.exists(filepath):
-                    os.remove(filepath)
-                    logger.debug("Temporary file removed after error")
-                
-                # Re-raise the exception to be caught by the outer try-except
-                raise processing_error
+                logger.exception(f"Error processing PDF: {str(processing_error)}")
+                # Keep the file but mark processing as failed
+                return jsonify({
+                    'success': False, 
+                    'message': f'Error processing PDF: {str(processing_error)}'
+                }), 500
         else:
             logger.warning(f"Invalid file type: {file.filename}")
             return jsonify({
@@ -166,7 +231,7 @@ def upload_pdf():
 
 @app.route('/add_website', methods=['POST'])
 def add_website():
-    """Process and store website data. Using optimized batch processing to avoid timeouts."""
+    """Process and store website data. Using optimized batch processing and saving to database."""
     try:
         data = request.form
         url = data.get('website_url', '')
@@ -180,15 +245,35 @@ def add_website():
         
         logger.info(f"Processing website: {url}")
         
+        # Create a new document record in the database
+        new_document = Document(
+            filename=url,  # Use URL as filename
+            title=url,     # Will update with proper title after scraping
+            file_type="website",
+            source_url=url,
+            processed=False  # Mark as unprocessed initially
+        )
+        
+        db.session.add(new_document)
+        db.session.commit()
+        logger.info(f"Created document record with ID: {new_document.id}")
+        
         # Scrape website and add to vector store
         chunks = scrape_website(url)
         
         if not chunks:
             logger.warning(f"No content extracted from website: {url}")
+            # Document exists but processing failed
             return jsonify({
                 'success': False, 
                 'message': 'Could not extract any content from the provided URL'
             }), 400
+            
+        # Update document with title if available
+        if chunks and 'title' in chunks[0]['metadata']:
+            new_document.title = chunks[0]['metadata']['title']
+            db.session.commit()
+            logger.debug(f"Updated document with title: {new_document.title}")
             
         logger.info(f"Successfully scraped website with {len(chunks)} chunks")
         
@@ -199,10 +284,11 @@ def add_website():
             chunks = chunks[:max_chunks]
         
         # Process chunks in smaller batches to prevent timeouts
-        batch_size = 10  # Smaller batch size
+        batch_size = 10
         total_batches = (len(chunks) + batch_size - 1) // batch_size
         
         success_count = 0
+        chunk_records = []
         
         try:
             for i in range(0, len(chunks), batch_size):
@@ -210,9 +296,18 @@ def add_website():
                 logger.debug(f"Processing batch {(i // batch_size) + 1}/{total_batches} with {len(batch)} chunks")
                 
                 # Process each chunk with error handling
-                for chunk in batch:
+                for chunk_index, chunk in enumerate(batch):
                     try:
+                        # Add to vector store
                         vector_store.add_text(chunk['text'], chunk['metadata'])
+                        
+                        # Create database record for this chunk
+                        chunk_record = DocumentChunk(
+                            document_id=new_document.id,
+                            chunk_index=i + chunk_index,
+                            text_content=chunk['text']
+                        )
+                        chunk_records.append(chunk_record)
                         success_count += 1
                     except Exception as chunk_error:
                         logger.warning(f"Error adding chunk to vector store: {str(chunk_error)}")
@@ -222,19 +317,33 @@ def add_website():
                 try:
                     vector_store._save()
                     logger.debug(f"Saved vector store after batch {(i // batch_size) + 1}")
+                    
+                    # Commit chunk records to database in batches
+                    if chunk_records:
+                        db.session.add_all(chunk_records)
+                        db.session.commit()
+                        logger.debug(f"Saved {len(chunk_records)} chunk records to database")
+                        chunk_records = []  # Clear for next batch
                 except Exception as save_error:
-                    logger.warning(f"Error saving vector store: {str(save_error)}")
+                    logger.warning(f"Error saving batch: {str(save_error)}")
                     # Continue processing
                     
         except Exception as batch_error:
             logger.exception(f"Error processing batch: {str(batch_error)}")
-            # Continue to cleanup and return partial success
+            # Continue to mark document as processed and return partial success
+        finally:
+            # Mark document as processed if any chunks were successful
+            if success_count > 0:
+                new_document.processed = True
+                db.session.commit()
+                logger.debug("Document marked as processed")
         
         # Return success even if only some chunks were processed
         if success_count > 0:
             return jsonify({
                 'success': True, 
                 'message': f'Successfully processed website: {url} ({success_count} of {len(chunks)} chunks)',
+                'document_id': new_document.id,
                 'chunks': success_count
             })
         else:
@@ -293,10 +402,30 @@ def query():
 @app.route('/stats', methods=['GET'])
 def stats():
     try:
-        stats = vector_store.get_stats()
+        # Get vector store stats
+        vector_stats = vector_store.get_stats()
+        
+        # Get database stats
+        db_stats = {
+            'total_documents': Document.query.count(),
+            'pdfs': Document.query.filter_by(file_type='pdf').count(),
+            'websites': Document.query.filter_by(file_type='website').count(),
+            'chunks': DocumentChunk.query.count(),
+            'collections': Collection.query.count()
+        }
+        
+        # Combine stats with precedence to database (more accurate)
+        combined_stats = {
+            'total_documents': db_stats['total_documents'] or vector_stats['total_documents'],
+            'pdfs': db_stats['pdfs'] or vector_stats['pdfs'],
+            'websites': db_stats['websites'] or vector_stats['websites'],
+            'chunks': db_stats['chunks'] or vector_stats['chunks'],
+            'collections': db_stats['collections']
+        }
+        
         return jsonify({
             'success': True,
-            'stats': stats
+            'stats': combined_stats
         })
     except Exception as e:
         logger.exception("Error retrieving stats")
@@ -309,13 +438,265 @@ def stats():
 def clear():
     try:
         vector_store.clear()
+        
+        # Optionally also clear database tables
+        if request.form.get('clear_database', 'false').lower() == 'true':
+            # Delete all document chunks first (due to foreign key constraint)
+            DocumentChunk.query.delete()
+            # Delete all documents
+            Document.query.delete()
+            # Delete all collections
+            Collection.query.delete()
+            db.session.commit()
+            logger.info("Cleared all database records")
+            
         return jsonify({
             'success': True,
-            'message': 'Vector store cleared successfully'
+            'message': 'Knowledge base cleared successfully'
         })
     except Exception as e:
-        logger.exception("Error clearing vector store")
+        logger.exception("Error clearing knowledge base")
         return jsonify({
             'success': False, 
-            'message': f'Error clearing vector store: {str(e)}'
+            'message': f'Error clearing knowledge base: {str(e)}'
+        }), 500
+        
+# New endpoints for database operations
+
+@app.route('/documents', methods=['GET'])
+def get_documents():
+    """Get a list of all documents."""
+    try:
+        documents = Document.query.all()
+        results = []
+        
+        for doc in documents:
+            results.append({
+                'id': doc.id,
+                'title': doc.title,
+                'filename': doc.filename,
+                'file_type': doc.file_type,
+                'source_url': doc.source_url,
+                'file_path': doc.file_path,
+                'file_size': doc.file_size,
+                'page_count': doc.page_count,
+                'created_at': doc.created_at.isoformat() if doc.created_at else None,
+                'processed': doc.processed,
+                'chunk_count': len(doc.chunks)
+            })
+            
+        return jsonify({
+            'success': True,
+            'documents': results
+        })
+    except Exception as e:
+        logger.exception("Error retrieving documents")
+        return jsonify({
+            'success': False, 
+            'message': f'Error retrieving documents: {str(e)}'
+        }), 500
+
+@app.route('/documents/<int:document_id>', methods=['GET'])
+def get_document(document_id):
+    """Get details of a specific document."""
+    try:
+        doc = Document.query.get(document_id)
+        
+        if not doc:
+            return jsonify({
+                'success': False,
+                'message': f'Document with ID {document_id} not found'
+            }), 404
+            
+        chunks = []
+        for chunk in doc.chunks:
+            chunks.append({
+                'id': chunk.id,
+                'chunk_index': chunk.chunk_index,
+                'page_number': chunk.page_number,
+                'text_content': chunk.text_content[:100] + '...' if len(chunk.text_content) > 100 else chunk.text_content
+            })
+            
+        result = {
+            'id': doc.id,
+            'title': doc.title,
+            'filename': doc.filename,
+            'file_type': doc.file_type,
+            'source_url': doc.source_url,
+            'file_path': doc.file_path,
+            'file_size': doc.file_size,
+            'page_count': doc.page_count,
+            'created_at': doc.created_at.isoformat() if doc.created_at else None,
+            'processed': doc.processed,
+            'chunks': chunks
+        }
+            
+        return jsonify({
+            'success': True,
+            'document': result
+        })
+    except Exception as e:
+        logger.exception(f"Error retrieving document {document_id}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error retrieving document: {str(e)}'
+        }), 500
+
+@app.route('/documents/<int:document_id>', methods=['DELETE'])
+def delete_document(document_id):
+    """Delete a specific document and its chunks."""
+    try:
+        doc = Document.query.get(document_id)
+        
+        if not doc:
+            return jsonify({
+                'success': False,
+                'message': f'Document with ID {document_id} not found'
+            }), 404
+            
+        # Need to update vector store too, but this is complex
+        # For now, just delete from database
+        
+        # Delete all chunks first
+        DocumentChunk.query.filter_by(document_id=document_id).delete()
+        
+        # Save the filename for reporting
+        filename = doc.filename
+        
+        # Delete the document
+        db.session.delete(doc)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Document "{filename}" (ID: {document_id}) deleted successfully'
+        })
+    except Exception as e:
+        logger.exception(f"Error deleting document {document_id}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error deleting document: {str(e)}'
+        }), 500
+
+@app.route('/collections', methods=['GET'])
+def get_collections():
+    """Get a list of all collections."""
+    try:
+        collections = Collection.query.all()
+        results = []
+        
+        for coll in collections:
+            results.append({
+                'id': coll.id,
+                'name': coll.name,
+                'description': coll.description,
+                'created_at': coll.created_at.isoformat() if coll.created_at else None,
+                'document_count': len(coll.documents)
+            })
+            
+        return jsonify({
+            'success': True,
+            'collections': results
+        })
+    except Exception as e:
+        logger.exception("Error retrieving collections")
+        return jsonify({
+            'success': False, 
+            'message': f'Error retrieving collections: {str(e)}'
+        }), 500
+
+@app.route('/collections', methods=['POST'])
+def create_collection():
+    """Create a new collection."""
+    try:
+        data = request.json
+        
+        if not data or 'name' not in data:
+            return jsonify({
+                'success': False,
+                'message': 'Collection name is required'
+            }), 400
+            
+        name = data.get('name')
+        description = data.get('description', '')
+        
+        # Check if collection with this name already exists
+        existing = Collection.query.filter_by(name=name).first()
+        if existing:
+            return jsonify({
+                'success': False,
+                'message': f'Collection with name "{name}" already exists'
+            }), 400
+        
+        # Create new collection
+        new_collection = Collection(
+            name=name,
+            description=description
+        )
+        
+        db.session.add(new_collection)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Collection "{name}" created successfully',
+            'collection_id': new_collection.id
+        })
+    except Exception as e:
+        logger.exception("Error creating collection")
+        return jsonify({
+            'success': False, 
+            'message': f'Error creating collection: {str(e)}'
+        }), 500
+
+@app.route('/collections/<int:collection_id>/documents', methods=['POST'])
+def add_document_to_collection(collection_id):
+    """Add a document to a collection."""
+    try:
+        data = request.json
+        
+        if not data or 'document_id' not in data:
+            return jsonify({
+                'success': False,
+                'message': 'Document ID is required'
+            }), 400
+            
+        document_id = data.get('document_id')
+        
+        # Check if collection exists
+        collection = Collection.query.get(collection_id)
+        if not collection:
+            return jsonify({
+                'success': False,
+                'message': f'Collection with ID {collection_id} not found'
+            }), 404
+            
+        # Check if document exists
+        document = Document.query.get(document_id)
+        if not document:
+            return jsonify({
+                'success': False,
+                'message': f'Document with ID {document_id} not found'
+            }), 404
+            
+        # Check if document is already in the collection
+        if document in collection.documents:
+            return jsonify({
+                'success': False,
+                'message': f'Document with ID {document_id} is already in collection "{collection.name}"'
+            }), 400
+            
+        # Add document to collection
+        collection.documents.append(document)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Document "{document.title}" added to collection "{collection.name}"'
+        })
+    except Exception as e:
+        logger.exception(f"Error adding document to collection {collection_id}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error adding document to collection: {str(e)}'
         }), 500
