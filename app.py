@@ -130,6 +130,9 @@ def query():
                 'answer': "I don't have enough information to answer this question based on the documents you've provided.",
                 'sources': []
             })
+            
+        # Debug log the retrieval results
+        logger.debug(f"Retrieved {len(retrieval_results)} documents for query: {query_text[:50]}...")
         
         # Generate response using LLM
         answer, sources = generate_response(query_text, retrieval_results)

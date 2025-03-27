@@ -68,6 +68,14 @@ def generate_response(query, context_documents):
             
             sources.append(source_info)
         
+        # Log the query and context for debugging
+        logger.debug(f"Query: {query}")
+        logger.debug(f"Context documents count: {len(context_documents)}")
+        
+        # Skip API call if there's no context
+        if not context.strip():
+            return "I don't have enough information to answer this question based on the documents you've provided.", []
+        
         # Create prompt for OpenAI
         # the newest OpenAI model is "gpt-4o" which was released May 13, 2024.
         # do not change this unless explicitly requested by the user
@@ -98,6 +106,12 @@ def generate_response(query, context_documents):
         
         answer = response.choices[0].message.content
         logger.debug(f"Generated response for query: {query[:30]}...")
+        
+        # Check if the answer says there's not enough information
+        if "I don't have enough information" in answer:
+            # If the answer indicates no information but we have sources, 
+            # don't return any sources to avoid confusion
+            return answer, []
         
         return answer, sources
     except Exception as e:

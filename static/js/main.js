@@ -83,8 +83,16 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const response = await fetch('/upload_pdf', {
                 method: 'POST',
-                body: formData
+                body: formData,
+                // Disable automatic redirect following
+                redirect: 'manual'
             });
+            
+            // Check if the response is ok before parsing
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Server error: ${response.status} ${errorText.substring(0, 100)}`);
+            }
             
             const data = await response.json();
             
