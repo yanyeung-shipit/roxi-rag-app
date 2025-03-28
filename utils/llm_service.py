@@ -163,16 +163,25 @@ def generate_response(query, context_documents):
         # Then add all non-PDF sources
         website_sources = {}  # Track website sources by URL to deduplicate
         
-        # First collect website sources
+        # First collect website sources with improved logging
         for source in all_sources:
             if source["source_type"] == "website":
                 url = source.get("url", "#")
                 if url not in website_sources:
                     website_sources[url] = source
-                    logger.debug(f"Adding website source: {source.get('title', 'Unnamed')} - {url}")
+                    logger.info(f"Adding website source to final results: {source.get('title', 'Unnamed')} - {url}")
+                    
+                    # Log full source details for debugging
+                    logger.debug(f"Website source details: {source}")
         
         # Add deduplicated website sources to the final sources list
         for url, source in website_sources.items():
+            # Make sure the website citation is properly formatted
+            if "citation" not in source or not source["citation"]:
+                title = source.get("title", "Website")
+                source["citation"] = f"Website: {title} - {url}"
+                
+            logger.info(f"Final website citation: {source['citation']}")
             sources.append(source)
             
         # Add any other non-PDF, non-website sources
@@ -205,7 +214,9 @@ def generate_response(query, context_documents):
                         "4. Provide citations for your answer using the format [n] where n is the document number.\n"
                         "5. Cite multiple sources if the information comes from multiple documents.\n"
                         "6. Be concise and direct in your answers.\n"
-                        "7. If documents provide conflicting information, acknowledge this and present both viewpoints with citations."
+                        "7. Pay equal attention to ALL document sources - both PDFs and websites. Some of your most valuable information may come from website sources.\n"
+                        "8. If documents provide conflicting information, acknowledge this and present both viewpoints with citations.\n"
+                        "9. If you find information from websites, especially rheumatology-focused websites, treat this as high-quality information comparable to peer-reviewed sources."
                     )
                 },
                 {
@@ -236,7 +247,10 @@ def generate_response(query, context_documents):
                                 "IMPORTANT INSTRUCTION: The user has provided documents that DO contain relevant information "
                                 "for their query. Your task is to extract useful information from these documents to answer "
                                 "the question, even if the information is partial or incomplete. Do NOT claim there is insufficient "
-                                "information unless you're absolutely certain after careful consideration."
+                                "information unless you're absolutely certain after careful consideration.\n\n"
+                                "Pay close attention to information from ALL sources, including website sources, which may contain "
+                                "valuable and current information. Even if the documents only partially address the query, "
+                                "provide the most helpful response possible with the information available."
                             )
                         },
                         {

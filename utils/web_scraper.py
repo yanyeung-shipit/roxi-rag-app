@@ -18,7 +18,7 @@ def scrape_website(url):
     Returns:
         list: List of dictionaries containing text chunks and metadata
     """
-    logger.debug(f"Scraping website: {url}")
+    logger.info(f"Scraping website: {url}")
     
     try:
         # Validate URL
@@ -27,28 +27,59 @@ def scrape_website(url):
             raise ValueError("Invalid URL format")
         
         # Fetch and extract content using Trafilatura
+        logger.debug(f"Fetching content from URL: {url}")
         downloaded = trafilatura.fetch_url(url)
         if not downloaded:
+            logger.error(f"Failed to download content from {url}")
             raise Exception(f"Failed to download content from {url}")
         
-        # Extract main content
-        text = trafilatura.extract(downloaded, include_links=True, include_images=False, 
-                                  include_tables=True, deduplicate=True, no_fallback=False)
+        logger.debug(f"Downloaded content length: {len(downloaded)} bytes")
         
-        if not text:
-            logger.warning(f"No content extracted from {url}")
-            raise Exception(f"No content extracted from {url}")
+        # Extract main content with improved options
+        logger.debug("Extracting text content with trafilatura")
+        text = trafilatura.extract(
+            downloaded, 
+            include_links=True, 
+            include_images=False, 
+            include_tables=True, 
+            deduplicate=True, 
+            no_fallback=False,
+            favor_precision=False  # Set to False to extract more content
+        )
         
-        # Extract title
+        # Check if content was extracted
+        if not text or len(text.strip()) < 50:  # Minimum meaningful content
+            logger.warning(f"No significant content extracted from {url}")
+            
+            # Try with different extraction parameters as fallback
+            logger.debug("Trying alternate extraction method")
+            text = trafilatura.extract(
+                downloaded,
+                include_comments=True,  # Include comments which may contain useful text
+                include_tables=True,
+                no_fallback=False,
+                target_language="en"
+            )
+            
+            if not text or len(text.strip()) < 50:
+                logger.error(f"Failed to extract any meaningful content from {url}")
+                raise Exception(f"No meaningful content extracted from {url}")
+        
+        logger.info(f"Successfully extracted {len(text)} characters from {url}")
+        
+        # Extract title with enhanced method
         title = extract_title(downloaded, url)
+        logger.info(f"Extracted title: {title}")
         
         # Generate APA citation for the website
         citation = generate_website_citation(title, url)
+        logger.debug(f"Generated citation: {citation}")
         
-        # Chunk the content
-        text_chunks = chunk_text(text, max_length=1000, overlap=200)
+        # Chunk the content with smaller chunks for more precise retrieval
+        text_chunks = chunk_text(text, max_length=800, overlap=200)
+        logger.info(f"Created {len(text_chunks)} chunks from website content")
         
-        # Create chunks with metadata
+        # Create chunks with comprehensive metadata
         chunks = []
         for i, chunk in enumerate(text_chunks):
             chunks.append({
@@ -58,11 +89,17 @@ def scrape_website(url):
                     "title": title,
                     "url": url,
                     "chunk_index": i,
-                    "citation": citation
+                    "citation": citation,
+                    "date_scraped": datetime.now().isoformat()
                 }
             })
         
-        logger.debug(f"Created {len(chunks)} chunks from website")
+        # Log sample chunk for verification
+        if chunks:
+            logger.debug(f"Sample chunk: {chunks[0]['text'][:100]}...")
+            logger.debug(f"Sample metadata: {chunks[0]['metadata']}")
+        
+        logger.info(f"Created {len(chunks)} chunks from website {url}")
         return chunks
         
     except Exception as e:
@@ -82,18 +119,34 @@ def extract_title(html, url):
     """
     try:
         # Try to extract using trafilatura
-        title = trafilatura.extract_metadata(html, url=url).get('title', '')
+        metadata = trafilatura.extract_metadata(html, url=url)
+        logger.debug(f"Extracted metadata: {metadata}")
         
+        title = metadata.get('title', '')
+        
+        if not title:
+            # Try to extract from HTML directly using regex
+            logger.debug("Title not found in metadata, trying regex extraction")
+            import re
+            title_match = re.search('<title>(.*?)</title>', html, re.IGNORECASE | re.DOTALL)
+            if title_match:
+                title = title_match.group(1).strip()
+                logger.debug(f"Found title with regex: {title}")
+            
         if not title:
             # Use domain name as fallback
             parsed_url = urllib.parse.urlparse(url)
             title = parsed_url.netloc
+            logger.debug(f"Using domain as fallback title: {title}")
         
         return title
-    except:
+    except Exception as e:
+        logger.exception(f"Error extracting title: {str(e)}")
         # Use domain name as fallback
         parsed_url = urllib.parse.urlparse(url)
-        return parsed_url.netloc
+        domain = parsed_url.netloc
+        logger.debug(f"Using domain as exception fallback title: {domain}")
+        return domain
         
 def generate_website_citation(title, url):
     """

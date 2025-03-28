@@ -169,7 +169,7 @@ class VectorStore:
             query_embedding = self._get_embedding(query)
             
             # Perform semantic search with a larger k to increase recall
-            initial_k = min(top_k * 3, len(self.documents))
+            initial_k = min(top_k * 5, len(self.documents))  # Increased from 3x to 5x for better recall
             distances, indices = self.index.search(
                 np.array([query_embedding], dtype=np.float32), initial_k
             )
@@ -183,6 +183,15 @@ class VectorStore:
                 # Get document by index
                 doc_id = list(self.documents.keys())[idx]
                 doc = self.documents[doc_id]
+                
+                # Make sure metadata is properly initialized
+                if 'metadata' not in doc or not doc['metadata']:
+                    doc['metadata'] = {}
+                
+                # Log individual document for debugging
+                source_type = doc['metadata'].get('source_type', 'unknown')
+                logger.debug(f"Retrieved document: id={doc_id}, type={source_type}, "
+                            f"title={doc['metadata'].get('title', 'unknown')}")
                 
                 # Add to results
                 initial_results.append({
@@ -200,36 +209,73 @@ class VectorStore:
             
             logger.debug(f"Initial search results by source type: {source_types}")
             
+            # Ensure we have a mix of sources if available
+            website_results = [r for r in initial_results if r['metadata'].get('source_type') == 'website']
+            pdf_results = [r for r in initial_results if r['metadata'].get('source_type') == 'pdf']
+            
+            if website_results:
+                logger.debug(f"Found {len(website_results)} website results")
+            if pdf_results:
+                logger.debug(f"Found {len(pdf_results)} PDF results")
+            
             # Pre-process query for keyword matching
             query_tokens = set(word.lower() for word in query.split())
             
-            # Re-rank results using keyword matching
+            # Re-rank results using keyword matching with improved weighting
             for result in initial_results:
                 # Count keyword matches
                 text_tokens = set(word.lower() for word in result['text'].split())
                 keyword_matches = len(query_tokens.intersection(text_tokens))
                 
-                # Apply a boost based on keyword matches
-                # This helps surface documents with explicit keyword matches
+                # Apply boost based on keyword matches and source type
+                source_type = result['metadata'].get('source_type', 'unknown')
+                
+                # Base boost from keyword matches
                 if keyword_matches > 0:
-                    boost_factor = 0.1 * keyword_matches  # Adjust this factor as needed
+                    # More significant boost for more keyword matches
+                    boost_factor = 0.15 * keyword_matches
                     result['score'] = max(0, result['score'] - boost_factor)  # Lower score is better
+                
+                # Apply a small boost to website sources to counterbalance any bias
+                if source_type == 'website':
+                    website_boost = 0.05  # Small boost to website sources
+                    result['score'] = max(0, result['score'] - website_boost)
+                    logger.debug(f"Applied website boost to result: {result['metadata'].get('title', 'unknown')}")
             
-            # Sort by adjusted score and limit to top_k
-            results = sorted(initial_results, key=lambda x: x['score'])[:top_k]
+            # Sort by adjusted score
+            sorted_results = sorted(initial_results, key=lambda x: x['score'])
+            
+            # Try to ensure source diversity: include at least one website source if available
+            final_results = []
+            has_website = any(r['metadata'].get('source_type') == 'website' for r in sorted_results[:top_k])
+            
+            if not has_website and website_results:
+                # Add the highest-ranked website result
+                best_website = sorted(website_results, key=lambda x: x['score'])[0]
+                logger.debug(f"Ensuring website diversity by adding: {best_website['metadata'].get('title', 'unknown')}")
+                final_results.append(best_website)
+                # Fill remaining slots from sorted results, avoiding duplicates
+                for r in sorted_results:
+                    if r['id'] != best_website['id'] and len(final_results) < top_k:
+                        final_results.append(r)
+            else:
+                # Just use top k sorted results
+                final_results = sorted_results[:top_k]
             
             # Log final results by source type
             final_source_types = {}
-            for result in results:
+            for result in final_results:
                 source_type = result['metadata'].get('source_type', 'unknown')
                 final_source_types[source_type] = final_source_types.get(source_type, 0) + 1
-                # Log metadata to check if it's complete
-                logger.debug(f"Result metadata: {result['metadata']}")
+                # Log metadata for debugging
+                logger.debug(f"Final result: type={source_type}, "
+                           f"title={result['metadata'].get('title', 'unknown')}, "
+                           f"score={result['score']}")
             
             logger.debug(f"Final search results by source type: {final_source_types}")
-            logger.debug(f"Search returned {len(results)} results from initial pool of {len(initial_results)}")
+            logger.debug(f"Search returned {len(final_results)} results from initial pool of {len(initial_results)}")
             
-            return results
+            return final_results
         except Exception as e:
             logger.exception(f"Error searching vector store: {str(e)}")
             raise
