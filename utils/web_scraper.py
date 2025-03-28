@@ -3,40 +3,88 @@ import logging
 import urllib.parse
 from datetime import datetime
 import re
+import requests
+from bs4 import BeautifulSoup
+import time
+import threading
+import queue
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-def scrape_website(url):
+def _extract_links(html, base_url):
     """
-    Scrape a website and extract text content into chunks suitable for vector storage.
+    Extract links from HTML content that belong to the same domain.
     
     Args:
-        url (str): URL of the website to scrape
+        html (str): HTML content
+        base_url (str): Base URL to match domain
         
     Returns:
-        list: List of dictionaries containing text chunks and metadata
+        list: List of URLs belonging to the same domain
     """
-    logger.info(f"Scraping website: {url}")
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+        base_domain = urllib.parse.urlparse(base_url).netloc
+        
+        links = []
+        for a_tag in soup.find_all('a', href=True):
+            href = a_tag['href']
+            
+            # Handle relative URLs
+            if href.startswith('/'):
+                parsed_base = urllib.parse.urlparse(base_url)
+                href = f"{parsed_base.scheme}://{parsed_base.netloc}{href}"
+            elif not href.startswith(('http://', 'https://')):
+                # Skip anchors and javascript links
+                if href.startswith('#') or href.startswith('javascript:'):
+                    continue
+                # Other relative paths
+                if base_url.endswith('/'):
+                    href = f"{base_url}{href}"
+                else:
+                    href = f"{base_url}/{href}"
+            
+            # Only include links from the same domain
+            parsed_href = urllib.parse.urlparse(href)
+            if parsed_href.netloc == base_domain:
+                # Remove fragments and normalize URL
+                href = urllib.parse.urljoin(href, urllib.parse.urlparse(href).path)
+                links.append(href)
+        
+        # Remove duplicates and sort
+        links = list(set(links))
+        logger.debug(f"Extracted {len(links)} unique links from {base_url}")
+        return links
+    except Exception as e:
+        logger.exception(f"Error extracting links: {str(e)}")
+        return []
+
+def _process_page(url, page_queue, visited, results, max_pages):
+    """
+    Process a single page, extract its content, and queue new links.
+    
+    Args:
+        url (str): URL to process
+        page_queue (queue.Queue): Queue of pages to process
+        visited (set): Set of already visited URLs
+        results (list): List to store results
+        max_pages (int): Maximum number of pages to crawl
+    """
+    if len(visited) >= max_pages:
+        return
     
     try:
-        # Validate URL
-        parsed_url = urllib.parse.urlparse(url)
-        if not parsed_url.scheme or not parsed_url.netloc:
-            raise ValueError("Invalid URL format")
+        logger.debug(f"Processing page: {url}")
         
-        # Fetch and extract content using Trafilatura
-        logger.debug(f"Fetching content from URL: {url}")
+        # Fetch content
         downloaded = trafilatura.fetch_url(url)
         if not downloaded:
-            logger.error(f"Failed to download content from {url}")
-            raise Exception(f"Failed to download content from {url}")
+            logger.warning(f"Failed to download: {url}")
+            return
         
-        logger.debug(f"Downloaded content length: {len(downloaded)} bytes")
-        
-        # Extract main content with improved options
-        logger.debug("Extracting text content with trafilatura")
+        # Extract text content
         text = trafilatura.extract(
             downloaded, 
             include_links=True, 
@@ -44,42 +92,223 @@ def scrape_website(url):
             include_tables=True, 
             deduplicate=True, 
             no_fallback=False,
-            favor_precision=False  # Set to False to extract more content
+            favor_precision=False
         )
         
-        # Check if content was extracted
-        if not text or len(text.strip()) < 50:  # Minimum meaningful content
-            logger.warning(f"No significant content extracted from {url}")
-            
-            # Try with different extraction parameters as fallback
-            logger.debug("Trying alternate extraction method")
+        # Try alternate extraction if needed
+        if not text or len(text.strip()) < 50:
             text = trafilatura.extract(
                 downloaded,
-                include_comments=True,  # Include comments which may contain useful text
+                include_comments=True,
+                include_tables=True,
+                no_fallback=False,
+                target_language="en"
+            )
+        
+        # Skip if no content was extracted
+        if not text or len(text.strip()) < 50:
+            logger.warning(f"No significant content extracted from {url}")
+            return
+        
+        # Extract title
+        title = extract_title(downloaded, url)
+        
+        # Generate citation
+        citation = generate_website_citation(title, url)
+        
+        # Get page number for metadata
+        page_num = len(visited) + 1
+        
+        # Process content
+        chunks = []
+        text_chunks = chunk_text(text, max_length=800, overlap=200)
+        
+        for i, chunk in enumerate(text_chunks):
+            chunks.append({
+                "text": chunk,
+                "metadata": {
+                    "source_type": "website",
+                    "title": title,
+                    "url": url,
+                    "chunk_index": i,
+                    "page_number": page_num,
+                    "citation": citation,
+                    "date_scraped": datetime.now().isoformat()
+                }
+            })
+        
+        # Add chunks to results
+        if chunks:
+            results.extend(chunks)
+            logger.info(f"Added {len(chunks)} chunks from {url}")
+        
+        # Extract and queue new links for crawling
+        if len(visited) < max_pages:
+            links = _extract_links(downloaded, url)
+            for link in links:
+                if link not in visited and not page_queue.full():
+                    page_queue.put(link)
+                    logger.debug(f"Queued for processing: {link}")
+    
+    except Exception as e:
+        logger.exception(f"Error processing page {url}: {str(e)}")
+
+def scrape_website(url, max_pages=10, max_wait_time=30):
+    """
+    Scrape a website domain by crawling multiple pages and extract text content
+    into chunks suitable for vector storage.
+    
+    Args:
+        url (str): Starting URL to scrape
+        max_pages (int): Maximum number of pages to crawl
+        max_wait_time (int): Maximum time to wait for crawling in seconds
+        
+    Returns:
+        list: List of dictionaries containing text chunks and metadata
+    """
+    logger.info(f"Starting web crawl from: {url} with max_pages={max_pages}")
+    
+    try:
+        # Validate URL
+        parsed_url = urllib.parse.urlparse(url)
+        if not parsed_url.scheme or not parsed_url.netloc:
+            raise ValueError("Invalid URL format")
+        
+        # Initialize tracking structures
+        visited = set()
+        results = []
+        page_queue = queue.Queue(maxsize=100)
+        
+        # Add starting URL to queue
+        page_queue.put(url)
+        
+        # Set up worker threads
+        num_threads = min(5, max_pages)  # Use up to 5 threads
+        threads = []
+        
+        # Event to signal threads to stop
+        stop_event = threading.Event()
+        
+        # Define worker function
+        def worker():
+            while not stop_event.is_set():
+                try:
+                    # Get URL with timeout to allow checking stop_event
+                    current_url = page_queue.get(timeout=0.5)
+                    
+                    # Skip if already visited
+                    if current_url in visited:
+                        page_queue.task_done()
+                        continue
+                    
+                    # Mark as visited
+                    visited.add(current_url)
+                    
+                    # Process the page
+                    _process_page(current_url, page_queue, visited, results, max_pages)
+                    
+                    # Mark task as done
+                    page_queue.task_done()
+                    
+                except queue.Empty:
+                    # No more URLs to process
+                    if page_queue.empty() or len(visited) >= max_pages:
+                        return
+                    continue
+                except Exception as e:
+                    logger.exception(f"Worker error: {str(e)}")
+                    continue
+        
+        # Start worker threads
+        for _ in range(num_threads):
+            t = threading.Thread(target=worker)
+            t.daemon = True
+            t.start()
+            threads.append(t)
+        
+        # Wait for completion or timeout
+        start_time = time.time()
+        while time.time() - start_time < max_wait_time:
+            if page_queue.empty() or len(visited) >= max_pages:
+                break
+            time.sleep(0.5)
+        
+        # Signal threads to stop
+        stop_event.set()
+        
+        # Wait for threads to finish (with timeout)
+        for t in threads:
+            t.join(timeout=1.0)
+        
+        # Log crawl stats
+        logger.info(f"Web crawl complete: processed {len(visited)} pages, extracted {len(results)} chunks")
+        
+        # Process at least the initial URL
+        if not results and url not in visited:
+            logger.warning("No pages processed in multi-page crawl, falling back to single page processing")
+            return _scrape_single_page(url)
+        
+        return results
+        
+    except Exception as e:
+        logger.exception(f"Error during web crawl: {str(e)}")
+        
+        # Try to fall back to single page if crawl fails
+        logger.warning("Falling back to single page processing after crawl failure")
+        return _scrape_single_page(url)
+
+def _scrape_single_page(url):
+    """
+    Scrape a single page as a fallback for the crawler.
+    
+    Args:
+        url (str): URL to scrape
+        
+    Returns:
+        list: List of dictionaries containing text chunks and metadata
+    """
+    logger.info(f"Scraping single page: {url}")
+    
+    try:
+        # Fetch and extract content
+        downloaded = trafilatura.fetch_url(url)
+        if not downloaded:
+            raise Exception(f"Failed to download content from {url}")
+        
+        # Extract content
+        text = trafilatura.extract(
+            downloaded, 
+            include_links=True, 
+            include_images=False, 
+            include_tables=True, 
+            deduplicate=True, 
+            no_fallback=False,
+            favor_precision=False
+        )
+        
+        # Try alternate extraction if needed
+        if not text or len(text.strip()) < 50:
+            text = trafilatura.extract(
+                downloaded,
+                include_comments=True,
                 include_tables=True,
                 no_fallback=False,
                 target_language="en"
             )
             
-            if not text or len(text.strip()) < 50:
-                logger.error(f"Failed to extract any meaningful content from {url}")
-                raise Exception(f"No meaningful content extracted from {url}")
+        if not text or len(text.strip()) < 50:
+            raise Exception(f"No meaningful content extracted from {url}")
         
-        logger.info(f"Successfully extracted {len(text)} characters from {url}")
-        
-        # Extract title with enhanced method
+        # Extract title
         title = extract_title(downloaded, url)
-        logger.info(f"Extracted title: {title}")
         
-        # Generate APA citation for the website
+        # Generate citation
         citation = generate_website_citation(title, url)
-        logger.debug(f"Generated citation: {citation}")
         
-        # Chunk the content with smaller chunks for more precise retrieval
+        # Chunk content
         text_chunks = chunk_text(text, max_length=800, overlap=200)
-        logger.info(f"Created {len(text_chunks)} chunks from website content")
         
-        # Create chunks with comprehensive metadata
+        # Create chunks with metadata
         chunks = []
         for i, chunk in enumerate(text_chunks):
             chunks.append({
@@ -94,16 +323,11 @@ def scrape_website(url):
                 }
             })
         
-        # Log sample chunk for verification
-        if chunks:
-            logger.debug(f"Sample chunk: {chunks[0]['text'][:100]}...")
-            logger.debug(f"Sample metadata: {chunks[0]['metadata']}")
-        
-        logger.info(f"Created {len(chunks)} chunks from website {url}")
+        logger.info(f"Created {len(chunks)} chunks from single page {url}")
         return chunks
         
     except Exception as e:
-        logger.exception(f"Error scraping website: {str(e)}")
+        logger.exception(f"Error scraping single page: {str(e)}")
         raise Exception(f"Failed to scrape website: {str(e)}")
 
 def extract_title(html, url):

@@ -116,12 +116,18 @@ def generate_response(query, context_documents):
             elif source_type == "website":
                 title = metadata.get("title", "Unnamed Website")
                 url = metadata.get("url", "#")
+                page_number = metadata.get("page_number", None)
                 source_info["title"] = title
                 source_info["url"] = url
                 
+                # Include page number from multi-page crawl if available
+                if page_number is not None:
+                    source_info["page_number"] = page_number
+                
                 # Ensure website citations are properly formatted
                 if "citation" not in source_info or not source_info["citation"]:
-                    source_info["citation"] = f"Website: {title} - {url}"
+                    page_info = f" (Page {page_number})" if page_number is not None else ""
+                    source_info["citation"] = f"Website: {title}{page_info} - {url}"
                 
                 logger.debug(f"Added website source {i+1} with citation: {source_info.get('citation', 'No citation')}")
             else:
@@ -161,25 +167,34 @@ def generate_response(query, context_documents):
             sources.append(pdf_source)
         
         # Then add all non-PDF sources
-        website_sources = {}  # Track website sources by URL to deduplicate
+        website_sources = {}  # Track website sources by URL and page to handle multi-page crawls
         
         # First collect website sources with improved logging
         for source in all_sources:
             if source["source_type"] == "website":
                 url = source.get("url", "#")
-                if url not in website_sources:
-                    website_sources[url] = source
-                    logger.info(f"Adding website source to final results: {source.get('title', 'Unnamed')} - {url}")
+                page_number = source.get("page_number", None)
+                
+                # Create a unique key that combines URL and page number
+                source_key = f"{url}#{page_number}" if page_number is not None else url
+                
+                if source_key not in website_sources:
+                    website_sources[source_key] = source
+                    logger.info(f"Adding website source to final results: {source.get('title', 'Unnamed')} - {url}" + 
+                               (f" (Page {page_number})" if page_number is not None else ""))
                     
                     # Log full source details for debugging
                     logger.debug(f"Website source details: {source}")
         
-        # Add deduplicated website sources to the final sources list
-        for url, source in website_sources.items():
+        # Add website sources to the final sources list with page numbers preserved
+        for key, source in website_sources.items():
             # Make sure the website citation is properly formatted
             if "citation" not in source or not source["citation"]:
                 title = source.get("title", "Website")
-                source["citation"] = f"Website: {title} - {url}"
+                url = source.get("url", "#")
+                page_number = source.get("page_number", None)
+                page_info = f" (Page {page_number})" if page_number is not None else ""
+                source["citation"] = f"Website: {title}{page_info} - {url}"
                 
             logger.info(f"Final website citation: {source['citation']}")
             sources.append(source)
@@ -215,8 +230,10 @@ def generate_response(query, context_documents):
                         "5. Cite multiple sources if the information comes from multiple documents.\n"
                         "6. Be concise and direct in your answers.\n"
                         "7. Pay equal attention to ALL document sources - both PDFs and websites. Some of your most valuable information may come from website sources.\n"
-                        "8. If documents provide conflicting information, acknowledge this and present both viewpoints with citations.\n"
-                        "9. If you find information from websites, especially rheumatology-focused websites, treat this as high-quality information comparable to peer-reviewed sources."
+                        "8. Website sources may include multiple pages from the same domain, each containing different information - treat each page as a distinct source of knowledge.\n"
+                        "9. If documents provide conflicting information, acknowledge this and present both viewpoints with citations.\n"
+                        "10. If you find information from websites, especially rheumatology-focused websites, treat this as high-quality information comparable to peer-reviewed sources.\n"
+                        "11. When citing website sources, include the specific page number if available, as this indicates which specific page from the domain was used."
                     )
                 },
                 {
@@ -249,8 +266,13 @@ def generate_response(query, context_documents):
                                 "the question, even if the information is partial or incomplete. Do NOT claim there is insufficient "
                                 "information unless you're absolutely certain after careful consideration.\n\n"
                                 "Pay close attention to information from ALL sources, including website sources, which may contain "
-                                "valuable and current information. Even if the documents only partially address the query, "
-                                "provide the most helpful response possible with the information available."
+                                "valuable and current information. Website sources often include multiple pages from the same domain, "
+                                "each with different valuable information. Even if the documents only partially address the query, "
+                                "provide the most helpful response possible with the information available.\n\n"
+                                "Important notes about website sources:\n"
+                                "1. Consider all website pages as high-quality sources of rheumatology information\n"
+                                "2. Pay attention to page numbers in website citations which indicate different pages in the domain\n"
+                                "3. Treat website content with the same level of importance as PDF sources"
                             )
                         },
                         {

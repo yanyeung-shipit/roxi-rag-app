@@ -215,6 +215,11 @@ class VectorStore:
             
             if website_results:
                 logger.debug(f"Found {len(website_results)} website results")
+                # Log website results with page numbers for multi-page crawl debugging
+                for wr in website_results[:3]:  # Log first 3 for debugging
+                    url = wr['metadata'].get('url', 'unknown')
+                    page_num = wr['metadata'].get('page_number', 'main page')
+                    logger.debug(f"Website result: {url} (Page: {page_num})")
             if pdf_results:
                 logger.debug(f"Found {len(pdf_results)} PDF results")
             
@@ -238,7 +243,16 @@ class VectorStore:
                 
                 # Apply a small boost to website sources to counterbalance any bias
                 if source_type == 'website':
-                    website_boost = 0.05  # Small boost to website sources
+                    # Basic boost for any website source
+                    website_boost = 0.05
+                    
+                    # Additional boost for pages with specific page numbers from multi-page crawls
+                    # These are likely more specific content pages rather than general homepage content
+                    if 'page_number' in result['metadata'] and result['metadata']['page_number'] is not None:
+                        page_boost = 0.03  # Additional small boost for specific pages
+                        website_boost += page_boost
+                        logger.debug(f"Applied additional page boost for page {result['metadata']['page_number']}")
+                    
                     result['score'] = max(0, result['score'] - website_boost)
                     logger.debug(f"Applied website boost to result: {result['metadata'].get('title', 'unknown')}")
             
@@ -297,7 +311,14 @@ class VectorStore:
                 pdf_sources.add(doc['metadata'].get('title', 'unknown'))
             elif doc['metadata'].get('source_type') == 'website':
                 # Use the URL as a unique identifier for websites
-                website_sources.add(doc['metadata'].get('url', 'unknown'))
+                # For multi-page crawls, pages from the same domain count as one website source
+                url = doc['metadata'].get('url', 'unknown')
+                # Extract domain from URL for unique counting
+                try:
+                    domain = '/'.join(url.split('/')[:3])  # Get schema + domain
+                    website_sources.add(domain)
+                except:
+                    website_sources.add(url)
         
         return {
             'total_documents': len(self.documents),

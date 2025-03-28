@@ -239,7 +239,7 @@ def upload_pdf():
 
 @app.route('/add_website', methods=['POST'])
 def add_website():
-    """Process and store website data. Using optimized batch processing and saving to database."""
+    """Process and store website data with multi-page crawling."""
     try:
         data = request.form
         url = data.get('website_url', '')
@@ -251,7 +251,7 @@ def add_website():
                 'message': 'URL is required'
             }), 400
         
-        logger.info(f"Processing website: {url}")
+        logger.info(f"Processing website with multi-page crawling: {url}")
         
         # Create a new document record in the database
         new_document = Document(
@@ -266,36 +266,37 @@ def add_website():
         db.session.commit()
         logger.info(f"Created document record with ID: {new_document.id}")
         
-        # Scrape website and add to vector store
+        # Scrape website with multi-page crawling
         try:
-            logger.debug(f"Starting to scrape website: {url}")
-            chunks = scrape_website(url)
-            logger.debug(f"Scraped website with {len(chunks) if chunks else 0} chunks")
+            logger.debug(f"Starting multi-page crawl from: {url}")
+            # Use the new multi-page crawler with a limit of 10 pages
+            chunks = scrape_website(url, max_pages=10, max_wait_time=60)
+            logger.debug(f"Crawled website with {len(chunks) if chunks else 0} chunks from multiple pages")
             
             if not chunks:
                 logger.warning(f"No content extracted from website: {url}")
                 # Document exists but processing failed
                 return jsonify({
                     'success': False, 
-                    'message': 'Could not extract any content from the provided URL'
+                    'message': 'Could not extract any content from the provided URL or its linked pages'
                 }), 400
         except Exception as scrape_error:
-            logger.exception(f"Error scraping website: {str(scrape_error)}")
+            logger.exception(f"Error crawling website: {str(scrape_error)}")
             return jsonify({
                 'success': False, 
-                'message': f'Error scraping website: {str(scrape_error)}'
+                'message': f'Error crawling website: {str(scrape_error)}'
             }), 500
             
-        # Update document with title if available
+        # Update document with title from the first page
         if chunks and 'title' in chunks[0]['metadata']:
             new_document.title = chunks[0]['metadata']['title']
             db.session.commit()
             logger.debug(f"Updated document with title: {new_document.title}")
             
-        logger.info(f"Successfully scraped website with {len(chunks)} chunks")
+        logger.info(f"Successfully crawled website with {len(chunks)} chunks from multiple pages")
         
         # Limit chunks to prevent memory issues
-        max_chunks = 50
+        max_chunks = 100  # Increased from 50 to 100 since we're crawling multiple pages
         if len(chunks) > max_chunks:
             logger.warning(f"Limiting {len(chunks)} chunks to first {max_chunks}")
             chunks = chunks[:max_chunks]
@@ -307,6 +308,14 @@ def add_website():
         success_count = 0
         chunk_records = []
         
+        # Track unique URLs processed
+        processed_urls = set()
+        for chunk in chunks:
+            if 'url' in chunk['metadata']:
+                processed_urls.add(chunk['metadata']['url'])
+        
+        logger.info(f"Processing chunks from {len(processed_urls)} unique URLs")
+        
         try:
             for i in range(0, len(chunks), batch_size):
                 batch = chunks[i:i + batch_size]
@@ -315,6 +324,9 @@ def add_website():
                 # Process each chunk with error handling
                 for chunk_index, chunk in enumerate(batch):
                     try:
+                        # Add additional metadata for debugging
+                        chunk['metadata']['document_id'] = new_document.id
+                        
                         # Add to vector store
                         vector_store.add_text(chunk['text'], chunk['metadata'])
                         
@@ -322,6 +334,7 @@ def add_website():
                         chunk_record = DocumentChunk(
                             document_id=new_document.id,
                             chunk_index=i + chunk_index,
+                            page_number=chunk['metadata'].get('page_number', None),  # Store page number if available
                             text_content=chunk['text']
                         )
                         chunk_records.append(chunk_record)
@@ -359,9 +372,10 @@ def add_website():
         if success_count > 0:
             return jsonify({
                 'success': True, 
-                'message': f'Successfully processed website: {url} ({success_count} of {len(chunks)} chunks)',
+                'message': f'Successfully processed website: {url} ({success_count} chunks from {len(processed_urls)} pages)',
                 'document_id': new_document.id,
-                'chunks': success_count
+                'chunks': success_count,
+                'pages': len(processed_urls)
             })
         else:
             return jsonify({
