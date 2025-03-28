@@ -22,6 +22,16 @@ class Document(db.Model):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     processed = Column(Boolean, default=False)
     
+    # Citation metadata fields
+    doi = Column(String(100), nullable=True)  # Digital Object Identifier (e.g., "10.1038/nrdp.2018.1")
+    authors = Column(Text, nullable=True)  # List of authors, stored as comma-separated string
+    journal = Column(String(255), nullable=True)  # Journal or publication name
+    publication_year = Column(Integer, nullable=True)  # Year of publication
+    volume = Column(String(50), nullable=True)  # Volume information
+    issue = Column(String(50), nullable=True)  # Issue information
+    pages = Column(String(50), nullable=True)  # Page range
+    formatted_citation = Column(Text, nullable=True)  # Full formatted citation in APA style
+    
     # One document has many chunks
     chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
     # One document can be in many collections (through collection_documents)

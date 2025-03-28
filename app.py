@@ -7,7 +7,7 @@ import json
 from flask import Flask, render_template, request, jsonify, flash, redirect, url_for, abort
 from werkzeug.utils import secure_filename
 from werkzeug.security import safe_join
-from utils.document_processor import process_pdf
+from utils.document_processor import process_pdf, bulk_process_pdfs
 from utils.web_scraper import scrape_website, create_minimal_content_for_topic
 from utils.vector_store import VectorStore
 from utils.llm_service import generate_response
@@ -124,7 +124,7 @@ def upload_pdf():
             
             try:
                 # Process PDF and add to vector store
-                chunks = process_pdf(file_path, filename)
+                chunks, metadata = process_pdf(file_path, filename)
                 
                 if not chunks:
                     logger.warning("No chunks extracted from PDF")
@@ -135,11 +135,33 @@ def upload_pdf():
                     
                 logger.info(f"Successfully processed PDF with {len(chunks)} chunks")
                 
-                # Update document with page count if available
-                if chunks and 'page_count' in chunks[0]['metadata']:
-                    new_document.page_count = chunks[0]['metadata']['page_count']
+                # Update document with metadata from processing
+                if metadata:
+                    # Update page count
+                    if 'page_count' in metadata:
+                        new_document.page_count = metadata['page_count']
+                    
+                    # Update citation information
+                    if 'doi' in metadata and metadata['doi']:
+                        new_document.doi = metadata['doi']
+                    if 'authors' in metadata and metadata['authors']:
+                        new_document.authors = metadata['authors']
+                    if 'journal' in metadata and metadata['journal']:
+                        new_document.journal = metadata['journal']
+                    if 'publication_year' in metadata and metadata['publication_year']:
+                        new_document.publication_year = metadata['publication_year']
+                    if 'volume' in metadata and metadata['volume']:
+                        new_document.volume = metadata['volume']
+                    if 'issue' in metadata and metadata['issue']:
+                        new_document.issue = metadata['issue']
+                    if 'pages' in metadata and metadata['pages']:
+                        new_document.pages = metadata['pages']
+                    if 'formatted_citation' in metadata and metadata['formatted_citation']:
+                        new_document.formatted_citation = metadata['formatted_citation']
+                    
+                    # Commit metadata updates
                     db.session.commit()
-                    logger.debug(f"Updated document with page count: {new_document.page_count}")
+                    logger.debug(f"Updated document with metadata including citation: {new_document.formatted_citation}")
                 
                 # Further limit chunks to prevent memory issues
                 max_chunks = 50
@@ -237,6 +259,241 @@ def upload_pdf():
         return jsonify({
             'success': False, 
             'message': f'Error processing PDF: {str(e)}'
+        }), 500
+
+@app.route('/bulk_upload_pdfs', methods=['POST']) 
+def bulk_upload_pdfs():
+    """Process and store multiple PDF files in batch with citation extraction."""
+    try:
+        # Check if files were included
+        if 'pdf_files[]' not in request.files:
+            logger.warning("No files part in the request")
+            return jsonify({
+                'success': False,
+                'message': 'No files part in the request'
+            }), 400
+        
+        # Get all files
+        files = request.files.getlist('pdf_files[]')
+        
+        # Check if files were selected
+        if not files or files[0].filename == '':
+            logger.warning("No files selected")
+            return jsonify({
+                'success': False,
+                'message': 'No files selected'
+            }), 400
+        
+        # Filter valid files
+        valid_files = [f for f in files if f and allowed_file(f.filename)]
+        
+        if not valid_files:
+            logger.warning("No valid PDF files provided")
+            return jsonify({
+                'success': False,
+                'message': 'No valid PDF files provided. Only PDF files are allowed.'
+            }), 400
+        
+        # Maximum number of files to process at once
+        max_files = 50  # Allow up to 50 files in one batch
+        if len(valid_files) > max_files:
+            logger.warning(f"Too many files: {len(valid_files)}. Maximum allowed is {max_files}")
+            return jsonify({
+                'success': False,
+                'message': f'Too many files: {len(valid_files)}. Maximum allowed is {max_files}.'
+            }), 400
+        
+        # Save files and create document records
+        pdf_paths = []
+        documents = []
+        
+        for file in valid_files:
+            try:
+                filename = secure_filename(file.filename)
+                
+                # Check file size - limit to 20MB
+                file.seek(0, os.SEEK_END)
+                file_size = file.tell()
+                file.seek(0)  # Reset file pointer
+                
+                if file_size > 20 * 1024 * 1024:  # 20MB limit
+                    logger.warning(f"PDF file too large: {filename} ({file_size / (1024*1024):.2f} MB)")
+                    continue  # Skip this file but continue processing others
+                
+                # Create unique filename with timestamp
+                timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+                unique_filename = f"{timestamp}_{filename}"
+                file_path = safe_join(app.config['UPLOAD_FOLDER'], unique_filename)
+                file.save(file_path)
+                
+                # Create document record
+                new_document = Document(
+                    filename=filename,
+                    title=filename,
+                    file_type="pdf",
+                    file_path=file_path,
+                    file_size=file_size,
+                    processed=False
+                )
+                
+                db.session.add(new_document)
+                db.session.commit()
+                
+                # Save for batch processing
+                pdf_paths.append((file_path, filename, new_document.id))
+                documents.append(new_document)
+                
+                logger.debug(f"Saved file: {filename} as {file_path}")
+                
+            except Exception as file_error:
+                logger.warning(f"Error saving file {file.filename}: {str(file_error)}")
+                # Continue with other files
+        
+        # If no files were saved successfully
+        if not pdf_paths:
+            logger.warning("Failed to save any files")
+            return jsonify({
+                'success': False,
+                'message': 'Failed to save any of the provided files.'
+            }), 500
+        
+        # Process PDF files in batch mode with citation extraction
+        processing_results = []
+        try:
+            # Use batch processing with 5 PDFs per batch
+            results = bulk_process_pdfs([(p[0], p[1]) for p in pdf_paths], batch_size=5)
+            
+            # Process results for each document
+            for i, (chunks, metadata) in enumerate(results):
+                document_id = pdf_paths[i][2]
+                filename = pdf_paths[i][1]
+                document = next((d for d in documents if d.id == document_id), None)
+                
+                if not document:
+                    logger.warning(f"Could not find document record for ID: {document_id}")
+                    continue
+                
+                # Update document with metadata from processing
+                if metadata:
+                    # Skip documents with errors
+                    if 'error' in metadata:
+                        logger.warning(f"Error processing {filename}: {metadata['error']}")
+                        processing_results.append({
+                            'filename': filename,
+                            'document_id': document_id,
+                            'success': False,
+                            'message': f"Error: {metadata['error']}"
+                        })
+                        continue
+                    
+                    # Update document metadata
+                    if 'page_count' in metadata:
+                        document.page_count = metadata['page_count']
+                    if 'doi' in metadata and metadata['doi']:
+                        document.doi = metadata['doi']
+                    if 'authors' in metadata and metadata['authors']:
+                        document.authors = metadata['authors']
+                    if 'journal' in metadata and metadata['journal']:
+                        document.journal = metadata['journal']
+                    if 'publication_year' in metadata and metadata['publication_year']:
+                        document.publication_year = metadata['publication_year']
+                    if 'volume' in metadata and metadata['volume']:
+                        document.volume = metadata['volume']
+                    if 'issue' in metadata and metadata['issue']:
+                        document.issue = metadata['issue']
+                    if 'pages' in metadata and metadata['pages']:
+                        document.pages = metadata['pages']
+                    if 'formatted_citation' in metadata and metadata['formatted_citation']:
+                        document.formatted_citation = metadata['formatted_citation']
+                    
+                    # If we have at least a journal name or authors, set a better title
+                    if document.journal and not document.title.startswith(document.journal):
+                        if document.authors:
+                            authors_short = document.authors.split(';')[0] + " et al." if ";" in document.authors else document.authors
+                            document.title = f"{authors_short} - {document.journal}"
+                        else:
+                            document.title = document.journal
+                
+                # Process chunks if available
+                if chunks:
+                    # Limit chunks per document to avoid memory issues
+                    max_chunks = 50
+                    if len(chunks) > max_chunks:
+                        logger.warning(f"Limiting {len(chunks)} chunks to first {max_chunks} for {filename}")
+                        chunks = chunks[:max_chunks]
+                    
+                    # Add chunks to vector store and database
+                    success_count = 0
+                    chunk_records = []
+                    
+                    for i, chunk in enumerate(chunks):
+                        try:
+                            # Add to vector store
+                            vector_store.add_text(chunk['text'], chunk['metadata'])
+                            
+                            # Create chunk record
+                            chunk_record = DocumentChunk(
+                                document_id=document_id,
+                                chunk_index=i,
+                                page_number=chunk['metadata'].get('page', None),
+                                text_content=chunk['text']
+                            )
+                            chunk_records.append(chunk_record)
+                            success_count += 1
+                        except Exception as chunk_error:
+                            logger.warning(f"Error adding chunk {i} from {filename}: {str(chunk_error)}")
+                    
+                    # Save vector store
+                    vector_store._save()
+                    
+                    # Save chunk records to database
+                    if chunk_records:
+                        db.session.add_all(chunk_records)
+                    
+                    # Mark document as processed if any chunks were successful
+                    if success_count > 0:
+                        document.processed = True
+                    
+                    # Add to results
+                    processing_results.append({
+                        'filename': filename,
+                        'document_id': document_id,
+                        'success': success_count > 0,
+                        'chunks': success_count,
+                        'citation': document.formatted_citation if document.formatted_citation else None
+                    })
+                else:
+                    # No chunks extracted
+                    processing_results.append({
+                        'filename': filename,
+                        'document_id': document_id,
+                        'success': False,
+                        'message': 'Could not extract any text content'
+                    })
+            
+            # Commit all database changes at once
+            db.session.commit()
+            
+            # Return summary of processing results
+            success_count = sum(1 for r in processing_results if r.get('success', False))
+            return jsonify({
+                'success': success_count > 0,
+                'message': f'Successfully processed {success_count} of {len(valid_files)} PDF files',
+                'results': processing_results
+            })
+            
+        except Exception as batch_error:
+            logger.exception(f"Error in batch processing: {str(batch_error)}")
+            return jsonify({
+                'success': False,
+                'message': f'Error in batch processing: {str(batch_error)}'
+            }), 500
+            
+    except Exception as e:
+        logger.exception(f"Error processing PDF batch: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'Error processing PDF batch: {str(e)}'
         }), 500
 
 @app.route('/add_website', methods=['POST'])

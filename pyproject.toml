@@ -12,6 +12,7 @@ dependencies = [
     "gunicorn>=23.0.0",
     "openai>=1.68.2",
     "psycopg2-binary>=2.9.10",
+    "pymupdf>=1.25.4",
     "pypdf2>=3.0.1",
     "requests>=2.32.3",
     "sqlalchemy>=2.0.39",

@@ -12,6 +12,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // Form elements
         pdfForm: document.getElementById('pdf-form'),
         pdfResult: document.getElementById('pdf-result'),
+        bulkPdfForm: document.getElementById('bulk-pdf-form'),
+        bulkPdfResult: document.getElementById('bulk-pdf-result'),
         websiteForm: document.getElementById('website-form'),
         websiteResult: document.getElementById('website-result'),
         topicPagesForm: document.getElementById('topic-pages-form'),
@@ -74,6 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Form submissions
         safeAddEventListener('pdfForm', 'submit', handlePdfFormSubmit);
+        safeAddEventListener('bulkPdfForm', 'submit', handleBulkPdfFormSubmit);
         safeAddEventListener('websiteForm', 'submit', handleWebsiteFormSubmit);
 
         // Bind to the form directly for topic pages to avoid button reference issues
@@ -1248,6 +1251,100 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             // Exception message
             elements.pdfResult.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    Error: ${error.message}
+                </div>
+            `;
+        } finally {
+            // Re-enable submit button
+            submitBtn.disabled = false;
+        }
+    }
+    
+    // Handle bulk PDF form submission
+    async function handleBulkPdfFormSubmit(event) {
+        event.preventDefault();
+        
+        if (!elements.bulkPdfForm || !elements.bulkPdfResult) {
+            console.error("Cannot handle bulk PDF form submit: required DOM elements not found");
+            return;
+        }
+        
+        // Validate form
+        if (!elements.bulkPdfForm.checkValidity()) {
+            elements.bulkPdfForm.classList.add('was-validated');
+            return;
+        }
+        
+        // Check file count limit
+        const fileInput = document.getElementById('bulk-pdf-files');
+        if (fileInput.files.length > 50) {
+            elements.bulkPdfResult.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    Too many files. Maximum 50 files allowed.
+                </div>
+            `;
+            return;
+        }
+        
+        // Prepare UI for submission
+        elements.bulkPdfResult.innerHTML = `
+            <div class="alert alert-info">
+                <div class="d-flex align-items-center">
+                    <div class="spinner-border spinner-border-sm me-2" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <div>
+                        Uploading and processing ${fileInput.files.length} PDFs with citation extraction...
+                        <div class="small text-muted mt-1">This may take several minutes. Please wait.</div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        const submitBtn = elements.bulkPdfForm.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        
+        try {
+            // Get form data
+            const formData = new FormData(elements.bulkPdfForm);
+            
+            // Send request
+            const response = await fetch('/bulk_upload_pdfs', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                // Success message
+                elements.bulkPdfResult.innerHTML = `
+                    <div class="alert alert-success">
+                        <i class="fas fa-check-circle me-2"></i>
+                        ${data.message}
+                    </div>
+                `;
+                // Reset form
+                elements.bulkPdfForm.reset();
+                elements.bulkPdfForm.classList.remove('was-validated');
+                
+                // Refresh documents list
+                loadDocuments();
+            } else {
+                // Error message
+                elements.bulkPdfResult.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-circle me-2"></i>
+                        ${data.message}
+                    </div>
+                `;
+            }
+        } catch (error) {
+            // Exception message
+            elements.bulkPdfResult.innerHTML = `
                 <div class="alert alert-danger">
                     <i class="fas fa-exclamation-circle me-2"></i>
                     Error: ${error.message}

@@ -21,7 +21,7 @@
 
 <div class="row mb-4">
     <div class="col-lg-6">
-        <div class="card bg-dark border-secondary">
+        <div class="card bg-dark border-secondary mb-4">
             <div class="card-header bg-dark text-light">
                 <h5><i class="fas fa-file-upload me-2"></i>Upload PDF</h5>
             </div>
@@ -39,6 +39,31 @@
                 </form>
                 
                 <div id="pdf-result" class="mt-3"></div>
+            </div>
+        </div>
+        
+        <!-- Bulk PDF Upload -->
+        <div class="card bg-dark border-secondary">
+            <div class="card-header bg-dark text-light">
+                <h5><i class="fas fa-file-upload me-2"></i>Bulk PDF Upload</h5>
+            </div>
+            <div class="card-body">
+                <p class="card-text text-muted">Upload multiple PDF files at once with citation extraction.</p>
+                
+                <form id="bulk-pdf-form" class="needs-validation" novalidate enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label for="bulk-pdf-files" class="form-label">PDF Files</label>
+                        <input type="file" class="form-control" id="bulk-pdf-files" name="pdf_files[]" accept=".pdf" multiple required>
+                        <div class="form-text">
+                            Select multiple PDFs (max: 50 files, 20MB each). <br>
+                            The system will extract DOIs and citation information.
+                        </div>
+                        <div class="invalid-feedback">Please select at least one PDF file.</div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Bulk Upload</button>
+                </form>
+                
+                <div id="bulk-pdf-result" class="mt-3"></div>
             </div>
         </div>
     </div>
