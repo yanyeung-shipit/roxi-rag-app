@@ -265,7 +265,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             console.log("Loading documents...");
             if (elements.documentsTableBody) {
-                elements.documentsTableBody.innerHTML = '<tr><td colspan="5" class="text-center">Loading documents...</td></tr>';
+                elements.documentsTableBody.innerHTML = '<tr><td colspan="6" class="text-center">Loading documents...</td></tr>';
             }
             
             const response = await fetch('/documents');
@@ -280,7 +280,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (elements.documentsTableBody) {
                     elements.documentsTableBody.innerHTML = `
                         <tr>
-                            <td colspan="5" class="text-center text-danger">
+                            <td colspan="6" class="text-center text-danger">
                                 <i class="fas fa-exclamation-circle me-2"></i>
                                 ${data.message}
                             </td>
@@ -293,7 +293,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (elements.documentsTableBody) {
                 elements.documentsTableBody.innerHTML = `
                     <tr>
-                        <td colspan="5" class="text-center text-danger">
+                        <td colspan="6" class="text-center text-danger">
                             <i class="fas fa-exclamation-circle me-2"></i>
                             Error loading documents: ${error.message}
                         </td>
@@ -313,7 +313,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (currentDocuments.length === 0) {
             elements.documentsTableBody.innerHTML = `
                 <tr>
-                    <td colspan="5" class="text-center">
+                    <td colspan="6" class="text-center">
                         No documents found. Upload documents from the search page.
                     </td>
                 </tr>
@@ -354,6 +354,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     </span>
                 </td>
                 <td>${sizeInfo}</td>
+                <td>
+                    ${doc.processed ? 
+                        '<span class="badge bg-success">Processed</span>' : 
+                        '<span class="badge bg-warning">Queued</span>'}
+                </td>
                 <td>${dateStr}</td>
                 <td>
                     <div class="btn-group" role="group">
