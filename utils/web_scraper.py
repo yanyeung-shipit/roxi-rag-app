@@ -123,7 +123,15 @@ def _extract_links(html, base_url):
             'inflammatory', 'autoimmune', 'juvenile', 'dermatomyositis', 'polymyalgia',
             'ankylosing', 'osteoarthritis', 'spondyloarthritis', 'polymyositis',
             'polyarthritis', 'rheumatic', 'connective-tissue', 'systemic', 'disease',
-            'condition', 'treatment', 'diagnosis', 'symptom'
+            'condition', 'treatment', 'diagnosis', 'symptom', 'topic', 'chapter',
+            # Add more specific rheumatology conditions/diseases
+            'igg4', 'igg4-related', 'igg4-rd', 'still', 'sarcoidosis', 'anti-phospholipid',
+            'giant-cell', 'takayasu', 'anca', 'granulomatosis', 'polyangiitis', 'wegener',
+            'microscopic', 'eosinophilic', 'behcet', 'cryoglobulinemia', 'henoch', 'schonlein',
+            'purpura', 'kawasaki', 'polyarteritis', 'nodosa', 'relapsing', 'polychondritis',
+            'pmr', 'periodic', 'fever', 'familial', 'mediterranean', 'traps', 'hids', 'caps',
+            'cppd', 'pseudogout', 'calcium', 'crystal', 'hydroxyapatite', 'basic', 'axial',
+            'reactive', 'enteropathic', 'undifferentiated'
         ]
         
         # Reorder to prioritize disease/condition specific links
@@ -302,15 +310,58 @@ def _process_page(url, page_queue, visited, results, max_pages):
         # Extract and queue new links for crawling
         if len(visited) < max_pages:
             links = _extract_links(downloaded, url)
+            logger.debug(f"Found {len(links)} links on {url}")
+            
+            # Check for rheumatology-related terms to prioritize those links
+            rheumatology_terms = ["rheumatoid", "arthritis", "lupus", "sle", "psoriatic", 
+                                  "vasculitis", "scleroderma", "myositis", "igg4", "sjögren", 
+                                  "sjogren", "gout", "ankylosing", "spondylitis", "inflammatory", 
+                                  "connective tissue", "autoimmune", "rheumatic", "rheumatology",
+                                  "dermatomyositis", "polymyositis", "systemic sclerosis"]
+            
+            # Find links that likely contain rheumatology content
+            priority_links = []
+            normal_links = []
+            
             for link in links:
-                if link not in visited and not page_queue.full():
-                    page_queue.put(link)
-                    logger.debug(f"Queued for processing: {link}")
+                # Skip already visited links
+                if link in visited:
+                    continue
+                    
+                # Check if the link URL contains any rheumatology terms
+                link_lower = link.lower()
+                if any(term in link_lower for term in rheumatology_terms):
+                    priority_links.append(link)
+                    logger.debug(f"Found priority rheumatology link: {link}")
+                else:
+                    normal_links.append(link)
+            
+            # First add priority links to the queue
+            for link in priority_links:
+                # Skip if queue is full
+                if page_queue.full():
+                    logger.debug(f"Queue full after processing priority links")
+                    break
+                    
+                # Add to queue
+                logger.debug(f"Queuing priority rheumatology link: {link}")
+                page_queue.put(link)
+            
+            # Then add normal links
+            for link in normal_links:
+                # Skip if queue is full
+                if page_queue.full():
+                    logger.debug(f"Queue full, skipping remaining links")
+                    break
+                    
+                # Add to queue
+                logger.debug(f"Queuing normal link: {link}")
+                page_queue.put(link)
     
     except Exception as e:
         logger.exception(f"Error processing page {url}: {str(e)}")
 
-def scrape_website(url, max_pages=10, max_wait_time=30):
+def scrape_website(url, max_pages=20, max_wait_time=60):
     """
     Scrape a website domain by crawling multiple pages and extract text content
     into chunks suitable for vector storage.
@@ -338,6 +389,29 @@ def scrape_website(url, max_pages=10, max_wait_time=30):
         
         # Add starting URL to queue
         page_queue.put(url)
+        
+        # Check if this is a root domain without path
+        parsed_url = urllib.parse.urlparse(url)
+        if parsed_url.path == '' or parsed_url.path == '/':
+            # For root domains, try to first check for topic and disease pages
+            # These patterns work for rheumatology websites that often organize by disease/topic
+            common_topic_paths = [
+                '/topic/', '/disease/', '/chapter/', '/condition/', '/diseases/', 
+                '/topics/', '/conditions/', '/chapters/', '/education/', 
+                '/learn/', '/article/', '/articles/', '/info/'
+            ]
+            
+            for path in common_topic_paths:
+                potential_topic_page = f"{parsed_url.scheme}://{parsed_url.netloc}{path}"
+                logger.debug(f"Adding potential topic page to queue: {potential_topic_page}")
+                if potential_topic_page not in visited and not page_queue.full():
+                    page_queue.put(potential_topic_page)
+                    
+            # Check for IgG4-RD specifically since the user mentioned it
+            igg4_page = f"{parsed_url.scheme}://{parsed_url.netloc}/topic/igg4-related-disease/"
+            if igg4_page not in visited and not page_queue.full():
+                logger.debug(f"Adding specific IgG4-RD page to queue: {igg4_page}")
+                page_queue.put(igg4_page)
         
         # Set up worker threads
         num_threads = min(5, max_pages)  # Use up to 5 threads

@@ -244,12 +244,12 @@ class VectorStore:
                 # Apply stronger boosts to website sources to better utilize website content
                 if source_type == 'website':
                     # Base boost for any website source
-                    website_boost = 0.10  # Double the basic boost for websites (from 0.05 to 0.10)
+                    website_boost = 0.15  # Increased from 0.10 to 0.15 to further prioritize websites
                     
                     # Check if the text contains navigation elements which indicate a website covering topic areas
                     if "Menu/Navigation:" in result['text'] or "Header:" in result['text']:
                         # Stronger boost for navigation/menu content which is very valuable for determining site topics
-                        nav_boost = 0.10
+                        nav_boost = 0.12  # Increased from 0.10 to 0.12
                         website_boost += nav_boost
                         logger.debug(f"Applied navigation boost to: {result['metadata'].get('title', 'unknown')}")
                     
@@ -259,16 +259,35 @@ class VectorStore:
                         page_num = result['metadata']['page_number']
                         # Progressive boost based on page number - emphasize specific content pages
                         if page_num > 1:  # Not the main page
-                            page_boost = min(0.15, 0.05 * page_num)  # Caps at 0.15 (3 pages deep)
+                            page_boost = min(0.18, 0.06 * page_num)  # Increased from 0.15 to 0.18 max boost
                             website_boost += page_boost
                             logger.debug(f"Applied additional page boost for page {page_num}: {page_boost}")
                     
                     # Check if website text contains terms related to the query
                     query_tokens = set(word.lower() for word in query.split())
                     if any(token in result['text'].lower() for token in query_tokens):
-                        relevance_boost = 0.08
+                        relevance_boost = 0.10  # Increased from 0.08 to 0.10
                         website_boost += relevance_boost
                         logger.debug(f"Applied query term relevance boost: {relevance_boost}")
+                    
+                    # Special boost for disease-specific content
+                    # These terms are common in rheumatology disease pages
+                    disease_terms = ["rheumatoid arthritis", "lupus", "sle", "psoriatic", "vasculitis", 
+                                      "scleroderma", "myositis", "igg4", "sjögren", "sjogren", "gout", 
+                                      "ankylosing", "spondylitis", "inflammatory", "arthritis", "connective tissue",
+                                      "fibromyalgia", "osteoarthritis", "autoimmune", "uveitis", "ibd", 
+                                      "rheumatic", "dermatomyositis", "polymyositis", "systemic sclerosis"]
+                    
+                    # Check if any disease terms are in the text (case insensitive)
+                    text_lower = result['text'].lower()
+                    found_disease_terms = [term for term in disease_terms if term in text_lower]
+                    
+                    if found_disease_terms:
+                        # Apply stronger boost for disease-specific content
+                        disease_boost = 0.15 + (0.02 * len(found_disease_terms))  # Base + additional for more terms
+                        disease_boost = min(0.25, disease_boost)  # Cap at 0.25
+                        website_boost += disease_boost
+                        logger.debug(f"Applied disease-specific boost: {disease_boost} for terms: {found_disease_terms[:3]}")
                     
                     # Apply the combined boost
                     result['score'] = max(0, result['score'] - website_boost)
