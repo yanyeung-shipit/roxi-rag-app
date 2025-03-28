@@ -76,14 +76,10 @@ document.addEventListener('DOMContentLoaded', () => {
         safeAddEventListener('pdfForm', 'submit', handlePdfFormSubmit);
         safeAddEventListener('websiteForm', 'submit', handleWebsiteFormSubmit);
 
-        // Add topic pages button click handler - direct DOM selection since it's not in elements
-        const addTopicsBtn = document.getElementById('add-topics-btn');
-        if (addTopicsBtn) {
-            console.log("Adding click event listener to add-topics-btn");
-            addTopicsBtn.addEventListener('click', handleTopicPagesSubmit);
-        } else {
-            console.warn("Element add-topics-btn not found in document");
-        }
+        // Add topic pages button click handler using the safe method
+        // First, add it to the elements object
+        elements.addTopicsBtn = document.getElementById('add-topics-btn');
+        safeAddEventListener('addTopicsBtn', 'click', handleTopicPagesSubmit);
         
         // Document navigation
         safeAddEventListener('refreshDocumentsBtn', 'click', loadDocuments);
@@ -1304,8 +1300,19 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         
-        // Get topics from textarea
-        const topicList = document.getElementById('topic-list').value.trim();
+        // Get topics from textarea (use elements object which is more reliable)
+        const topicListElement = document.getElementById('topic-list');
+        if (!topicListElement) {
+            elements.topicPagesResult.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    Error: Unable to find topic list textarea. Please try refreshing the page.
+                </div>
+            `;
+            return;
+        }
+        
+        const topicList = topicListElement.value.trim();
         if (!topicList) {
             elements.topicPagesResult.innerHTML = `
                 <div class="alert alert-danger">
@@ -1441,8 +1448,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             `;
         } finally {
-            // Re-enable submit button
-            submitBtn.disabled = false;
+            // Re-enable submit button (safely)
+            if (submitBtn) {
+                submitBtn.disabled = false;
+            } else {
+                // Try to find it another way if the reference is lost
+                const altBtn = document.getElementById('add-topics-btn');
+                if (altBtn) {
+                    altBtn.disabled = false;
+                }
+            }
         }
     }
 });
