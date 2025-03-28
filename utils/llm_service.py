@@ -215,29 +215,35 @@ def generate_response(query, context_documents):
         # Create prompt for OpenAI with more explicit instructions
         # the newest OpenAI model is "gpt-4o" which was released May 13, 2024.
         # do not change this unless explicitly requested by the user
+        
+        # System prompt
+        system_prompt = (
+            "You are ROXI (Rheumatology Optimized eXpert Intelligence), a specialized assistant that answers questions about rheumatology based on the provided document context. "
+            "When answering, follow these rules:\n"
+            "1. CRITICAL: Even if the documents only partially or indirectly address the query, make your very best effort to extract and synthesize ANY relevant information.\n"
+            "2. NEVER say 'ROXI doesn't have enough information' unless the documents are completely unrelated. If you see ANY potentially relevant terms or concepts in ANY document, use them to provide a partial answer.\n"
+            "3. Be EXTREMELY generous in extracting relevant information - if website menus, navigation elements, or section titles contain relevant terms, use them as a basis for your answer.\n"
+            "4. Many website sources may only contain brief references or category names - treat these as valuable and interpret them as indications that the website covers those topics.\n"
+            "5. Provide citations for your answer using the format [n] where n is the document number.\n"
+            "6. Cite multiple sources if the information comes from multiple documents.\n"
+            "7. Be concise and direct in your answers.\n"
+            "8. Pay equal attention to ALL document sources - both PDFs and websites. Some of your most valuable information may come from website sources.\n"
+            "9. Website sources may include multiple pages from the same domain, each containing different information - treat each page as a distinct source of knowledge.\n"
+            "10. If documents provide conflicting information, acknowledge this and present both viewpoints with citations.\n"
+            "11. If you find information from websites, especially rheumatology-focused websites, treat this as high-quality information comparable to peer-reviewed sources.\n"
+            "12. When citing website sources, include the specific page number if available, as this indicates which specific page from the domain was used.\n"
+            "13. If the documents contain website navigation elements or section headers related to the query, interpret these as indications that the website contains content on those topics.\n"
+            "14. For website content that appears to be chapter or section titles, extrapolate that the site likely contains detailed information on those topics even if not provided in the context.\n"
+            "15. When discussing any rheumatology condition, include details on clinical phenotypes, organ involvement, diagnosis, and treatment approaches if found in the context.\n"
+            "16. If you see even brief mentions of specific conditions in the context, prioritize these for a comprehensive answer."
+        )
+        
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        "You are ROXI (Rheumatology Optimized eXpert Intelligence), a specialized assistant that answers questions about rheumatology based on the provided document context. "
-                        "When answering, follow these rules:\n"
-                        "1. CRITICAL: Even if the documents only partially or indirectly address the query, make your very best effort to extract and synthesize ANY relevant information.\n"
-                        "2. NEVER say 'ROXI doesn't have enough information' unless the documents are completely unrelated. If you see ANY potentially relevant terms or concepts in ANY document, use them to provide a partial answer.\n"
-                        "3. Be EXTREMELY generous in extracting relevant information - if website menus, navigation elements, or section titles contain relevant terms, use them as a basis for your answer.\n"
-                        "4. Many website sources may only contain brief references or category names - treat these as valuable and interpret them as indications that the website covers those topics.\n"
-                        "5. Provide citations for your answer using the format [n] where n is the document number.\n"
-                        "6. Cite multiple sources if the information comes from multiple documents.\n"
-                        "7. Be concise and direct in your answers.\n"
-                        "8. Pay equal attention to ALL document sources - both PDFs and websites. Some of your most valuable information may come from website sources.\n"
-                        "9. Website sources may include multiple pages from the same domain, each containing different information - treat each page as a distinct source of knowledge.\n"
-                        "10. If documents provide conflicting information, acknowledge this and present both viewpoints with citations.\n"
-                        "11. If you find information from websites, especially rheumatology-focused websites, treat this as high-quality information comparable to peer-reviewed sources.\n"
-                        "12. When citing website sources, include the specific page number if available, as this indicates which specific page from the domain was used.\n"
-                        "13. If the documents contain website navigation elements or section headers related to the query, interpret these as indications that the website contains content on those topics.\n"
-                        "14. For website content that appears to be chapter or section titles, extrapolate that the site likely contains detailed information on those topics even if not provided in the context."
-                    )
+                    "content": system_prompt
                 },
                 {
                     "role": "user",
@@ -257,36 +263,51 @@ def generate_response(query, context_documents):
             # check if this is really the case or just a model hallucination
             if len(context_documents) >= 3:
                 # If we have at least 3 documents, try one more time with stronger instruction
+                # Base retry prompt
+                retry_prompt = (
+                    "You are ROXI (Rheumatology Optimized eXpert Intelligence), a specialized assistant that answers questions about rheumatology based on the provided document context. "
+                    "CRITICAL INSTRUCTION: The user has provided documents that ABSOLUTELY DO contain information "
+                    "related to their query. In this retry attempt, you MUST extract anything useful from the context to construct a helpful response. "
+                    "DO NOT under any circumstances claim there's insufficient information.\n\n"
+                    
+                    "IMPORTANT GUIDELINES:\n"
+                    "1. Even if you only see website menus, navigation elements, or section titles in the context, use these as STRONG EVIDENCE that the website "
+                    "contains information on those topics. For example, if you see 'Spondyloarthropathies' in a menu, this is extremely valuable information.\n\n"
+                    
+                    "2. Interpret website navigation elements and categories as firm evidence that the site covers those topics in depth. A website section "
+                    "titled 'Diseases including Axial Spondyloarthritis' is proof that the source contains information about spondyloarthritis.\n\n"
+                    
+                    "3. When extracting information from website sources, look for ANY terms related to the question and use those as a basis for your answer. "
+                    "If you see a menu item or category that matches terms in the query, consider this relevant information.\n\n"
+                    
+                    "4. For questions about rheumatology conditions that appear as section titles or categories in website menus, provide a response that "
+                    "acknowledges the website as a source covering that topic, even if specific details aren't in the context.\n\n"
+                    
+                    "5. For navigation links, titles, or category listings, extrapolate reasonably about what content would be found there based on "
+                    "standard knowledge of rheumatology.\n\n"
+                    
+                    "Remember that website sources, especially specialized rheumatology websites, are extremely valuable resources "
+                    "and you should prioritize extracting information from them, even if only category or section names are available."
+                )
+                
+                # Enhance the retry prompt with specific emphasis on extracting disease information from website structures
+                retry_prompt += (
+                    "\n\nSPECIAL INSTRUCTION FOR RHEUMATOLOGY DISEASE QUERIES:\n"
+                    "1. For any rheumatology condition mentioned in the query, it is GUARANTEED that the provided documents contain some form of related information.\n"
+                    "2. Look especially carefully for ANY mentions of specific diseases or conditions in the context, even in navigation menus or section titles.\n"
+                    "3. If you see any rheumatology condition mentioned ANYWHERE in the context, consider this highly relevant information.\n"
+                    "4. If a rheumatology website has ANY mention of a specific condition in its structure, it should be interpreted as covering this topic in depth.\n"
+                    "5. For disease-specific questions, look for clinical phenotypes, organ involvement patterns, diagnostic criteria, and treatment approaches.\n"
+                    "6. Even passing mentions of autoimmune or inflammatory conditions should be included in your answer as they may be relevant.\n"
+                    "7. CRITICAL: Websites that list specific rheumatology diseases as categories are specialty sources that absolutely have detailed information on those conditions."
+                )
+                
                 retry_response = client.chat.completions.create(
                     model="gpt-4o",
                     messages=[
                         {
                             "role": "system",
-                            "content": (
-                                "You are ROXI (Rheumatology Optimized eXpert Intelligence), a specialized assistant that answers questions about rheumatology based on the provided document context. "
-                                "CRITICAL INSTRUCTION: The user has provided documents that ABSOLUTELY DO contain information "
-                                "related to their query. In this retry attempt, you MUST extract anything useful from the context to construct a helpful response. "
-                                "DO NOT under any circumstances claim there's insufficient information.\n\n"
-                                
-                                "IMPORTANT GUIDELINES:\n"
-                                "1. Even if you only see website menus, navigation elements, or section titles in the context, use these as STRONG EVIDENCE that the website "
-                                "contains information on those topics. For example, if you see 'Spondyloarthropathies' in a menu, this is extremely valuable information.\n\n"
-                                
-                                "2. Interpret website navigation elements and categories as firm evidence that the site covers those topics in depth. A website section "
-                                "titled 'Diseases including Axial Spondyloarthritis' is proof that the source contains information about spondyloarthritis.\n\n"
-                                
-                                "3. When extracting information from website sources, look for ANY terms related to the question and use those as a basis for your answer. "
-                                "If you see a menu item or category that matches terms in the query, consider this relevant information.\n\n"
-                                
-                                "4. For questions about rheumatology conditions that appear as section titles or categories in website menus, provide a response that "
-                                "acknowledges the website as a source covering that topic, even if specific details aren't in the context.\n\n"
-                                
-                                "5. For navigation links, titles, or category listings, extrapolate reasonably about what content would be found there based on "
-                                "standard knowledge of rheumatology.\n\n"
-                                
-                                "Remember that website sources, especially specialized rheumatology websites, are extremely valuable resources "
-                                "and you should prioritize extracting information from them, even if only category or section names are available."
-                            )
+                            "content": retry_prompt
                         },
                         {
                             "role": "user",

@@ -407,11 +407,83 @@ def scrape_website(url, max_pages=20, max_wait_time=60):
                 if potential_topic_page not in visited and not page_queue.full():
                     page_queue.put(potential_topic_page)
                     
-            # Check for IgG4-RD specifically since the user mentioned it
-            igg4_page = f"{parsed_url.scheme}://{parsed_url.netloc}/topic/igg4-related-disease/"
-            if igg4_page not in visited and not page_queue.full():
-                logger.debug(f"Adding specific IgG4-RD page to queue: {igg4_page}")
-                page_queue.put(igg4_page)
+            # Check for common disease patterns in rheumatology websites
+            # These paths cover standard URL structures across rheumatology websites
+            common_disease_paths = [
+                "/topic/",
+                "/disease/",
+                "/diseases/",
+                "/condition/",
+                "/conditions/",
+                "/chapter/",
+                "/chapters/",
+                "/articles/",
+                "/article/"
+            ]
+            
+            # Common rheumatology conditions to check for specific disease pages
+            rheumatology_diseases = [
+                "rheumatoid-arthritis", "lupus", "sle", "psoriatic-arthritis", 
+                "vasculitis", "scleroderma", "myositis", "igg4-related-disease", 
+                "sjögren", "sjogren", "gout", "ankylosing-spondylitis", 
+                "spondyloarthritis", "inflammatory-arthritis", "connective-tissue-disease",
+                "fibromyalgia", "osteoarthritis", "autoimmune", "uveitis", 
+                "rheumatic-disease", "dermatomyositis", "polymyositis", "systemic-sclerosis"
+            ]
+            
+            # Try all potential disease paths for common rheumatology conditions
+            for base_path in common_disease_paths:
+                for disease in rheumatology_diseases:
+                    # Create paths with both hyphenated and non-hyphenated versions
+                    disease_variants = [disease]
+                    if "-" in disease:
+                        disease_variants.append(disease.replace("-", ""))
+                    
+                    for variant in disease_variants:
+                        disease_page = f"{parsed_url.scheme}://{parsed_url.netloc}{base_path}{variant}/"
+                        if disease_page not in visited and not page_queue.full():
+                            logger.debug(f"Adding potential disease page to queue: {disease_page}")
+                            page_queue.put(disease_page)
+            
+            # Also search for disease terms in main page links and prioritize those for immediate crawling
+            try:
+                # Try to quickly scan the main page for any disease-related links we can immediately process
+                main_downloaded = trafilatura.fetch_url(url)
+                if main_downloaded:
+                    # Use soup to find all links on the page
+                    soup = BeautifulSoup(main_downloaded, 'html.parser')
+                    prioritized_terms = ["rheumatoid", "arthritis", "lupus", "vasculitis", "igg4", "autoimmune"]
+                    
+                    for a_tag in soup.find_all('a', href=True):
+                        link_href = a_tag['href']
+                        link_text = a_tag.get_text().lower()
+                        
+                        # Check if this link might be about a high-priority rheumatology disease
+                        if any(term in link_href.lower() or term in link_text for term in prioritized_terms):
+                            # Convert relative URL to absolute if needed
+                            if not link_href.startswith('http'):
+                                if link_href.startswith('/'):
+                                    link_href = f"{parsed_url.scheme}://{parsed_url.netloc}{link_href}"
+                                else:
+                                    link_href = f"{parsed_url.scheme}://{parsed_url.netloc}/{link_href}"
+                            
+                            if link_href not in visited and not page_queue.full():
+                                logger.debug(f"Found disease link in main page: {link_href} (text: {link_text})")
+                                # Priority addition to queue - process next
+                                temp_queue = queue.Queue(maxsize=100)
+                                temp_queue.put(link_href)
+                                
+                                # Move existing URLs from page_queue to temp_queue
+                                while not page_queue.empty():
+                                    temp_url = page_queue.get()
+                                    if not temp_queue.full():
+                                        temp_queue.put(temp_url)
+                                
+                                # Replace page_queue with temp_queue
+                                while not temp_queue.empty():
+                                    page_queue.put(temp_queue.get())
+            except Exception as e:
+                logger.exception(f"Error looking for disease links in main page: {str(e)}")
         
         # Set up worker threads
         num_threads = min(5, max_pages)  # Use up to 5 threads

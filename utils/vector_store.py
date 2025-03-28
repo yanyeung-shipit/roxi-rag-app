@@ -160,6 +160,8 @@ class VectorStore:
         Returns:
             list: List of documents with similarity scores
         """
+        # Use a larger initial search pool to ensure we find relevant content for disease-specific queries
+        initial_k_multiplier = 5
         try:
             if len(self.documents) == 0:
                 logger.warning("Search performed on empty vector store")
@@ -169,7 +171,8 @@ class VectorStore:
             query_embedding = self._get_embedding(query)
             
             # Perform semantic search with a larger k to increase recall
-            initial_k = min(top_k * 5, len(self.documents))  # Increased from 3x to 5x for better recall
+            initial_k = min(top_k * initial_k_multiplier, len(self.documents))
+            logger.debug(f"Using initial_k={initial_k} with multiplier={initial_k_multiplier} for query: {query[:30]}...")
             distances, indices = self.index.search(
                 np.array([query_embedding], dtype=np.float32), initial_k
             )
@@ -285,7 +288,18 @@ class VectorStore:
                     if found_disease_terms:
                         # Apply stronger boost for disease-specific content
                         disease_boost = 0.15 + (0.02 * len(found_disease_terms))  # Base + additional for more terms
-                        disease_boost = min(0.25, disease_boost)  # Cap at 0.25
+                        
+                        # Apply additional boost for content that directly matches keywords in the query
+                        # This helps any disease-specific query, not just a specific condition
+                        for token in query_tokens:
+                            # Check if this query term is a disease term and it appears in the text
+                            if token in text_lower and any(token in disease_term for disease_term in disease_terms):
+                                query_match_boost = 0.15  # Good boost for directly matching disease terms
+                                disease_boost += query_match_boost
+                                logger.debug(f"Applied query-disease term match boost: {query_match_boost} for term: {token}")
+                                break  # Only apply this boost once
+                        
+                        disease_boost = min(0.30, disease_boost)  # Cap the boost at a reasonable level
                         website_boost += disease_boost
                         logger.debug(f"Applied disease-specific boost: {disease_boost} for terms: {found_disease_terms[:3]}")
                     
