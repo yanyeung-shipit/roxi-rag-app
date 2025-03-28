@@ -623,6 +623,87 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Fetch documents in a collection
+    async function fetchCollectionDocuments(collectionId) {
+        try {
+            console.log(`Fetching documents for collection ${collectionId}`);
+            
+            if (!elements.collectionDocumentsList) {
+                console.error("Cannot fetch collection documents: collectionDocumentsList element not found");
+                return;
+            }
+            
+            const response = await fetch(`/collections/${collectionId}`);
+            const data = await response.json();
+            
+            if (data.success) {
+                console.log(`Loaded collection with ${data.collection.documents.length} documents`);
+                
+                if (!data.collection.documents || data.collection.documents.length === 0) {
+                    elements.collectionDocumentsList.innerHTML = `
+                        <li class="list-group-item list-group-item-dark">
+                            No documents in this collection
+                        </li>
+                    `;
+                    return;
+                }
+                
+                elements.collectionDocumentsList.innerHTML = '';
+                
+                data.collection.documents.forEach(doc => {
+                    const li = document.createElement('li');
+                    li.className = 'list-group-item list-group-item-dark d-flex justify-content-between align-items-center';
+                    
+                    const createdDate = new Date(doc.created_at);
+                    const dateStr = createdDate.toLocaleDateString();
+                    
+                    const title = doc.title || doc.filename || 'Untitled Document';
+                    
+                    li.innerHTML = `
+                        <div>
+                            <strong>${title}</strong>
+                            <span class="badge bg-${doc.file_type === 'pdf' ? 'warning' : 'info'} ms-2">
+                                ${doc.file_type === 'pdf' ? 'PDF' : 'Website'}
+                            </span>
+                            <small class="text-muted ms-2">${dateStr}</small>
+                        </div>
+                        <button class="btn btn-sm btn-outline-info view-doc-btn" data-id="${doc.id}">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    `;
+                    
+                    elements.collectionDocumentsList.appendChild(li);
+                });
+                
+                // Add event listeners to the view buttons
+                elements.collectionDocumentsList.querySelectorAll('.view-doc-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        // Hide the collection details
+                        elements.collectionDetailCard.style.display = 'none';
+                        // Show the document
+                        viewDocument(btn.dataset.id);
+                    });
+                });
+            } else {
+                console.error("Error loading collection details:", data.message);
+                elements.collectionDocumentsList.innerHTML = `
+                    <li class="list-group-item list-group-item-dark text-danger">
+                        <i class="fas fa-exclamation-circle me-2"></i>
+                        ${data.message || 'Error loading collection documents'}
+                    </li>
+                `;
+            }
+        } catch (error) {
+            console.error("Exception loading collection documents:", error);
+            elements.collectionDocumentsList.innerHTML = `
+                <li class="list-group-item list-group-item-dark text-danger">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    Error loading documents: ${error.message}
+                </li>
+            `;
+        }
+    }
+    
     // Load all collections
     async function loadCollections() {
         try {
@@ -932,13 +1013,15 @@ document.addEventListener('DOMContentLoaded', () => {
             // Show the collection detail card
             elements.collectionDetailCard.style.display = 'block';
             
-            // Load documents in this collection (would need to implement this API endpoint)
-            // For now, just show a placeholder
+            // Load documents in this collection
             elements.collectionDocumentsList.innerHTML = `
                 <li class="list-group-item list-group-item-dark">
                     Loading documents in this collection...
                 </li>
             `;
+            
+            // Fetch the document list from the API
+            fetchCollectionDocuments(collectionId);
             
             // When the add to collection button is clicked
             if (elements.addToCollectionBtn) {
