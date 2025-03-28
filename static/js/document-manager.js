@@ -75,7 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Form submissions
         safeAddEventListener('pdfForm', 'submit', handlePdfFormSubmit);
         safeAddEventListener('websiteForm', 'submit', handleWebsiteFormSubmit);
-        safeAddEventListener('topicPagesForm', 'submit', handleTopicPagesFormSubmit);
+        safeAddEventListener('add-topics-btn', 'click', handleTopicPagesSubmit);
         
         // Document navigation
         safeAddEventListener('refreshDocumentsBtn', 'click', loadDocuments);
@@ -1281,8 +1281,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
-    // Handle topic pages form submission
-    async function handleTopicPagesFormSubmit(event) {
+    // Handle topic pages form submission with button click
+    async function handleTopicPagesSubmit(event) {
         event.preventDefault();
         
         if (!elements.topicPagesForm || !elements.topicPagesResult) {
@@ -1340,7 +1340,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 Processing ${topics.length} topic pages... This may take several minutes.
             </div>
         `;
-        const submitBtn = elements.topicPagesForm.querySelector('button[type="submit"]');
+        const submitBtn = document.getElementById('add-topics-btn');
         submitBtn.disabled = true;
         
         try {

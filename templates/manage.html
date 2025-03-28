@@ -77,7 +77,7 @@
             <div class="card-body">
                 <p class="card-text text-muted">Add multiple rheum.reviews topic pages at once for better knowledge coverage.</p>
                 
-                <form id="topic-pages-form" class="needs-validation" novalidate>
+                <form id="topic-pages-form" class="needs-validation" novalidate method="post" enctype="application/json">
                     <div class="mb-3">
                         <label for="topic-list" class="form-label">Topic Names (up to 5)</label>
                         <textarea class="form-control" id="topic-list" name="topic_list" 
@@ -86,7 +86,7 @@
                         <div class="form-text">Enter up to 5 rheumatology topic names, one per line. The system will process pages from rheum.reviews/topic/</div>
                         <div class="invalid-feedback">Please enter at least one topic name.</div>
                     </div>
-                    <button type="submit" class="btn btn-primary">Add Topic Pages</button>
+                    <button type="button" id="add-topics-btn" class="btn btn-primary">Add Topic Pages</button>
                 </form>
                 
                 <div id="topic-pages-result" class="mt-3"></div>
