@@ -600,8 +600,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 elements.documentDetailContent.innerHTML = html;
                 
-                // Load collections for this document (Would need to implement this endpoint)
-                // loadDocumentCollections(docId);
+                // Display collections for this document
+                displayDocumentCollections(doc);
             } else {
                 elements.documentDetailContent.innerHTML = `
                     <div class="alert alert-danger" role="alert">
@@ -1900,6 +1900,51 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         }
+    }
+    // Display collections assigned to a document
+    function displayDocumentCollections(doc) {
+        const collectionsListElement = document.getElementById('docCollectionsList');
+        if (!collectionsListElement) return;
+        
+        // Check if document has collections data
+        if (!doc.collections) {
+            collectionsListElement.innerHTML = '<div class="text-muted">No collection information available</div>';
+            return;
+        }
+        
+        // Check if the document belongs to any collections
+        if (doc.collections.length === 0) {
+            collectionsListElement.innerHTML = '<div class="text-muted">This document is not in any collections</div>';
+            return;
+        }
+        
+        // Display the collections
+        let html = '<ul class="list-group list-group-flush bg-transparent">';
+        
+        doc.collections.forEach(collection => {
+            html += `
+                <li class="list-group-item bg-transparent py-1">
+                    <a href="#" class="text-decoration-none collection-link" data-id="${collection.id}">
+                        <i class="fas fa-folder me-2"></i>${collection.name}
+                    </a>
+                </li>
+            `;
+        });
+        
+        html += '</ul>';
+        collectionsListElement.innerHTML = html;
+        
+        // Add click events for the collection links
+        collectionsListElement.querySelectorAll('.collection-link').forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                // Hide document details and show the collection
+                if (elements.documentDetailContainer) {
+                    elements.documentDetailContainer.classList.add('d-none');
+                }
+                viewCollection(link.dataset.id);
+            });
+        });
     }
 });
 

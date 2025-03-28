@@ -1079,6 +1079,14 @@ def get_document(document_id):
                 'text_content': chunk.text_content[:100] + '...' if len(chunk.text_content) > 100 else chunk.text_content
             })
             
+        # Get collections for the document
+        collections = []
+        for collection in doc.collections:
+            collections.append({
+                'id': collection.id,
+                'name': collection.name
+            })
+            
         result = {
             'id': doc.id,
             'title': doc.title,
@@ -1099,7 +1107,8 @@ def get_document(document_id):
             'issue': doc.issue,
             'pages': doc.pages,
             'formatted_citation': doc.formatted_citation,
-            'needs_processing': doc.file_type == "pdf" and not doc.processed and doc.file_path is not None
+            'needs_processing': doc.file_type == "pdf" and not doc.processed and doc.file_path is not None,
+            'collections': collections
         }
             
         return jsonify({
