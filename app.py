@@ -4,6 +4,7 @@ import tempfile
 import datetime
 import urllib.parse
 import json
+import threading
 from flask import Flask, render_template, request, jsonify, flash, redirect, url_for, abort
 from werkzeug.utils import secure_filename
 from werkzeug.security import safe_join
@@ -11,6 +12,7 @@ from utils.document_processor import process_pdf, bulk_process_pdfs
 from utils.web_scraper import scrape_website, create_minimal_content_for_topic
 from utils.vector_store import VectorStore
 from utils.llm_service import generate_response
+from utils.background_processor import background_processor
 from models import db, Document, DocumentChunk, Collection
 
 # Configure logging
@@ -45,6 +47,10 @@ app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500 MB max upload size
 
 # Initialize vector store
 vector_store = VectorStore()
+
+# Start background processing services
+background_processor.start()
+logger.info("Background document processor started")
 
 # Configure upload settings
 ALLOWED_EXTENSIONS = {'pdf'}
@@ -1694,4 +1700,25 @@ def delete_collection(collection_id):
         return jsonify({
             'success': False, 
             'message': f'Error deleting collection: {str(e)}'
+        }), 500
+        
+@app.route('/background_status', methods=['GET'])
+def get_background_status():
+    """Get status of background processing."""
+    try:
+        status = background_processor.get_status()
+        
+        # Get count of unprocessed documents
+        unprocessed_count = Document.query.filter_by(processed=False, file_type='pdf').count()
+        
+        return jsonify({
+            'success': True,
+            'status': status,
+            'unprocessed_documents': unprocessed_count
+        })
+    except Exception as e:
+        logger.exception(f"Error getting background processor status: {str(e)}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error getting background processor status: {str(e)}'
         }), 500

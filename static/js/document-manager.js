@@ -27,6 +27,10 @@ document.addEventListener('DOMContentLoaded', () => {
         backToDocumentsBtn: document.getElementById('backToDocumentsBtn'),
         refreshDocumentsBtn: document.getElementById('refreshDocumentsBtn'),
         
+        // Background processing
+        refreshBackgroundStatusBtn: document.getElementById('refresh-background-status'),
+        backgroundStatusContent: document.getElementById('background-status-content'),
+        
         // Collection elements
         newCollectionBtn: document.getElementById('newCollectionBtn'),
         createCollectionBtn: document.getElementById('createCollectionBtn'),
@@ -56,6 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize
     loadDocuments();
     loadCollections();
+    loadBackgroundStatus();
 
     // Event listeners - using safe method that checks for null
     setupEventListeners();
@@ -113,6 +118,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 elements.documentsTableContainer.classList.remove('d-none');
             }
         });
+        
+        // Background processing status
+        safeAddEventListener('refreshBackgroundStatusBtn', 'click', loadBackgroundStatus);
         
         // Collection actions
         safeAddEventListener('createCollectionBtn', 'click', createCollection);
