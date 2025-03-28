@@ -9,6 +9,14 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // DOM element references - all elements are optional and get checked before use
     const elements = {
+        // Form elements
+        pdfForm: document.getElementById('pdf-form'),
+        pdfResult: document.getElementById('pdf-result'),
+        websiteForm: document.getElementById('website-form'),
+        websiteResult: document.getElementById('website-result'),
+        topicPagesForm: document.getElementById('topic-pages-form'),
+        topicPagesResult: document.getElementById('topic-pages-result'),
+        
         // Document elements
         documentsTableBody: document.getElementById('documentsTableBody'),
         documentDetailContainer: document.getElementById('documentDetailContainer'),
@@ -63,6 +71,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.warn(`Element ${elementKey} not found, cannot add ${event} event listener`);
             }
         }
+        
+        // Form submissions
+        safeAddEventListener('pdfForm', 'submit', handlePdfFormSubmit);
+        safeAddEventListener('websiteForm', 'submit', handleWebsiteFormSubmit);
+        safeAddEventListener('topicPagesForm', 'submit', handleTopicPagesFormSubmit);
         
         // Document navigation
         safeAddEventListener('refreshDocumentsBtn', 'click', loadDocuments);
@@ -1127,6 +1140,298 @@ document.addEventListener('DOMContentLoaded', () => {
                 deleteBtn.disabled = false;
                 deleteBtn.innerHTML = 'Delete Collection';
             }
+        }
+    }
+    
+    // Handle PDF form submission
+    async function handlePdfFormSubmit(event) {
+        event.preventDefault();
+        
+        if (!elements.pdfForm || !elements.pdfResult) {
+            console.error("Cannot handle PDF form submit: required DOM elements not found");
+            return;
+        }
+        
+        // Validate form
+        if (!elements.pdfForm.checkValidity()) {
+            elements.pdfForm.classList.add('was-validated');
+            return;
+        }
+        
+        // Prepare UI for submission
+        elements.pdfResult.innerHTML = '<div class="alert alert-info">Uploading PDF...</div>';
+        const submitBtn = elements.pdfForm.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        
+        try {
+            // Get form data
+            const formData = new FormData(elements.pdfForm);
+            
+            // Send request
+            const response = await fetch('/upload_pdf', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                // Success message
+                elements.pdfResult.innerHTML = `
+                    <div class="alert alert-success">
+                        <i class="fas fa-check-circle me-2"></i>
+                        ${data.message}
+                    </div>
+                `;
+                // Reset form
+                elements.pdfForm.reset();
+                elements.pdfForm.classList.remove('was-validated');
+                
+                // Refresh documents list
+                loadDocuments();
+            } else {
+                // Error message
+                elements.pdfResult.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-circle me-2"></i>
+                        ${data.message}
+                    </div>
+                `;
+            }
+        } catch (error) {
+            // Exception message
+            elements.pdfResult.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    Error: ${error.message}
+                </div>
+            `;
+        } finally {
+            // Re-enable submit button
+            submitBtn.disabled = false;
+        }
+    }
+    
+    // Handle website form submission
+    async function handleWebsiteFormSubmit(event) {
+        event.preventDefault();
+        
+        if (!elements.websiteForm || !elements.websiteResult) {
+            console.error("Cannot handle website form submit: required DOM elements not found");
+            return;
+        }
+        
+        // Validate form
+        if (!elements.websiteForm.checkValidity()) {
+            elements.websiteForm.classList.add('was-validated');
+            return;
+        }
+        
+        // Prepare UI for submission
+        elements.websiteResult.innerHTML = '<div class="alert alert-info">Processing website... This may take a minute or two.</div>';
+        const submitBtn = elements.websiteForm.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        
+        try {
+            // Get form data
+            const formData = new FormData(elements.websiteForm);
+            
+            // Send request
+            const response = await fetch('/add_website', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                // Success message
+                elements.websiteResult.innerHTML = `
+                    <div class="alert alert-success">
+                        <i class="fas fa-check-circle me-2"></i>
+                        ${data.message}
+                    </div>
+                `;
+                // Reset form
+                elements.websiteForm.reset();
+                elements.websiteForm.classList.remove('was-validated');
+                
+                // Refresh documents list
+                loadDocuments();
+            } else {
+                // Error message
+                elements.websiteResult.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-circle me-2"></i>
+                        ${data.message}
+                    </div>
+                `;
+            }
+        } catch (error) {
+            // Exception message
+            elements.websiteResult.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    Error: ${error.message}
+                </div>
+            `;
+        } finally {
+            // Re-enable submit button
+            submitBtn.disabled = false;
+        }
+    }
+    
+    // Handle topic pages form submission
+    async function handleTopicPagesFormSubmit(event) {
+        event.preventDefault();
+        
+        if (!elements.topicPagesForm || !elements.topicPagesResult) {
+            console.error("Cannot handle topic pages form submit: required DOM elements not found");
+            return;
+        }
+        
+        // Validate form
+        if (!elements.topicPagesForm.checkValidity()) {
+            elements.topicPagesForm.classList.add('was-validated');
+            return;
+        }
+        
+        // Get topics from textarea
+        const topicList = document.getElementById('topic-list').value.trim();
+        if (!topicList) {
+            elements.topicPagesResult.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    Please enter at least one topic.
+                </div>
+            `;
+            return;
+        }
+        
+        // Split topics by line
+        const topics = topicList.split('\n')
+            .map(topic => topic.trim())
+            .filter(topic => topic.length > 0);
+        
+        if (topics.length === 0) {
+            elements.topicPagesResult.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    Please enter at least one valid topic.
+                </div>
+            `;
+            return;
+        }
+        
+        if (topics.length > 5) {
+            elements.topicPagesResult.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    You can only process up to 5 topics at once. Please reduce the number of topics.
+                </div>
+            `;
+            return;
+        }
+        
+        // Prepare UI for submission
+        elements.topicPagesResult.innerHTML = `
+            <div class="alert alert-info">
+                <i class="fas fa-spinner fa-spin me-2"></i>
+                Processing ${topics.length} topic pages... This may take several minutes.
+            </div>
+        `;
+        const submitBtn = elements.topicPagesForm.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        
+        try {
+            // Send request
+            const response = await fetch('/add_topic_pages', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ topics })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                // Success message
+                let successHtml = `
+                    <div class="alert alert-success">
+                        <i class="fas fa-check-circle me-2"></i>
+                        ${data.message}
+                    </div>
+                `;
+                
+                // Add details if available
+                if (data.processed && data.processed.length > 0) {
+                    successHtml += '<div class="mt-3"><h6>Successfully processed topics:</h6><ul class="list-group">';
+                    data.processed.forEach(item => {
+                        successHtml += `
+                            <li class="list-group-item bg-dark text-light">
+                                <strong>${item.topic}</strong> - ${item.chunks} chunks
+                            </li>
+                        `;
+                    });
+                    successHtml += '</ul></div>';
+                }
+                
+                // Add failed topics if any
+                if (data.failed && data.failed.length > 0) {
+                    successHtml += '<div class="mt-3"><h6>Failed topics:</h6><ul class="list-group">';
+                    data.failed.forEach(item => {
+                        successHtml += `
+                            <li class="list-group-item bg-dark text-light border-danger">
+                                <strong>${item.topic}</strong> - ${item.reason}
+                            </li>
+                        `;
+                    });
+                    successHtml += '</ul></div>';
+                }
+                
+                elements.topicPagesResult.innerHTML = successHtml;
+                
+                // Reset form
+                elements.topicPagesForm.reset();
+                elements.topicPagesForm.classList.remove('was-validated');
+                
+                // Refresh documents list
+                loadDocuments();
+            } else {
+                // Error message
+                elements.topicPagesResult.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-circle me-2"></i>
+                        ${data.message}
+                    </div>
+                `;
+                
+                // Add failed topics if any
+                if (data.failed && data.failed.length > 0) {
+                    let errorHtml = '<div class="mt-3"><h6>Failed topics:</h6><ul class="list-group">';
+                    data.failed.forEach(item => {
+                        errorHtml += `
+                            <li class="list-group-item bg-dark text-light border-danger">
+                                <strong>${item.topic}</strong> - ${item.reason}
+                            </li>
+                        `;
+                    });
+                    errorHtml += '</ul></div>';
+                    elements.topicPagesResult.innerHTML += errorHtml;
+                }
+            }
+        } catch (error) {
+            // Exception message
+            elements.topicPagesResult.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    Error: ${error.message}
+                </div>
+            `;
+        } finally {
+            // Re-enable submit button
+            submitBtn.disabled = false;
         }
     }
 });

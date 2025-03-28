@@ -3,7 +3,7 @@ import logging
 import tempfile
 import datetime
 import urllib.parse
-from flask import Flask, render_template, request, jsonify, flash, redirect, url_for
+from flask import Flask, render_template, request, jsonify, flash, redirect, url_for, abort
 from werkzeug.utils import secure_filename
 from werkzeug.security import safe_join
 from utils.document_processor import process_pdf
@@ -254,6 +254,14 @@ def add_website():
         
         logger.info(f"Processing website with multi-page crawling: {url}")
         
+        # Special handling for rheum.reviews domain - check if we should add multiple topics
+        if 'rheum.reviews' in url and not any(pattern in url for pattern in ['/topic/', '/disease/', '/condition/']):
+            # If it's the homepage or a non-topic page, we might want to suggest specific topic pages instead
+            return jsonify({
+                'success': False,
+                'message': 'For rheum.reviews, it\'s better to add specific topic pages directly. For example: https://rheum.reviews/topic/myositis/, https://rheum.reviews/topic/scleroderma/, etc.'
+            }), 400
+        
         # Create a new document record in the database
         new_document = Document(
             filename=url,  # Use URL as filename
@@ -273,24 +281,24 @@ def add_website():
         parsed_url = urllib.parse.urlparse(url)
         if any(pattern in parsed_url.path for pattern in topic_patterns):
             is_topic_page = True
-            logger.info(f"Detected specific topic URL: {url} - this will be given special priority during crawling")
+            logger.info(f"Detected specific topic URL: {url} - this will be given special priority")
             
         # Scrape website with multi-page crawling
         try:
-            # Handle topic pages differently - less aggressive crawling to avoid memory issues
+            # Handle topic pages differently to avoid memory issues
             if is_topic_page:
-                logger.debug(f"Starting topic-specific crawl from: {url}")
-                # For topic pages, we'll prioritize the direct page content over extensive crawling
-                # This avoids memory issues while still getting the most important content
-                chunks = scrape_website(url, max_pages=10, max_wait_time=120)  # Reduced pages for topic pages
+                logger.debug(f"Processing single topic page: {url}")
+                # For topic pages, we prioritize direct content extraction over crawling
+                # This avoids memory issues while still getting the important content
+                chunks = scrape_website(url, max_pages=5, max_wait_time=90)  # Very limited crawling for topic pages
             elif '/rheum.reviews/' in url:
-                # For rheum.reviews domain, be more conservative to avoid memory issues
-                logger.debug(f"Starting rheum.reviews domain crawl from: {url}")
-                chunks = scrape_website(url, max_pages=8, max_wait_time=90)  # More conservative for this specific site
+                # For rheum.reviews domain, be very conservative to avoid memory issues
+                logger.debug(f"Starting limited rheum.reviews crawl from: {url}")
+                chunks = scrape_website(url, max_pages=5, max_wait_time=90)  # More conservative for this specific site
             else:
-                logger.debug(f"Starting multi-page crawl from: {url}")
-                # Use the enhanced multi-page crawler with increased limits for better content discovery
-                chunks = scrape_website(url, max_pages=15, max_wait_time=90)  # Scaled back slightly
+                logger.debug(f"Starting standard multi-page crawl from: {url}")
+                # Use the enhanced multi-page crawler with reasonable limits
+                chunks = scrape_website(url, max_pages=12, max_wait_time=90)  # Balanced approach
                 
             logger.debug(f"Crawled website with {len(chunks) if chunks else 0} chunks from multiple pages")
             
@@ -527,6 +535,145 @@ def clear():
             'message': f'Error clearing knowledge base: {str(e)}'
         }), 500
         
+# New endpoint specifically for adding multiple rheum.reviews topic pages at once
+@app.route('/add_topic_pages', methods=['POST'])
+def add_topic_pages():
+    """Add multiple rheum.reviews topic pages at once."""
+    try:
+        data = request.get_json()
+        if not data or 'topics' not in data:
+            return jsonify({
+                'success': False,
+                'message': 'No topics provided. Please include a list of topic names.'
+            }), 400
+        
+        topics = data['topics']
+        if not isinstance(topics, list) or len(topics) == 0:
+            return jsonify({
+                'success': False,
+                'message': 'Topics must be provided as a non-empty list.'
+            }), 400
+        
+        # Maximum number of topics to process at once
+        max_topics = 5
+        if len(topics) > max_topics:
+            return jsonify({
+                'success': False,
+                'message': f'Too many topics requested. Maximum {max_topics} topics can be processed at once.'
+            }), 400
+        
+        # Format topic URLs
+        base_url = "https://rheum.reviews/topic/"
+        processed_topics = []
+        failed_topics = []
+        
+        for topic in topics:
+            # Clean the topic name for URL
+            topic_slug = topic.strip().lower().replace(' ', '-')
+            if not topic_slug:
+                failed_topics.append({"topic": topic, "reason": "Invalid topic name"})
+                continue
+                
+            url = f"{base_url}{topic_slug}/"
+            
+            try:
+                # Create a new document record in the database
+                new_document = Document(
+                    filename=url,
+                    title=f"Topic: {topic}",  # Will update with proper title after scraping
+                    file_type="website",
+                    source_url=url,
+                    processed=False
+                )
+                
+                db.session.add(new_document)
+                db.session.commit()
+                
+                # Process the topic page
+                logger.info(f"Processing topic page: {url}")
+                chunks = scrape_website(url, max_pages=3, max_wait_time=60)  # Very limited crawling
+                
+                if not chunks or len(chunks) == 0:
+                    failed_topics.append({"topic": topic, "reason": "No content extracted"})
+                    continue
+                
+                # Update document with title
+                if 'title' in chunks[0]['metadata']:
+                    new_document.title = chunks[0]['metadata']['title']
+                    db.session.commit()
+                
+                # Process chunks (limited to 100 per topic)
+                max_chunks = 100
+                if len(chunks) > max_chunks:
+                    chunks = chunks[:max_chunks]
+                
+                success_count = 0
+                chunk_records = []
+                
+                # Process chunks in batches
+                for i, chunk in enumerate(chunks):
+                    try:
+                        # Add to vector store
+                        vector_store.add_text(chunk['text'], chunk['metadata'])
+                        
+                        # Create database record
+                        chunk_record = DocumentChunk(
+                            document_id=new_document.id,
+                            chunk_index=i,
+                            page_number=chunk['metadata'].get('page_number', 1),
+                            text_content=chunk['text']
+                        )
+                        chunk_records.append(chunk_record)
+                        success_count += 1
+                        
+                        # Save in batches of 10
+                        if i % 10 == 9 or i == len(chunks) - 1:
+                            vector_store._save()
+                            if chunk_records:
+                                db.session.add_all(chunk_records)
+                                db.session.commit()
+                                chunk_records = []
+                    except Exception as e:
+                        logger.error(f"Error processing chunk {i} for topic {topic}: {str(e)}")
+                
+                # Mark document as processed if any chunks were successful
+                if success_count > 0:
+                    new_document.processed = True
+                    db.session.commit()
+                    processed_topics.append({
+                        "topic": topic,
+                        "url": url,
+                        "chunks": success_count,
+                        "document_id": new_document.id
+                    })
+                else:
+                    failed_topics.append({"topic": topic, "reason": "Failed to add chunks to database"})
+                
+            except Exception as e:
+                logger.exception(f"Error processing topic {topic}: {str(e)}")
+                failed_topics.append({"topic": topic, "reason": str(e)})
+        
+        if processed_topics:
+            return jsonify({
+                'success': True,
+                'message': f'Successfully processed {len(processed_topics)} topic pages',
+                'processed': processed_topics,
+                'failed': failed_topics
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Failed to process any topic pages',
+                'failed': failed_topics
+            }), 500
+            
+    except Exception as e:
+        logger.exception(f"Error processing topic pages: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'Error processing topic pages: {str(e)}'
+        }), 500
+
 # New endpoints for database operations
 
 @app.route('/documents', methods=['GET'])
