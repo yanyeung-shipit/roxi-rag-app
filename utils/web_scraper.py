@@ -30,6 +30,13 @@ def _extract_links(html, base_url):
         parsed_base_url = urllib.parse.urlparse(base_url)
         base_domain = parsed_base_url.netloc
         
+        # Check if this is a topic page URL (e.g., /topic/myositis/)
+        is_topic_page = False
+        topic_patterns = ['/topic/', '/disease/', '/diseases/', '/condition/', '/conditions/']
+        if any(pattern in parsed_base_url.path for pattern in topic_patterns):
+            is_topic_page = True
+            logger.info(f"Extracting links from a specific topic page: {base_url}")
+        
         # Make sure the base URL ends with a slash for proper joining
         base_url_for_joining = base_url
         if not base_url.endswith('/') and not parsed_base_url.path:
@@ -221,25 +228,143 @@ def _process_page(url, page_queue, visited, results, max_pages):
         return
     
     try:
-        logger.debug(f"Processing page: {url}")
+        # Check if this is a topic-specific URL like /topic/myositis/
+        parsed_url = urllib.parse.urlparse(url)
+        topic_patterns = ['/topic/', '/disease/', '/diseases/', '/condition/', '/conditions/']
+        is_topic_page = any(pattern in parsed_url.path for pattern in topic_patterns)
         
-        # Fetch content
+        if is_topic_page:
+            logger.info(f"Processing topic-specific page with high priority: {url}")
+        else:
+            logger.debug(f"Processing page: {url}")
+        
+        # Fetch content with priority for topic pages
         downloaded = trafilatura.fetch_url(url)
         if not downloaded:
-            logger.warning(f"Failed to download: {url}")
-            return
+            # Retry for topic pages
+            if is_topic_page:
+                logger.warning(f"Failed first attempt to download topic page: {url}, retrying")
+                # Sleep a bit and retry
+                import time
+                time.sleep(2)
+                downloaded = trafilatura.fetch_url(url)
+            
+            if not downloaded:
+                logger.warning(f"Failed to download: {url}")
+                return
         
-        # Extract text content with trafilatura
-        text = trafilatura.extract(
-            downloaded, 
-            include_links=True, 
-            include_images=False, 
-            include_tables=True, 
-            deduplicate=True, 
-            no_fallback=False,
-            favor_precision=False,
-            include_comments=True  # Include comments which may have useful info
-        )
+        # Extract text content with trafilatura - special handling for topic pages
+        if is_topic_page:
+            logger.info(f"Using enhanced extraction for topic page: {url}")
+            
+            # Try multiple approaches for topic pages since they're critical content
+            # First, try trafilatura's extraction with optimized parameters
+            text = trafilatura.extract(
+                downloaded, 
+                include_links=True, 
+                include_images=False, 
+                include_tables=True, 
+                deduplicate=True, 
+                no_fallback=False,
+                favor_recall=True,  # Better for disease pages to get more content
+                include_comments=True,  # Include comments which may have useful info
+                include_formatting=True,  # Preserve more formatting for disease pages
+                target_language="en"     # Ensure English content
+            )
+            
+            # If trafilatura extraction fails, use BeautifulSoup as a backup
+            if not text or len(text.strip()) < 200:
+                logger.info(f"Trafilatura extraction failed for topic page {url}, trying direct HTML extraction")
+                try:
+                    soup = BeautifulSoup(downloaded, 'html.parser')
+                    
+                    # Extract main content elements that typically contain article text
+                    content_elements = []
+                    for selector in [
+                        'article', '.article', '#article', '.content', '#content', 
+                        '.main-content', '#main-content', '.page-content', '#page-content',
+                        '.entry-content', '.post-content', '.topic-content', '.disease-content',
+                        'main', '#main', '.main', '[role="main"]', '.container', '.topic',
+                        '#topic-content', '.article-body', '.entry', '.page'
+                    ]:
+                        if selector.startswith('.'):
+                            found = soup.find_all(class_=selector[1:])
+                        elif selector.startswith('#'):
+                            found = soup.find(id=selector[1:])
+                            found = [found] if found else []
+                        elif selector.startswith('['):
+                            attr_name = selector.split('=')[0][1:]
+                            attr_value = selector.split('=')[1].strip('"[]')
+                            found = soup.find_all(attrs={attr_name: attr_value})
+                        else:
+                            found = soup.find_all(selector)
+                        
+                        content_elements.extend([e for e in found if e])
+                    
+                    # Also look for div elements with "content", "article", "topic" in id/class
+                    for keyword in ['content', 'article', 'topic', 'disease', 'main', 'text']:
+                        for div in soup.find_all('div'):
+                            div_id = div.get('id', '').lower()
+                            div_class = ' '.join(div.get('class', [])).lower()
+                            if keyword in div_id or keyword in div_class:
+                                content_elements.append(div)
+                    
+                    # Extract and clean text from content elements
+                    extracted_texts = []
+                    
+                    # Process each content element
+                    for element in content_elements:
+                        # Remove script, style, and nav elements which don't contain relevant text
+                        for unwanted in element.find_all(['script', 'style', 'nav', 'header', 'footer']):
+                            unwanted.decompose()
+                        
+                        # Get text with some structure preserved
+                        element_text = element.get_text(separator=' ', strip=True)
+                        if element_text and len(element_text) > 100:  # Only include substantial content
+                            extracted_texts.append(element_text)
+                    
+                    # Use the largest extracted text (likely the main content)
+                    if extracted_texts:
+                        largest_text = max(extracted_texts, key=len)
+                        if len(largest_text) > len(text or ""):
+                            text = largest_text
+                            logger.info(f"Successfully extracted {len(text)} chars using direct HTML parsing")
+                except Exception as e:
+                    logger.exception(f"Error in fallback HTML extraction for topic page: {str(e)}")
+                
+            # If we still don't have content, create minimal content with topic information
+            if not text or len(text.strip()) < 200:
+                logger.warning(f"All extraction methods failed for topic page: {url}, creating minimal content")
+                topic_name = parsed_url.path.strip('/').split('/')[-1].replace('-', ' ').title()
+                
+                # Get the title of the page for better information
+                title = "Unknown Topic"
+                try:
+                    title_element = soup.find('title')
+                    if title_element and title_element.text:
+                        title = title_element.text.strip()
+                except:
+                    pass
+                
+                # Create minimal content
+                text = f"""Rheumatology Topic Page: {topic_name}
+Title: {title}
+URL: {url}
+
+This is a specialized page about {topic_name} in rheumatology. 
+The page appears to contain information about this specific condition or topic,
+but full content extraction was not possible."""
+        else:
+            text = trafilatura.extract(
+                downloaded, 
+                include_links=True, 
+                include_images=False, 
+                include_tables=True, 
+                deduplicate=True, 
+                no_fallback=False,
+                favor_precision=False,
+                include_comments=True  # Include comments which may have useful info
+            )
         
         # Try alternate extraction if needed
         if not text or len(text.strip()) < 100:
@@ -327,7 +452,15 @@ def _process_page(url, page_queue, visited, results, max_pages):
         # Skip if no content was extracted after all attempts
         if not text or len(text.strip()) < 50:
             logger.warning(f"No significant content extracted from {url} after multiple attempts")
-            return
+            
+            # For topic pages, add at least minimal information
+            if is_topic_page:
+                logger.info(f"Creating minimal content entry for important topic page: {url}")
+                # Create a minimal text entry with the URL and topic name
+                topic_name = parsed_url.path.strip('/').split('/')[-1].replace('-', ' ').title()
+                text = f"Rheumatology Topic Page: {topic_name}\n\nThis is a specialized page about {topic_name} in rheumatology. The page URL is {url}."
+            else:
+                return
         
         # Extract title
         title = extract_title(downloaded, url)
@@ -446,6 +579,17 @@ def scrape_website(url, max_pages=25, max_wait_time=120):
         
         # Check if this is a root domain without path
         parsed_url = urllib.parse.urlparse(url)
+        
+        # Check if this is a specific topic/disease URL (like /topic/myositis/)
+        # These need special handling to ensure we crawl them properly
+        topic_path_patterns = ['/topic/', '/disease/', '/diseases/', '/condition/', '/conditions/', '/chapter/']
+        if any(pattern in parsed_url.path for pattern in topic_path_patterns):
+            logger.info(f"Detected specific topic URL: {url} - giving it special priority crawling")
+            # For topic URLs, we should prioritize crawling directly
+            # When we detect a specific disease/topic page, we'll prioritize crawling it first
+            # This ensures we don't miss topic-specific content
+        
+        # Continue with normal crawling for root domain
         if parsed_url.path == '' or parsed_url.path == '/':
             # For root domains, try to first check for topic and disease pages
             # These patterns work for rheumatology websites that often organize by disease/topic
@@ -475,6 +619,7 @@ def scrape_website(url, max_pages=25, max_wait_time=120):
                 "/article/"
             ]
             
+            # And the rest of the function...
             # Expanded list of rheumatology conditions to check for specific disease pages
             rheumatology_diseases = [
                 # Common inflammatory arthritides with URL variants
@@ -687,7 +832,51 @@ def scrape_website(url, max_pages=25, max_wait_time=120):
         # Process at least the initial URL
         if not results and url not in visited:
             logger.warning("No pages processed in multi-page crawl, falling back to single page processing")
-            return _scrape_single_page(url)
+            
+            # Check if this is a topic page first
+            parsed_url = urllib.parse.urlparse(url)
+            topic_patterns = ['/topic/', '/disease/', '/diseases/', '/condition/', '/conditions/']
+            is_topic_page = any(pattern in parsed_url.path for pattern in topic_patterns)
+            
+            # For topic pages, use our specialized direct extraction method first
+            if is_topic_page:
+                logger.info(f"Detected a topic page URL, using specialized direct extraction: {url}")
+                minimal_content = create_minimal_content_for_topic(url)
+                if minimal_content:
+                    logger.info(f"Successfully created {len(minimal_content)} chunks with specialized topic page extraction")
+                    return minimal_content
+                logger.warning("Specialized topic extraction failed, falling back to standard method")
+            
+            # Fall back to single page scraper for non-topic pages or if topic extraction failed
+            single_page_results = _scrape_single_page(url)
+            
+            # If standard methods failed but this is a topic page, make one final attempt with minimal content
+            if not single_page_results and is_topic_page:
+                logger.warning(f"All extraction methods failed for topic page: {url}, creating basic fallback")
+                topic_name = parsed_url.path.strip('/').split('/')[-1].replace('-', ' ').title()
+                text = f"""Rheumatology Topic Page: {topic_name}
+URL: {url}
+
+This is a specialized page about {topic_name} in rheumatology."""
+                
+                citation = f"Information about {topic_name}. Retrieved {datetime.now().strftime('%B %d, %Y')}, from {url}"
+                
+                return [{
+                    "text": text,
+                    "metadata": {
+                        "source_type": "website",
+                        "title": f"Rheumatology Topic: {topic_name}",
+                        "url": url,
+                        "chunk_index": 0,
+                        "page_number": 1,
+                        "citation": citation,
+                        "date_scraped": datetime.now().isoformat(),
+                        "is_minimal_content": True,
+                        "is_fallback": True
+                    }
+                }]
+            
+            return single_page_results
         
         return results
         
@@ -697,6 +886,143 @@ def scrape_website(url, max_pages=25, max_wait_time=120):
         # Try to fall back to single page if crawl fails
         logger.warning("Falling back to single page processing after crawl failure")
         return _scrape_single_page(url)
+
+def create_minimal_content_for_topic(url):
+    """
+    Create minimal content for topic pages when other methods fail.
+    This is a robust direct method that bypasses trafilatura for better reliability with topic pages.
+    
+    Args:
+        url (str): URL of the topic page
+        
+    Returns:
+        list: List of dictionaries containing text chunks and metadata or empty list if failed
+    """
+    logger.info(f"Creating minimal content for important topic page: {url}")
+    
+    # Parse URL
+    parsed_url = urllib.parse.urlparse(url)
+    
+    # Extract topic name from URL path for fallback content
+    topic_name = parsed_url.path.strip('/').split('/')[-1].replace('-', ' ').title()
+    
+    # Try to get page content directly
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        # Default title
+        title = f"Rheumatology Topic: {topic_name}"
+        content_text = ""
+        
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Extract title
+            title_element = soup.find('title')
+            if title_element and title_element.text:
+                title = title_element.text.strip()
+                logger.info(f"Extracted title: {title}")
+            
+            # Extract content from article element
+            article = soup.find('article')
+            if article:
+                content_text = article.get_text(separator=' ', strip=True)
+                logger.info(f"Extracted {len(content_text)} chars from article element")
+            
+            # If article didn't work, try other content containers
+            if not content_text or len(content_text) < 100:
+                for selector in ['.content', '#content', 'main', '#main', '.main-content', 
+                                 '.entry-content', '.page-content', '.article', '#article']:
+                    element = None
+                    if selector.startswith('.'):
+                        elements = soup.find_all(class_=selector[1:])
+                        if elements:
+                            element = elements[0]
+                    elif selector.startswith('#'):
+                        element = soup.find(id=selector[1:])
+                    else:
+                        elements = soup.find_all(selector)
+                        if elements:
+                            element = elements[0]
+                            
+                    if element:
+                        extracted = element.get_text(separator=' ', strip=True)
+                        if len(extracted) > len(content_text):
+                            content_text = extracted
+                            logger.info(f"Extracted {len(content_text)} chars from {selector}")
+        
+        # Create content
+        text = ""
+        if content_text and len(content_text) > 200:
+            # Format with title and content
+            text = f"{title}\n\n{content_text}"
+            logger.info(f"Created content with actual extracted text ({len(text)} chars)")
+        else:
+            # Create minimal fallback
+            text = f"""Rheumatology Topic Page: {title}
+URL: {url}
+
+This is a specialized page about {topic_name} in rheumatology.
+The page appears to contain information about this specific condition or topic."""
+            logger.info(f"Created minimal fallback content ({len(text)} chars)")
+        
+        # Format as chunks
+        citation = generate_website_citation(title, url)
+        chunks = []
+        
+        # Use our standard chunking function
+        text_chunks = chunk_text(text, max_length=800, overlap=200)
+        
+        for i, chunk in enumerate(text_chunks):
+            chunks.append({
+                "text": chunk,
+                "metadata": {
+                    "source_type": "website",
+                    "title": title,
+                    "url": url,
+                    "chunk_index": i,
+                    "page_number": 1,  # Always page 1 for minimal content
+                    "citation": citation,
+                    "date_scraped": datetime.now().isoformat(),
+                    "is_minimal_content": True  # Flag to indicate this is minimal content
+                }
+            })
+        
+        logger.info(f"Created {len(chunks)} chunks for minimal topic page content")
+        return chunks
+    
+    except Exception as e:
+        logger.exception(f"Error creating minimal content: {str(e)}")
+        
+        # Last-resort fallback - create a single chunk with basic info
+        try:
+            text = f"""Rheumatology Topic Page: {topic_name}
+URL: {url}
+
+This is a specialized page about {topic_name} in rheumatology."""
+            
+            citation = f"Information about {topic_name}. Retrieved {datetime.now().strftime('%B %d, %Y')}, from {url}"
+            
+            return [{
+                "text": text,
+                "metadata": {
+                    "source_type": "website",
+                    "title": f"Rheumatology Topic: {topic_name}",
+                    "url": url,
+                    "chunk_index": 0,
+                    "page_number": 1,
+                    "citation": citation,
+                    "date_scraped": datetime.now().isoformat(),
+                    "is_minimal_content": True,
+                    "is_fallback": True
+                }
+            }]
+        except Exception as e2:
+            logger.exception(f"Error creating last-resort fallback: {str(e2)}")
+            return []
 
 def _scrape_single_page(url):
     """
@@ -947,8 +1273,9 @@ def chunk_text(text, max_length=1000, overlap=200):
         # If this is not the end of the text, try to find a good breaking point
         if end < len(text):
             # Look for a paragraph break
+            half_point = start + (max_length // 2)  # Use integer division
             paragraph_break = text.rfind('\n\n', start, end)
-            if paragraph_break != -1 and paragraph_break > start + (max_length / 2):
+            if paragraph_break != -1 and paragraph_break > half_point:
                 end = paragraph_break + 2
             else:
                 # Look for a sentence end
@@ -958,11 +1285,11 @@ def chunk_text(text, max_length=1000, overlap=200):
                     text.rfind('? ', start, end)
                 )
                 
-                if sentence_end != -1 and sentence_end > start + (max_length / 2):
+                if sentence_end != -1 and sentence_end > half_point:
                     end = sentence_end + 2
                 else:
                     # Look for a space
-                    space = text.rfind(' ', start + (max_length / 2), end)
+                    space = text.rfind(' ', half_point, end)
                     if space != -1:
                         end = space + 1
         

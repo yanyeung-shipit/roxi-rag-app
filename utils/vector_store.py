@@ -256,6 +256,31 @@ class VectorStore:
                         website_boost += nav_boost
                         logger.debug(f"Applied navigation boost to: {result['metadata'].get('title', 'unknown')}")
                     
+                    # Check for specific topic URL patterns which should be highly prioritized
+                    url = result['metadata'].get('url', '')
+                    is_topic_url = False
+                    topic_patterns = ['/topic/', '/disease/', '/diseases/', '/condition/', '/conditions/']
+                    if any(pattern in url for pattern in topic_patterns):
+                        is_topic_url = True
+                        topic_boost = 0.25  # Significant boost for topic-specific URLs
+                        website_boost += topic_boost
+                        logger.debug(f"Applied special topic page boost for URL: {url} - boost: {topic_boost}")
+                        
+                        # For topic pages like '/topic/myositis/', extract the specific disease/topic name
+                        topic_name = None
+                        for pattern in topic_patterns:
+                            if pattern in url:
+                                parts = url.split(pattern)
+                                if len(parts) > 1 and parts[1]:
+                                    topic_name = parts[1].strip('/').replace('-', ' ').replace('_', ' ')
+                                    break
+                        
+                        # If we found a specific topic name and it's in the query, give even more boost
+                        if topic_name and any(topic_part in query.lower() for topic_part in topic_name.lower().split()):
+                            query_topic_match_boost = 0.35
+                            website_boost += query_topic_match_boost
+                            logger.debug(f"Applied query-topic match boost for topic: {topic_name} - boost: {query_topic_match_boost}")
+                                                
                     # Additional boost for pages with specific page numbers from multi-page crawls
                     # These are likely more specific content pages rather than general homepage content
                     if 'page_number' in result['metadata'] and result['metadata']['page_number'] is not None:

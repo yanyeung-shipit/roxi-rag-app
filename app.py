@@ -2,6 +2,7 @@ import os
 import logging
 import tempfile
 import datetime
+import urllib.parse
 from flask import Flask, render_template, request, jsonify, flash, redirect, url_for
 from werkzeug.utils import secure_filename
 from werkzeug.security import safe_join
@@ -266,12 +267,26 @@ def add_website():
         db.session.commit()
         logger.info(f"Created document record with ID: {new_document.id}")
         
+        # Check if URL appears to be a specific topic/disease page
+        is_topic_page = False
+        topic_patterns = ['/topic/', '/disease/', '/diseases/', '/condition/', '/conditions/']
+        parsed_url = urllib.parse.urlparse(url)
+        if any(pattern in parsed_url.path for pattern in topic_patterns):
+            is_topic_page = True
+            logger.info(f"Detected specific topic URL: {url} - this will be given special priority during crawling")
+            
         # Scrape website with multi-page crawling
         try:
-            logger.debug(f"Starting multi-page crawl from: {url}")
-            # Use the enhanced multi-page crawler with increased limits for better content discovery
-            # Increased from 10 to 25 pages and extended timeout to 120 seconds to better explore disease/topic subpages
-            chunks = scrape_website(url, max_pages=25, max_wait_time=120)
+            if is_topic_page:
+                logger.debug(f"Starting topic-specific crawl from: {url}")
+                # For topic-specific pages, we prioritize deeper crawling
+                chunks = scrape_website(url, max_pages=25, max_wait_time=180)  # Extended timeout for topic pages
+            else:
+                logger.debug(f"Starting multi-page crawl from: {url}")
+                # Use the enhanced multi-page crawler with increased limits for better content discovery
+                # Increased from 10 to 25 pages and extended timeout to 120 seconds to better explore disease/topic subpages
+                chunks = scrape_website(url, max_pages=25, max_wait_time=120)
+                
             logger.debug(f"Crawled website with {len(chunks) if chunks else 0} chunks from multiple pages")
             
             if not chunks:
