@@ -29,6 +29,63 @@ def _extract_links(html, base_url):
         base_domain = urllib.parse.urlparse(base_url).netloc
         
         links = []
+        
+        # Top priority links - look for navigation menus and content areas where valuable links are likely to be
+        # Common navigation class/id patterns
+        nav_selectors = [
+            'nav', '.nav', '.menu', '.navigation', '#nav', '#menu', '#navigation',
+            '.navbar', '.header-menu', '.main-menu', '.primary-menu', '.site-menu',
+            'header', '.header', '#header', '.sidebar', '#sidebar', 
+            '.main-nav', '.top-nav', '.categories', '.chapters', '.sections',
+            '[role="navigation"]', '.topics', '#topics', '.diseases', '#diseases',
+            '.conditions', '#conditions'
+        ]
+        
+        # Find all navigation elements
+        nav_elements = []
+        for selector in nav_selectors:
+            if selector.startswith('.'):
+                nav_elements.extend(soup.find_all(class_=selector[1:]))
+            elif selector.startswith('#'):
+                found_element = soup.find(id=selector[1:])
+                if found_element:
+                    nav_elements.append(found_element)
+            elif selector.startswith('['):
+                # Handle attribute selectors like [role="navigation"]
+                attr_name = selector.split('=')[0][1:]
+                attr_value = selector.split('=')[1].strip('"[]')
+                nav_elements.extend(soup.find_all(attrs={attr_name: attr_value}))
+            else:
+                nav_elements.extend(soup.find_all(selector))
+        
+        # Process links from navigation areas first (these are likely more important)
+        priority_links = []
+        for nav in nav_elements:
+            for a_tag in nav.find_all('a', href=True):
+                href = a_tag['href']
+                
+                # Handle relative URLs
+                if href.startswith('/'):
+                    parsed_base = urllib.parse.urlparse(base_url)
+                    href = f"{parsed_base.scheme}://{parsed_base.netloc}{href}"
+                elif not href.startswith(('http://', 'https://')):
+                    # Skip anchors and javascript links
+                    if href.startswith('#') or href.startswith('javascript:'):
+                        continue
+                    # Other relative paths
+                    if base_url.endswith('/'):
+                        href = f"{base_url}{href}"
+                    else:
+                        href = f"{base_url}/{href}"
+                
+                # Only include links from the same domain
+                parsed_href = urllib.parse.urlparse(href)
+                if parsed_href.netloc == base_domain:
+                    # Remove fragments and normalize URL
+                    href = urllib.parse.urljoin(href, urllib.parse.urlparse(href).path)
+                    priority_links.append(href)
+                    
+        # Process remaining links from the page
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href']
             
@@ -53,10 +110,36 @@ def _extract_links(html, base_url):
                 href = urllib.parse.urljoin(href, urllib.parse.urlparse(href).path)
                 links.append(href)
         
-        # Remove duplicates and sort
-        links = list(set(links))
-        logger.debug(f"Extracted {len(links)} unique links from {base_url}")
-        return links
+        # Give priority to navigation links by placing them first
+        combined_links = priority_links + [link for link in links if link not in set(priority_links)]
+        
+        # Remove duplicates
+        unique_links = list(dict.fromkeys(combined_links))  # Preserves order while removing duplicates
+        
+        # Look for disease/condition specific links which are high value
+        rheumatology_keywords = [
+            'arthritis', 'rheumatoid', 'lupus', 'spondylitis', 'gout', 'myositis',
+            'scleroderma', 'vasculitis', 'psoriatic', 'fibromyalgia', 'sjogren',
+            'inflammatory', 'autoimmune', 'juvenile', 'dermatomyositis', 'polymyalgia',
+            'ankylosing', 'osteoarthritis', 'spondyloarthritis', 'polymyositis',
+            'polyarthritis', 'rheumatic', 'connective-tissue', 'systemic', 'disease',
+            'condition', 'treatment', 'diagnosis', 'symptom'
+        ]
+        
+        # Reorder to prioritize disease/condition specific links
+        prioritized_links = []
+        normal_links = []
+        
+        for link in unique_links:
+            if any(keyword in link.lower() for keyword in rheumatology_keywords):
+                prioritized_links.append(link)
+            else:
+                normal_links.append(link)
+                
+        final_links = prioritized_links + normal_links
+        
+        logger.debug(f"Extracted {len(final_links)} unique links from {base_url} ({len(prioritized_links)} prioritized)")
+        return final_links
     except Exception as e:
         logger.exception(f"Error extracting links: {str(e)}")
         return []
@@ -84,7 +167,7 @@ def _process_page(url, page_queue, visited, results, max_pages):
             logger.warning(f"Failed to download: {url}")
             return
         
-        # Extract text content
+        # Extract text content with trafilatura
         text = trafilatura.extract(
             downloaded, 
             include_links=True, 
@@ -92,22 +175,96 @@ def _process_page(url, page_queue, visited, results, max_pages):
             include_tables=True, 
             deduplicate=True, 
             no_fallback=False,
-            favor_precision=False
+            favor_precision=False,
+            include_comments=True  # Include comments which may have useful info
         )
         
         # Try alternate extraction if needed
-        if not text or len(text.strip()) < 50:
+        if not text or len(text.strip()) < 100:
+            logger.debug("First extraction attempt yielded insufficient text, trying alternate parameters")
             text = trafilatura.extract(
                 downloaded,
                 include_comments=True,
                 include_tables=True,
                 no_fallback=False,
-                target_language="en"
+                target_language="en",
+                include_formatting=True,  # Try to maintain some formatting
+                include_anchors=True,     # Include anchor texts which are often navigation items
+                favor_recall=True         # Favor recall over precision
             )
         
-        # Skip if no content was extracted
+        # If still no content, try a third approach focused on menus and navigation
+        if not text or len(text.strip()) < 100:
+            logger.debug("Second extraction attempt failed, trying to extract navigation elements directly")
+            try:
+                # Parse the HTML and try to extract navigation elements manually
+                soup = BeautifulSoup(downloaded, 'html.parser')
+                
+                # Focus on navigation/menu elements which are valuable for rheumatology sites
+                nav_elements = []
+                
+                # Common navigation selectors 
+                for selector in ['nav', '.nav', '.menu', '.navigation', '#nav', '#menu', 
+                                 '.navbar', 'header', '.sidebar', '#sidebar', 'ul.menu',
+                                 '.categories', '.topics', '.diseases', '.conditions',
+                                 'ul.chapters', 'ul.sections', '[role="navigation"]']:
+                    
+                    if selector.startswith('.'):
+                        els = soup.find_all(class_=selector[1:])
+                    elif selector.startswith('#'):
+                        el = soup.find(id=selector[1:])
+                        if el:
+                            els = [el]
+                        else:
+                            els = []
+                    elif selector.startswith('['):
+                        attr_name = selector.split('=')[0][1:]
+                        attr_value = selector.split('=')[1].strip('"[]')
+                        els = soup.find_all(attrs={attr_name: attr_value})
+                    else:
+                        els = soup.find_all(selector)
+                    
+                    nav_elements.extend(els)
+                
+                # Extract text from navigation elements with structure preserved
+                nav_texts = []
+                for nav in nav_elements:
+                    # Extract text with some structure
+                    items = []
+                    for item in nav.find_all(['a', 'li', 'div', 'span', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
+                        if item.text.strip() and len(item.text.strip()) > 2:
+                            items.append(item.text.strip())
+                    
+                    if items:
+                        nav_texts.append(f"Menu/Navigation: {' | '.join(items)}")
+                
+                # Extract any headers which might contain useful subjects
+                headers = []
+                for h in soup.find_all(['h1', 'h2', 'h3']):
+                    if h.text.strip() and len(h.text.strip()) > 3:
+                        headers.append(f"Header: {h.text.strip()}")
+                
+                # If we found navigation elements or headers, use them as content
+                if nav_texts or headers:
+                    nav_content = "\n\n".join(nav_texts)
+                    header_content = "\n\n".join(headers)
+                    
+                    # Extract title to include
+                    title_tag = soup.find('title')
+                    title_content = f"Title: {title_tag.text.strip()}" if title_tag else ""
+                    
+                    # Combine all elements
+                    combined_text = "\n\n".join(filter(None, [title_content, nav_content, header_content]))
+                    
+                    if len(combined_text.strip()) > 50:
+                        text = combined_text
+                        logger.debug(f"Successfully extracted navigation and header elements: {len(text)} chars")
+            except Exception as e:
+                logger.exception(f"Error during manual extraction of navigation elements: {str(e)}")
+        
+        # Skip if no content was extracted after all attempts
         if not text or len(text.strip()) < 50:
-            logger.warning(f"No significant content extracted from {url}")
+            logger.warning(f"No significant content extracted from {url} after multiple attempts")
             return
         
         # Extract title
@@ -275,7 +432,7 @@ def _scrape_single_page(url):
         if not downloaded:
             raise Exception(f"Failed to download content from {url}")
         
-        # Extract content
+        # Extract text content with trafilatura
         text = trafilatura.extract(
             downloaded, 
             include_links=True, 
@@ -283,21 +440,95 @@ def _scrape_single_page(url):
             include_tables=True, 
             deduplicate=True, 
             no_fallback=False,
-            favor_precision=False
+            favor_precision=False,
+            include_comments=True  # Include comments which may have useful info
         )
         
         # Try alternate extraction if needed
-        if not text or len(text.strip()) < 50:
+        if not text or len(text.strip()) < 100:
+            logger.debug("First extraction attempt yielded insufficient text, trying alternate parameters")
             text = trafilatura.extract(
                 downloaded,
                 include_comments=True,
                 include_tables=True,
                 no_fallback=False,
-                target_language="en"
+                target_language="en",
+                include_formatting=True,  # Try to maintain some formatting
+                include_anchors=True,     # Include anchor texts which are often navigation items
+                favor_recall=True         # Favor recall over precision
             )
+        
+        # If still no content, try a third approach focused on menus and navigation
+        if not text or len(text.strip()) < 100:
+            logger.debug("Second extraction attempt failed, trying to extract navigation elements directly")
+            try:
+                # Parse the HTML and try to extract navigation elements manually
+                soup = BeautifulSoup(downloaded, 'html.parser')
+                
+                # Focus on navigation/menu elements which are valuable for rheumatology sites
+                nav_elements = []
+                
+                # Common navigation selectors 
+                for selector in ['nav', '.nav', '.menu', '.navigation', '#nav', '#menu', 
+                                 '.navbar', 'header', '.sidebar', '#sidebar', 'ul.menu',
+                                 '.categories', '.topics', '.diseases', '.conditions',
+                                 'ul.chapters', 'ul.sections', '[role="navigation"]']:
+                    
+                    if selector.startswith('.'):
+                        els = soup.find_all(class_=selector[1:])
+                    elif selector.startswith('#'):
+                        el = soup.find(id=selector[1:])
+                        if el:
+                            els = [el]
+                        else:
+                            els = []
+                    elif selector.startswith('['):
+                        attr_name = selector.split('=')[0][1:]
+                        attr_value = selector.split('=')[1].strip('"[]')
+                        els = soup.find_all(attrs={attr_name: attr_value})
+                    else:
+                        els = soup.find_all(selector)
+                    
+                    nav_elements.extend(els)
+                
+                # Extract text from navigation elements with structure preserved
+                nav_texts = []
+                for nav in nav_elements:
+                    # Extract text with some structure
+                    items = []
+                    for item in nav.find_all(['a', 'li', 'div', 'span', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
+                        if item.text.strip() and len(item.text.strip()) > 2:
+                            items.append(item.text.strip())
+                    
+                    if items:
+                        nav_texts.append(f"Menu/Navigation: {' | '.join(items)}")
+                
+                # Extract any headers which might contain useful subjects
+                headers = []
+                for h in soup.find_all(['h1', 'h2', 'h3']):
+                    if h.text.strip() and len(h.text.strip()) > 3:
+                        headers.append(f"Header: {h.text.strip()}")
+                
+                # If we found navigation elements or headers, use them as content
+                if nav_texts or headers:
+                    nav_content = "\n\n".join(nav_texts)
+                    header_content = "\n\n".join(headers)
+                    
+                    # Extract title to include
+                    title_tag = soup.find('title')
+                    title_content = f"Title: {title_tag.text.strip()}" if title_tag else ""
+                    
+                    # Combine all elements
+                    combined_text = "\n\n".join(filter(None, [title_content, nav_content, header_content]))
+                    
+                    if len(combined_text.strip()) > 50:
+                        text = combined_text
+                        logger.debug(f"Successfully extracted navigation and header elements: {len(text)} chars")
+            except Exception as e:
+                logger.exception(f"Error during manual extraction of navigation elements: {str(e)}")
             
         if not text or len(text.strip()) < 50:
-            raise Exception(f"No meaningful content extracted from {url}")
+            raise Exception(f"No meaningful content extracted from {url} after multiple attempts")
         
         # Extract title
         title = extract_title(downloaded, url)

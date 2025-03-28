@@ -241,40 +241,99 @@ class VectorStore:
                     boost_factor = 0.15 * keyword_matches
                     result['score'] = max(0, result['score'] - boost_factor)  # Lower score is better
                 
-                # Apply a small boost to website sources to counterbalance any bias
+                # Apply stronger boosts to website sources to better utilize website content
                 if source_type == 'website':
-                    # Basic boost for any website source
-                    website_boost = 0.05
+                    # Base boost for any website source
+                    website_boost = 0.10  # Double the basic boost for websites (from 0.05 to 0.10)
+                    
+                    # Check if the text contains navigation elements which indicate a website covering topic areas
+                    if "Menu/Navigation:" in result['text'] or "Header:" in result['text']:
+                        # Stronger boost for navigation/menu content which is very valuable for determining site topics
+                        nav_boost = 0.10
+                        website_boost += nav_boost
+                        logger.debug(f"Applied navigation boost to: {result['metadata'].get('title', 'unknown')}")
                     
                     # Additional boost for pages with specific page numbers from multi-page crawls
                     # These are likely more specific content pages rather than general homepage content
                     if 'page_number' in result['metadata'] and result['metadata']['page_number'] is not None:
-                        page_boost = 0.03  # Additional small boost for specific pages
-                        website_boost += page_boost
-                        logger.debug(f"Applied additional page boost for page {result['metadata']['page_number']}")
+                        page_num = result['metadata']['page_number']
+                        # Progressive boost based on page number - emphasize specific content pages
+                        if page_num > 1:  # Not the main page
+                            page_boost = min(0.15, 0.05 * page_num)  # Caps at 0.15 (3 pages deep)
+                            website_boost += page_boost
+                            logger.debug(f"Applied additional page boost for page {page_num}: {page_boost}")
                     
+                    # Check if website text contains terms related to the query
+                    query_tokens = set(word.lower() for word in query.split())
+                    if any(token in result['text'].lower() for token in query_tokens):
+                        relevance_boost = 0.08
+                        website_boost += relevance_boost
+                        logger.debug(f"Applied query term relevance boost: {relevance_boost}")
+                    
+                    # Apply the combined boost
                     result['score'] = max(0, result['score'] - website_boost)
-                    logger.debug(f"Applied website boost to result: {result['metadata'].get('title', 'unknown')}")
+                    logger.debug(f"Applied combined website boost of {website_boost} to: {result['metadata'].get('title', 'unknown')}")
             
             # Sort by adjusted score
             sorted_results = sorted(initial_results, key=lambda x: x['score'])
             
-            # Try to ensure source diversity: include at least one website source if available
+            # Enhanced diversity logic - ALWAYS include at least one website source if available
             final_results = []
-            has_website = any(r['metadata'].get('source_type') == 'website' for r in sorted_results[:top_k])
             
-            if not has_website and website_results:
-                # Add the highest-ranked website result
-                best_website = sorted(website_results, key=lambda x: x['score'])[0]
-                logger.debug(f"Ensuring website diversity by adding: {best_website['metadata'].get('title', 'unknown')}")
+            # First, check if any website sources are already in the top results
+            top_website_results = [r for r in sorted_results[:top_k] if r['metadata'].get('source_type') == 'website']
+            has_website_in_top = len(top_website_results) > 0
+            
+            # Ensure we ALWAYS have at least one website source if any are available
+            if not has_website_in_top and website_results:
+                # Sort website results by score
+                sorted_website_results = sorted(website_results, key=lambda x: x['score'])
+                
+                # Prioritize website results that have navigation elements (they're more informative)
+                nav_website_results = [r for r in sorted_website_results if "Menu/Navigation:" in r['text'] or "Header:" in r['text']]
+                
+                if nav_website_results:
+                    # Use the highest scoring navigation-containing website
+                    best_website = nav_website_results[0]
+                    logger.debug(f"Ensuring website diversity by adding navigation-rich source: {best_website['metadata'].get('title', 'unknown')}")
+                else:
+                    # Use the highest scoring website
+                    best_website = sorted_website_results[0]
+                    logger.debug(f"Ensuring website diversity by adding: {best_website['metadata'].get('title', 'unknown')}")
+                
+                # Add to final results
                 final_results.append(best_website)
+                
                 # Fill remaining slots from sorted results, avoiding duplicates
                 for r in sorted_results:
                     if r['id'] != best_website['id'] and len(final_results) < top_k:
                         final_results.append(r)
-            else:
-                # Just use top k sorted results
+            elif has_website_in_top:
+                # Website already in top results naturally
+                logger.debug(f"Website source(s) already in top {top_k} results: {len(top_website_results)} website sources")
                 final_results = sorted_results[:top_k]
+            else:
+                # No website sources available or all websites already excluded
+                logger.debug("No website sources available to include in results")
+                final_results = sorted_results[:top_k]
+                
+            # Ensure we prioritize diversity in the top 3 results
+            if len(final_results) >= 3:
+                # Check source types in top 3
+                top_3_types = [r['metadata'].get('source_type') for r in final_results[:3]]
+                
+                # If all top 3 are the same type, try to promote a different type
+                if len(set(top_3_types)) == 1:
+                    logger.debug(f"All top 3 results are {top_3_types[0]} sources, attempting to diversify")
+                    
+                    # Find the first result of a different type
+                    different_type_idx = next((i for i, r in enumerate(final_results) 
+                                            if r['metadata'].get('source_type') != top_3_types[0] and i >= 3), None)
+                    
+                    if different_type_idx is not None:
+                        # Swap to ensure diversity in top 3
+                        final_results[2], final_results[different_type_idx] = final_results[different_type_idx], final_results[2]
+                        logger.debug(f"Promoted a {final_results[2]['metadata'].get('source_type')} source to position 3 for diversity")
             
             # Log final results by source type
             final_source_types = {}
