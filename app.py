@@ -800,6 +800,18 @@ def add_topic_pages():
                 'success': False,
                 'message': 'Topics must be provided as a non-empty list.'
             }), 400
+            
+        # Check if a collection was specified
+        collection_id = request.form.get('collection_id')
+        collection = None
+        if collection_id and collection_id.strip():
+            try:
+                # Find the collection
+                collection = db.session.get(Collection, int(collection_id))
+                if not collection:
+                    logger.warning(f"Collection with ID {collection_id} not found")
+            except Exception as e:
+                logger.error(f"Error finding collection: {e}")
         
         # MEMORY OPTIMIZATION: Reduce maximum number of topics to 2
         max_topics = 2
@@ -838,6 +850,15 @@ def add_topic_pages():
                 
                 db.session.add(new_document)
                 db.session.commit()
+                
+                # Add to collection if specified
+                if collection:
+                    try:
+                        collection.documents.append(new_document)
+                        db.session.commit()
+                        logger.info(f"Added document {new_document.id} to collection {collection_id}")
+                    except Exception as collection_error:
+                        logger.error(f"Error adding document to collection: {collection_error}")
                 
                 # Process the topic page with strict limits to avoid memory issues
                 logger.info(f"Processing topic page with memory optimization: {url}")
@@ -1006,9 +1027,9 @@ def add_topic_pages():
 
 @app.route('/documents', methods=['GET'])
 def get_documents():
-    """Get a list of all documents."""
+    """Get a list of all documents, sorted by most recent first."""
     try:
-        documents = Document.query.all()
+        documents = Document.query.order_by(Document.created_at.desc()).all()
         results = []
         
         for doc in documents:
