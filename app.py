@@ -385,7 +385,7 @@ def query():
         if not retrieval_results:
             return jsonify({
                 'success': True,
-                'answer': "I don't have enough information to answer this question based on the documents you've provided.",
+                'answer': "ROXI doesn't have enough information in the rheumatology knowledge base to answer this question based on the documents you've provided.",
                 'sources': []
             })
             

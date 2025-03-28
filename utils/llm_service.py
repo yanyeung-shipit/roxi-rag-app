@@ -141,7 +141,7 @@ def generate_response(query, context_documents):
         
         # Skip API call if there's no context
         if not context.strip():
-            return "I don't have enough information to answer this question based on the documents you've provided.", []
+            return "ROXI doesn't have enough information in the rheumatology knowledge base to answer this question based on the documents you've provided.", []
         
         # Create prompt for OpenAI with more explicit instructions
         # the newest OpenAI model is "gpt-4o" which was released May 13, 2024.
@@ -152,10 +152,10 @@ def generate_response(query, context_documents):
                 {
                     "role": "system",
                     "content": (
-                        "You are a helpful assistant that answers questions based on the provided document context. "
+                        "You are ROXI (Rheumatology Optimized eXpert Intelligence), a specialized assistant that answers questions about rheumatology based on the provided document context. "
                         "When answering, follow these rules:\n"
                         "1. IMPORTANT: Try your best to answer the question using the provided documents, even if they only partially address the query.\n"
-                        "2. Only say 'I don't have enough information to answer this question' if the documents are completely unrelated or irrelevant.\n"
+                        "2. Only say 'ROXI doesn't have enough information in the rheumatology knowledge base to answer this question' if the documents are completely unrelated or irrelevant.\n"
                         "3. Be generous in extracting relevant information - if documents contain anything potentially useful, use it.\n"
                         "4. Provide citations for your answer using the format [n] where n is the document number.\n"
                         "5. Cite multiple sources if the information comes from multiple documents.\n"
@@ -187,7 +187,7 @@ def generate_response(query, context_documents):
                         {
                             "role": "system",
                             "content": (
-                                "You are a helpful assistant that answers questions based on the provided document context. "
+                                "You are ROXI (Rheumatology Optimized eXpert Intelligence), a specialized assistant that answers questions about rheumatology based on the provided document context. "
                                 "IMPORTANT INSTRUCTION: The user has provided documents that DO contain relevant information "
                                 "for their query. Your task is to extract useful information from these documents to answer "
                                 "the question, even if the information is partial or incomplete. Do NOT claim there is insufficient "
@@ -216,4 +216,4 @@ def generate_response(query, context_documents):
         return answer, sources
     except Exception as e:
         logger.exception(f"Error generating response: {str(e)}")
-        return f"I'm sorry, but I encountered an error while generating a response: {str(e)}", []
+        return f"ROXI encountered an error while analyzing your question: {str(e)}", []
