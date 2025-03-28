@@ -474,6 +474,28 @@ document.addEventListener('DOMContentLoaded', () => {
                             </div>
                         `;
                     }
+                    
+                    // Check if there are more content chunks available to load
+                    // file_size is repurposed to store total possible chunks for website documents
+                    if (doc.file_type === 'website' && doc.file_size > 0 && doc.chunks.length < doc.file_size) {
+                        const remainingChunks = doc.file_size - doc.chunks.length;
+                        html += `
+                            <div class="alert alert-info mt-3">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <i class="fas fa-info-circle me-2"></i>
+                                        Currently showing ${doc.chunks.length} of ${doc.file_size} available chunks.
+                                    </div>
+                                    <button id="loadMoreContentBtn" class="btn btn-primary btn-sm" 
+                                            onclick="loadMoreContent(${doc.id})">
+                                        <i class="fas fa-cloud-download-alt me-2"></i>
+                                        Load More Content (${Math.min(5, remainingChunks)} of ${remainingChunks})
+                                    </button>
+                                </div>
+                                <div id="loadMoreStatus" class="mt-2" style="display: none;"></div>
+                            </div>
+                        `;
+                    }
                 } else {
                     html += '<p class="text-center text-muted">No content available for preview</p>';
                 }
@@ -1495,3 +1517,94 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 });
+
+// Global function to load more content for a document
+async function loadMoreContent(documentId) {
+    try {
+        const loadMoreBtn = document.getElementById('loadMoreContentBtn');
+        const statusEl = document.getElementById('loadMoreStatus');
+        
+        if (!loadMoreBtn || !statusEl) {
+            console.error("Load more button or status element not found");
+            return;
+        }
+        
+        // Show loading state
+        loadMoreBtn.disabled = true;
+        loadMoreBtn.innerHTML = `
+            <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+            Loading...
+        `;
+        statusEl.style.display = 'block';
+        statusEl.innerHTML = `
+            <div class="alert alert-secondary">
+                <i class="fas fa-sync fa-spin me-2"></i>
+                Loading additional content for this document...
+            </div>
+        `;
+        
+        // Call API to load more content
+        const response = await fetch(`/documents/${documentId}/load_more_content`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            // Show success message
+            statusEl.innerHTML = `
+                <div class="alert alert-success">
+                    <i class="fas fa-check-circle me-2"></i>
+                    Successfully loaded ${data.chunks_loaded} additional chunks! 
+                    Now showing ${data.total_chunks_now} of ${data.total_possible_chunks} chunks.
+                </div>
+            `;
+            
+            // Reload the document view to show updated chunks
+            setTimeout(() => {
+                viewDocument(documentId);
+            }, 1500);
+        } else {
+            // Show error message
+            statusEl.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    ${data.message || 'Error loading additional content'}
+                </div>
+            `;
+            
+            // Re-enable the button
+            loadMoreBtn.disabled = false;
+            loadMoreBtn.innerHTML = `
+                <i class="fas fa-cloud-download-alt me-2"></i>
+                Try Again
+            `;
+        }
+    } catch (error) {
+        console.error("Error loading more content:", error);
+        
+        const statusEl = document.getElementById('loadMoreStatus');
+        const loadMoreBtn = document.getElementById('loadMoreContentBtn');
+        
+        if (statusEl) {
+            statusEl.style.display = 'block';
+            statusEl.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    Error: ${error.message}
+                </div>
+            `;
+        }
+        
+        if (loadMoreBtn) {
+            loadMoreBtn.disabled = false;
+            loadMoreBtn.innerHTML = `
+                <i class="fas fa-cloud-download-alt me-2"></i>
+                Try Again
+            `;
+        }
+    }
+}

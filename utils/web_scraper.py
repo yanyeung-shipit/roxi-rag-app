@@ -997,8 +997,27 @@ The page appears to contain information about this specific condition or topic."
         # Use our standard chunking function but with smaller chunks
         text_chunks = chunk_text(text, max_length=600, overlap=100)
         
-        # Limit to max 6 chunks
-        max_chunks = 6
+        # Default chunk limit with priority levels
+        default_max_chunks = 6
+        
+        # Check URL for priority topics that deserve more chunks
+        priority_topics = ['rheumatoid-arthritis', 'lupus', 'systemic-sclerosis', 
+                           'vasculitis', 'myositis', 'spondyloarthritis']
+        
+        parsed_url = urllib.parse.urlparse(url)
+        path_parts = parsed_url.path.strip('/').split('/')
+        
+        # Extract topic from URL
+        current_topic = path_parts[-1] if path_parts else ""
+        
+        # Set chunk limit based on topic priority
+        if any(priority in current_topic for priority in priority_topics):
+            max_chunks = 15  # Higher limit for priority topics
+            logger.info(f"Priority topic detected: {current_topic}, allowing up to {max_chunks} chunks")
+        else:
+            max_chunks = default_max_chunks
+        
+        # Apply chunk limit if needed
         if len(text_chunks) > max_chunks:
             logger.warning(f"Limiting chunks from {len(text_chunks)} to {max_chunks}")
             text_chunks = text_chunks[:max_chunks]

@@ -666,10 +666,45 @@ def add_topic_pages():
                     new_document.title = chunks[0]['metadata']['title']
                     db.session.commit()
                 
-                # MEMORY OPTIMIZATION: Process chunks with much stricter limits
-                max_chunks = 5  # Drastically reduce number of chunks to prevent memory issues
+                # MEMORY OPTIMIZATION: Dynamic chunk limits based on topic importance
+                
+                # Check if this is a priority topic (important rheumatology conditions)
+                priority_topics = ['rheumatoid-arthritis', 'lupus', 'systemic-sclerosis', 
+                                  'vasculitis', 'myositis', 'spondyloarthritis']
+                
+                is_priority = any(pt in topic_slug for pt in priority_topics)
+                
+                # Set chunk limit based on priority and whether this is a single topic request
+                if is_priority:
+                    if len(topics) == 1:
+                        # For single priority topics, allow more chunks
+                        max_chunks = 15
+                        logger.info(f"Single priority topic requested: {topic}, allowing {max_chunks} chunks")
+                    else:
+                        # For multiple topics including at least one priority topic
+                        max_chunks = 10
+                        logger.info(f"Priority topic in batch: {topic}, allowing {max_chunks} chunks")
+                else:
+                    if len(topics) == 1:
+                        # For single regular topics
+                        max_chunks = 8
+                    else:
+                        # For multiple regular topics
+                        max_chunks = 5
+                
+                # Store the original number of chunks for later use
+                original_chunk_count = len(chunks)
+                
+                # Apply the limit
                 if len(chunks) > max_chunks:
-                    logger.warning(f"Limiting chunks from {len(chunks)} to {max_chunks} for memory optimization")
+                    logger.warning(f"Limiting chunks from {original_chunk_count} to {max_chunks} for memory optimization")
+                    
+                    # Store metadata about remaining chunks for later loading
+                    if original_chunk_count > max_chunks:
+                        # Add a special flag to the database record to indicate more content is available
+                        new_document.file_size = original_chunk_count  # Repurpose file_size to store total chunk count
+                        db.session.commit()
+                    
                     chunks = chunks[:max_chunks]
                 
                 success_count = 0
@@ -832,6 +867,136 @@ def get_document(document_id):
         return jsonify({
             'success': False, 
             'message': f'Error retrieving document: {str(e)}'
+        }), 500
+
+@app.route('/documents/<int:document_id>/load_more_content', methods=['POST'])
+def load_more_document_content(document_id):
+    """Load more content for a document that has additional chunks available."""
+    try:
+        # Find the document
+        doc = Document.query.get(document_id)
+        
+        if not doc:
+            return jsonify({
+                'success': False,
+                'message': f'Document with ID {document_id} not found'
+            }), 404
+        
+        # Check if this is a website document (only website docs support this feature)
+        if doc.file_type != 'website':
+            return jsonify({
+                'success': False,
+                'message': 'This operation is only supported for website documents'
+            }), 400
+        
+        # Check if there's more content to load by looking at file_size (repurposed to store total chunk count)
+        current_chunk_count = len(doc.chunks)
+        total_possible_chunks = doc.file_size or 0
+        
+        # If there's no more content or file_size wasn't set properly
+        if total_possible_chunks <= current_chunk_count or total_possible_chunks <= 0:
+            return jsonify({
+                'success': False,
+                'message': 'No additional content available for this document'
+            }), 400
+        
+        # Get the document URL
+        url = doc.source_url
+        if not url:
+            return jsonify({
+                'success': False,
+                'message': 'Document has no source URL to load additional content'
+            }), 400
+        
+        # Determine how many more chunks to load (maximum 5 more at a time)
+        chunks_to_load = min(5, total_possible_chunks - current_chunk_count)
+        
+        logger.info(f"Attempting to load {chunks_to_load} more chunks for document {document_id}")
+        
+        # Extract the topic name from the URL for crawling parameters
+        parsed_url = urllib.parse.urlparse(url)
+        path_parts = parsed_url.path.strip('/').split('/')
+        topic_slug = path_parts[-1] if path_parts else ""
+        
+        try:
+            # Get fresh content to ensure we have all chunks
+            chunks = create_minimal_content_for_topic(url)
+            
+            if not chunks:
+                return jsonify({
+                    'success': False,
+                    'message': 'Failed to retrieve additional content'
+                }), 500
+            
+            # Skip chunks we already have and take only the next batch
+            start_index = current_chunk_count
+            end_index = min(start_index + chunks_to_load, len(chunks))
+            
+            if start_index >= len(chunks):
+                return jsonify({
+                    'success': False,
+                    'message': 'No additional content available'
+                }), 400
+            
+            chunks_to_add = chunks[start_index:end_index]
+            added_count = 0
+            
+            # Process each additional chunk
+            for i, chunk in enumerate(chunks_to_add):
+                try:
+                    # Update chunk index to continue from existing chunks
+                    chunk_index = current_chunk_count + i
+                    
+                    # Update metadata to reflect new chunk index
+                    chunk['metadata']['chunk_index'] = chunk_index
+                    
+                    # Add to vector store
+                    vector_store.add_text(chunk['text'], chunk['metadata'])
+                    
+                    # Create database record
+                    chunk_record = DocumentChunk(
+                        document_id=doc.id,
+                        chunk_index=chunk_index,
+                        page_number=chunk['metadata'].get('page_number', 1),
+                        text_content=chunk['text']
+                    )
+                    
+                    db.session.add(chunk_record)
+                    db.session.commit()
+                    
+                    # Save vector store after each chunk
+                    vector_store._save()
+                    
+                    added_count += 1
+                except Exception as e:
+                    logger.error(f"Error adding chunk {i+start_index}: {str(e)}")
+            
+            # Update total loaded count
+            new_total = current_chunk_count + added_count
+            
+            # Return results
+            return jsonify({
+                'success': True,
+                'message': f'Added {added_count} more chunks to document',
+                'document_id': document_id,
+                'chunks_loaded': added_count,
+                'total_chunks_now': new_total,
+                'total_possible_chunks': total_possible_chunks,
+                'has_more': new_total < total_possible_chunks
+            })
+            
+        except Exception as e:
+            logger.exception(f"Error loading additional content: {str(e)}")
+            return jsonify({
+                'success': False,
+                'message': f'Error loading additional content: {str(e)}'
+            }), 500
+    
+    except Exception as e:
+        logger.exception(f"Error processing request: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'Error: {str(e)}'
         }), 500
 
 @app.route('/documents/<int:document_id>', methods=['DELETE'])
