@@ -39,7 +39,9 @@ UPLOAD_FOLDER = os.path.join(app.root_path, 'uploads')
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20MB limit
+
+# Increase maximum upload size for handling bulk PDF uploads (was 20MB)
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500 MB max upload size
 
 # Initialize vector store
 vector_store = VectorStore()
@@ -87,16 +89,16 @@ def upload_pdf():
             filename = secure_filename(file.filename)
             logger.info(f"Processing PDF: {filename}")
             
-            # Check file size before saving - reduce to 20MB max
+            # Check file size before saving - limit to 50MB per file
             file.seek(0, os.SEEK_END)
             file_size = file.tell()
             file.seek(0)  # Reset file pointer
             
-            if file_size > 20 * 1024 * 1024:  # 20MB limit
+            if file_size > 50 * 1024 * 1024:  # 50MB limit
                 logger.warning(f"PDF file too large: {file_size / (1024*1024):.2f} MB")
                 return jsonify({
                     'success': False, 
-                    'message': f'PDF file too large ({file_size / (1024*1024):.2f} MB). Maximum size is 20 MB.'
+                    'message': f'PDF file too large ({file_size / (1024*1024):.2f} MB). Maximum size is 50 MB.'
                 }), 400
             
             # Save file to permanent storage in uploads folder
@@ -311,12 +313,12 @@ def bulk_upload_pdfs():
             try:
                 filename = secure_filename(file.filename)
                 
-                # Check file size - limit to 20MB
+                # Check file size - limit to 50MB per file
                 file.seek(0, os.SEEK_END)
                 file_size = file.tell()
                 file.seek(0)  # Reset file pointer
                 
-                if file_size > 20 * 1024 * 1024:  # 20MB limit
+                if file_size > 50 * 1024 * 1024:  # 50MB limit
                     logger.warning(f"PDF file too large: {filename} ({file_size / (1024*1024):.2f} MB)")
                     continue  # Skip this file but continue processing others
                 
