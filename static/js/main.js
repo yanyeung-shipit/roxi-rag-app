@@ -230,8 +230,13 @@ document.addEventListener('DOMContentLoaded', () => {
     clearKnowledgeBtn.addEventListener('click', async () => {
         if (confirm('Are you sure you want to clear all knowledge base data? This cannot be undone.')) {
             try {
+                // Create FormData to include clear_database parameter
+                const formData = new FormData();
+                formData.append('clear_database', 'true');
+                
                 const response = await fetch('/clear', {
-                    method: 'POST'
+                    method: 'POST',
+                    body: formData
                 });
                 
                 const data = await response.json();

@@ -75,7 +75,15 @@ document.addEventListener('DOMContentLoaded', () => {
         // Form submissions
         safeAddEventListener('pdfForm', 'submit', handlePdfFormSubmit);
         safeAddEventListener('websiteForm', 'submit', handleWebsiteFormSubmit);
-        safeAddEventListener('add-topics-btn', 'click', handleTopicPagesSubmit);
+
+        // Add topic pages button click handler - direct DOM selection since it's not in elements
+        const addTopicsBtn = document.getElementById('add-topics-btn');
+        if (addTopicsBtn) {
+            console.log("Adding click event listener to add-topics-btn");
+            addTopicsBtn.addEventListener('click', handleTopicPagesSubmit);
+        } else {
+            console.warn("Element add-topics-btn not found in document");
+        }
         
         // Document navigation
         safeAddEventListener('refreshDocumentsBtn', 'click', loadDocuments);
