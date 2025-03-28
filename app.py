@@ -270,8 +270,8 @@ def add_website():
         try:
             logger.debug(f"Starting multi-page crawl from: {url}")
             # Use the enhanced multi-page crawler with increased limits for better content discovery
-            # Increased from 10 to 20 pages to better explore disease/topic subpages
-            chunks = scrape_website(url, max_pages=20, max_wait_time=60)
+            # Increased from 10 to 25 pages and extended timeout to 120 seconds to better explore disease/topic subpages
+            chunks = scrape_website(url, max_pages=25, max_wait_time=120)
             logger.debug(f"Crawled website with {len(chunks) if chunks else 0} chunks from multiple pages")
             
             if not chunks:
@@ -297,7 +297,7 @@ def add_website():
         logger.info(f"Successfully crawled website with {len(chunks)} chunks from multiple pages")
         
         # Limit chunks to prevent memory issues
-        max_chunks = 150  # Increased from 100 to 150 to better cover multi-page websites
+        max_chunks = 200  # Increased from 150 to 200 to better cover multi-page websites
         if len(chunks) > max_chunks:
             logger.warning(f"Limiting {len(chunks)} chunks to first {max_chunks}")
             chunks = chunks[:max_chunks]

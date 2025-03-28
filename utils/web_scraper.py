@@ -15,30 +15,50 @@ logger = logging.getLogger(__name__)
 
 def _extract_links(html, base_url):
     """
-    Extract links from HTML content that belong to the same domain.
+    Extract links from HTML content that belong to the same domain,
+    with special handling for disease/topic specific pages on rheumatology websites.
     
     Args:
         html (str): HTML content
         base_url (str): Base URL to match domain
         
     Returns:
-        list: List of URLs belonging to the same domain
+        list: List of URLs belonging to the same domain, prioritized by relevance
     """
     try:
         soup = BeautifulSoup(html, 'html.parser')
-        base_domain = urllib.parse.urlparse(base_url).netloc
+        parsed_base_url = urllib.parse.urlparse(base_url)
+        base_domain = parsed_base_url.netloc
         
+        # Make sure the base URL ends with a slash for proper joining
+        base_url_for_joining = base_url
+        if not base_url.endswith('/') and not parsed_base_url.path:
+            base_url_for_joining = f"{base_url}/"
+            
         links = []
         
-        # Top priority links - look for navigation menus and content areas where valuable links are likely to be
-        # Common navigation class/id patterns
+        # Expanded list of navigation class/id patterns to better capture rheumatology websites
         nav_selectors = [
+            # Basic navigation elements
             'nav', '.nav', '.menu', '.navigation', '#nav', '#menu', '#navigation',
             '.navbar', '.header-menu', '.main-menu', '.primary-menu', '.site-menu',
             'header', '.header', '#header', '.sidebar', '#sidebar', 
-            '.main-nav', '.top-nav', '.categories', '.chapters', '.sections',
-            '[role="navigation"]', '.topics', '#topics', '.diseases', '#diseases',
-            '.conditions', '#conditions'
+            '.main-nav', '.top-nav',
+            
+            # Content organization elements common in medical/academic sites
+            '.categories', '.chapters', '.sections', '.topics', '#topics', 
+            '.diseases', '#diseases', '.conditions', '#conditions',
+            
+            # Additional selectors for specific site structures
+            '[role="navigation"]', '.site-nav', '.dropdown-menu', '.submenu', 
+            '.accordion', '.card-header', '.tablist', '.tab-content',
+            '.tree-menu', '.tree-nav', '.list-group', '.collection-list',
+            '#content-navigation', '#page-navigation', '#sidebar-menu',
+            
+            # Target disease/topic sections specifically
+            '.disease-menu', '.topic-menu', '.condition-list', '.disease-list',
+            '#disease-navigation', '#topic-navigation', '.disease-categories',
+            '.topic-categories', '.clinical-topics', '.medical-topics'
         ]
         
         # Find all navigation elements
@@ -64,57 +84,91 @@ def _extract_links(html, base_url):
             for a_tag in nav.find_all('a', href=True):
                 href = a_tag['href']
                 
-                # Handle relative URLs
+                # Skip empty hrefs
+                if not href.strip():
+                    continue
+                    
+                # Handle different types of relative URLs more robustly
                 if href.startswith('/'):
-                    parsed_base = urllib.parse.urlparse(base_url)
-                    href = f"{parsed_base.scheme}://{parsed_base.netloc}{href}"
+                    # Absolute path relative to domain root
+                    href = f"{parsed_base_url.scheme}://{parsed_base_url.netloc}{href}"
+                elif href.startswith('./'):
+                    # Explicit relative to current directory
+                    href = urllib.parse.urljoin(base_url_for_joining, href[2:])
+                elif href.startswith('../'):
+                    # Relative to parent directory
+                    href = urllib.parse.urljoin(base_url_for_joining, href)
                 elif not href.startswith(('http://', 'https://')):
                     # Skip anchors and javascript links
                     if href.startswith('#') or href.startswith('javascript:'):
                         continue
-                    # Other relative paths
-                    if base_url.endswith('/'):
-                        href = f"{base_url}{href}"
-                    else:
-                        href = f"{base_url}/{href}"
+                    # Other relative paths - join with base URL
+                    href = urllib.parse.urljoin(base_url_for_joining, href)
+                
+                # Parse the new URL to check domain
+                parsed_href = urllib.parse.urlparse(href)
                 
                 # Only include links from the same domain
-                parsed_href = urllib.parse.urlparse(href)
                 if parsed_href.netloc == base_domain:
-                    # Remove fragments and normalize URL
-                    href = urllib.parse.urljoin(href, urllib.parse.urlparse(href).path)
-                    priority_links.append(href)
+                    # Clean URL - remove fragments and normalize
+                    clean_href = urllib.parse.urljoin(href, urllib.parse.urlparse(href).path)
                     
+                    # Sometimes clean_href drops the trailing slash which can be significant
+                    # If original had a trailing slash but clean doesn't, add it back
+                    if href.endswith('/') and not clean_href.endswith('/'):
+                        clean_href = f"{clean_href}/"
+                        
+                    # Also normalize to avoid www vs non-www duplicates
+                    if clean_href not in priority_links:
+                        priority_links.append(clean_href)
+        
         # Process remaining links from the page
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href']
             
-            # Handle relative URLs
+            # Skip empty hrefs
+            if not href.strip():
+                continue
+                
+            # Handle different types of relative URLs more robustly
             if href.startswith('/'):
-                parsed_base = urllib.parse.urlparse(base_url)
-                href = f"{parsed_base.scheme}://{parsed_base.netloc}{href}"
+                # Absolute path relative to domain root
+                href = f"{parsed_base_url.scheme}://{parsed_base_url.netloc}{href}"
+            elif href.startswith('./'):
+                # Explicit relative to current directory
+                href = urllib.parse.urljoin(base_url_for_joining, href[2:])
+            elif href.startswith('../'):
+                # Relative to parent directory
+                href = urllib.parse.urljoin(base_url_for_joining, href)
             elif not href.startswith(('http://', 'https://')):
                 # Skip anchors and javascript links
                 if href.startswith('#') or href.startswith('javascript:'):
                     continue
-                # Other relative paths
-                if base_url.endswith('/'):
-                    href = f"{base_url}{href}"
-                else:
-                    href = f"{base_url}/{href}"
+                # Other relative paths - join with base URL
+                href = urllib.parse.urljoin(base_url_for_joining, href)
+            
+            # Parse the new URL to check domain
+            parsed_href = urllib.parse.urlparse(href)
             
             # Only include links from the same domain
-            parsed_href = urllib.parse.urlparse(href)
             if parsed_href.netloc == base_domain:
-                # Remove fragments and normalize URL
-                href = urllib.parse.urljoin(href, urllib.parse.urlparse(href).path)
-                links.append(href)
+                # Clean URL - remove fragments and normalize
+                clean_href = urllib.parse.urljoin(href, urllib.parse.urlparse(href).path)
+                
+                # Sometimes clean_href drops the trailing slash which can be significant
+                # If original had a trailing slash but clean doesn't, add it back
+                if href.endswith('/') and not clean_href.endswith('/'):
+                    clean_href = f"{clean_href}/"
+                    
+                # Add if not already in priority links
+                if clean_href not in links and clean_href not in priority_links:
+                    links.append(clean_href)
         
         # Give priority to navigation links by placing them first
-        combined_links = priority_links + [link for link in links if link not in set(priority_links)]
+        combined_links = priority_links + links
         
-        # Remove duplicates
-        unique_links = list(dict.fromkeys(combined_links))  # Preserves order while removing duplicates
+        # Remove duplicates while preserving order
+        unique_links = list(dict.fromkeys(combined_links))
         
         # Look for disease/condition specific links which are high value
         rheumatology_keywords = [
@@ -361,7 +415,7 @@ def _process_page(url, page_queue, visited, results, max_pages):
     except Exception as e:
         logger.exception(f"Error processing page {url}: {str(e)}")
 
-def scrape_website(url, max_pages=20, max_wait_time=60):
+def scrape_website(url, max_pages=25, max_wait_time=120):
     """
     Scrape a website domain by crawling multiple pages and extract text content
     into chunks suitable for vector storage.
@@ -421,14 +475,88 @@ def scrape_website(url, max_pages=20, max_wait_time=60):
                 "/article/"
             ]
             
-            # Common rheumatology conditions to check for specific disease pages
+            # Expanded list of rheumatology conditions to check for specific disease pages
             rheumatology_diseases = [
-                "rheumatoid-arthritis", "lupus", "sle", "psoriatic-arthritis", 
-                "vasculitis", "scleroderma", "myositis", "igg4-related-disease", 
-                "sjögren", "sjogren", "gout", "ankylosing-spondylitis", 
-                "spondyloarthritis", "inflammatory-arthritis", "connective-tissue-disease",
-                "fibromyalgia", "osteoarthritis", "autoimmune", "uveitis", 
-                "rheumatic-disease", "dermatomyositis", "polymyositis", "systemic-sclerosis"
+                # Common inflammatory arthritides with URL variants
+                "rheumatoid-arthritis", "ra", "rheumatoid_arthritis", "rheumatoidarthritis", 
+                "rheumatoid", "arthritis-rheumatoid", "juvenile-rheumatoid-arthritis", "jra",
+                "psoriatic-arthritis", "psa", "psoriatic_arthritis", "psoriaticarthritis", 
+                "psoriatic", "arthritis-psoriatic", "psoriasis-arthritis",
+                "ankylosing-spondylitis", "as", "ankylosing_spondylitis", "ankylosingspondylitis", 
+                "spondylitis", "ankylosis",
+                "axial-spondyloarthritis", "axial-spa", "axspa", "axial_spondyloarthritis",
+                "peripheral-spondyloarthritis", "peripheral-spa", "perspa", "peripheral_spondyloarthritis",
+                "spondyloarthritis", "spa", "spondyloarthropathy", "spondyloarthropathies",
+                "reactive-arthritis", "reactive_arthritis", "reiter", "reiters-syndrome",
+                "enteropathic-arthritis", "enteropathic_arthritis", "ibd-arthritis",
+                "inflammatory-arthritis", "inflammatory_arthritis", "inflammatory-joint-disease",
+                "erosive-arthritis", "seronegative-arthritis", "seropositive-arthritis",
+                
+                # Connective tissue diseases with URL variants
+                "lupus", "sle", "systemic-lupus-erythematosus", "systemic_lupus", "lupus-erythematosus",
+                "cutaneous-lupus", "cle", "drug-induced-lupus", "dil", "neonatal-lupus", "lupus-nephritis",
+                "scleroderma", "systemic-sclerosis", "ssc", "systemic_sclerosis", "systemicsclerosis",
+                "limited-scleroderma", "diffuse-scleroderma", "crest-syndrome", "morphea",
+                "myositis", "inflammatory-myopathy", "idiopathic-inflammatory-myopathy", "iim",
+                "dermatomyositis", "dm", "polymyositis", "pm", "inclusion-body-myositis", "ibm", 
+                "anti-synthetase-syndrome", "necrotizing-myopathy", "immune-mediated-necrotizing-myopathy",
+                "sjögren", "sjogren", "sjögrens-syndrome", "sjogrens-syndrome", "ss", "sicca-syndrome",
+                "sjögrens-disease", "sjogrens-disease", "sjögrens_syndrome", "sjogrens_syndrome",
+                "mixed-connective-tissue-disease", "mctd", "mixed_connective", "mctdisease", "overlap-syndrome",
+                "undifferentiated-connective-tissue-disease", "uctd", "connective-tissue-disease", "ctd",
+                "connective_tissue", "connectivetissue",
+                
+                # Vasculitides with URL variants
+                "vasculitis", "vasculitides", "large-vessel-vasculitis", "medium-vessel-vasculitis", 
+                "small-vessel-vasculitis", "leukocytoclastic-vasculitis", "cutaneous-vasculitis",
+                "giant-cell-arteritis", "gca", "temporal-arteritis", "cranial-arteritis", "horton",
+                "takayasus-arteritis", "takayasu", "tak", "takayasus_arteritis", "takayasuarteritis",
+                "polyarteritis-nodosa", "pan", "kussmaul-disease", "kawasaki-disease", "mucocutaneous-lymph-node-syndrome",
+                "anca-vasculitis", "anca-associated-vasculitis", "aav", "anca_vasculitis", "anca_associated",
+                "granulomatosis-with-polyangiitis", "gpa", "wegeners", "wegener", "wegeners-granulomatosis",
+                "microscopic-polyangiitis", "mpa", "microscopic_polyangiitis", "microscopicpolyangiitis",
+                "eosinophilic-granulomatosis-with-polyangiitis", "egpa", "churg-strauss", "churg_strauss",
+                "igg4-related-disease", "igg4-rd", "igg4_related", "igg4", "igg4relateddisease",
+                "behcets-disease", "behcets-syndrome", "behcet", "behcets", "adamantiades",
+                
+                # Autoinflammatory conditions with URL variants
+                "adult-onset-stills-disease", "aosd", "stills-disease", "still", "adult_stills", "adultstills",
+                "systemic-juvenile-idiopathic-arthritis", "sjia", "juvenile-idiopathic-arthritis", "jia",
+                "periodic-fever-syndrome", "autoinflammatory-syndrome", "autoinflammatory-disease",
+                "familial-mediterranean-fever", "fmf", "mediterranean_fever", "familial_mediterranean", 
+                "cryopyrin-associated-periodic-syndrome", "caps", "cryopyrin", "muckle-wells", "fcas",
+                "tumor-necrosis-factor-receptor-associated-periodic-syndrome", "traps",
+                "hyperimmunoglobulin-d-syndrome", "hids", "mevalonate-kinase-deficiency", "mkd",
+                
+                # Crystal arthropathies with URL variants
+                "gout", "gouty-arthritis", "tophaceous-gout", "uric-acid", "urate", "hyperuricemia",
+                "calcium-pyrophosphate-deposition", "cppd", "pseudogout", "chondrocalcinosis", "pyrophosphate-arthropathy",
+                "basic-calcium-phosphate", "bcp", "hydroxyapatite-deposition-disease", "hadd",
+                "crystal-induced-arthritis", "crystal-arthropathy", "crystal-arthritis", "microcrystalline-arthritis",
+                
+                # Other rheumatic conditions with URL variants
+                "fibromyalgia", "fibrositis", "chronic-widespread-pain", "fibromyalgia-syndrome", "fms",
+                "osteoarthritis", "oa", "degenerative-joint-disease", "djd", "osteoarthrosis", "degenerative-arthritis",
+                "erosive-osteoarthritis", "primary-osteoarthritis", "secondary-osteoarthritis",
+                "polymyalgia-rheumatica", "pmr", "polymyalgia_rheumatica", "polymyalgiarheumatica",
+                "autoimmune", "autoimmunity", "autoimmune-disease", "autoimmune-condition", "autoimmune-disorder",
+                "uveitis", "iritis", "iridocyclitis", "chorioretinitis", "scleritis", "episcleritis",
+                "sarcoidosis", "lofgrens-syndrome", "lofgren", "sarcoid", "sarcoidosis-arthritis",
+                "anti-phospholipid-syndrome", "aps", "antiphospholipid", "anti_phospholipid", "hughes-syndrome",
+                "relapsing-polychondritis", "rpc", "polychondritis", "atrophic-polychondritis",
+                "rheumatic-disease", "rheumatic-disorder", "rheumatic-condition", "rheumatic-illness",
+                "raynauds", "raynauds-phenomenon", "raynauds-syndrome", "raynaud", "primary-raynauds", "secondary-raynauds",
+                "reactive-arthritis", "enteropathic-arthritis", "enthesitis", "dactylitis", "synovitis",
+                
+                # Common treatment terms that indicate relevant pages
+                "dmard", "dmards", "biologic", "biologics", "tnf", "anti-tnf", "jak-inhibitor",
+                "methotrexate", "hydroxychloroquine", "leflunomide", "sulfasalazine", 
+                "rituximab", "abatacept", "tocilizumab", "anakinra", "baricitinib", "tofacitinib",
+                "remission", "acr-response", "das28", "joint-flare", "flare-management",
+                
+                # Use simpler or abbreviated terms that may appear in URLs
+                "sjd", "ra", "psa", "spa", "as", "sle", "ssc", "dm", "pm", "ss", "gout", "oa", "vasc", "lupus",
+                "arthritis", "immune", "rheumatic", "rheum", "arthr", "inflamm", "itis", "pain", "rheumatology"
             ]
             
             # Try all potential disease paths for common rheumatology conditions
@@ -452,7 +580,17 @@ def scrape_website(url, max_pages=20, max_wait_time=60):
                 if main_downloaded:
                     # Use soup to find all links on the page
                     soup = BeautifulSoup(main_downloaded, 'html.parser')
-                    prioritized_terms = ["rheumatoid", "arthritis", "lupus", "vasculitis", "igg4", "autoimmune"]
+                    # Expanded list of terms to check in main page links
+                    prioritized_terms = [
+                        # Common terms
+                        "rheumatoid", "arthritis", "lupus", "vasculitis", "igg4", "autoimmune",
+                        # Disease abbreviations 
+                        "ra", "sle", "psa", "as", "spa", "ssc", "pm", "dm", "ss", "aps",
+                        # Disease-specific terms
+                        "sjögren", "sjogren", "sjd", "gout", "myositis", "spondyl", "sclero", "dermato",
+                        # Common site organization terms
+                        "topic", "disease", "condition", "disorder", "syndrome"
+                    ]
                     
                     for a_tag in soup.find_all('a', href=True):
                         link_href = a_tag['href']

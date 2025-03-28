@@ -235,7 +235,28 @@ def generate_response(query, context_documents):
             "13. If the documents contain website navigation elements or section headers related to the query, interpret these as indications that the website contains content on those topics.\n"
             "14. For website content that appears to be chapter or section titles, extrapolate that the site likely contains detailed information on those topics even if not provided in the context.\n"
             "15. When discussing any rheumatology condition, include details on clinical phenotypes, organ involvement, diagnosis, and treatment approaches if found in the context.\n"
-            "16. If you see even brief mentions of specific conditions in the context, prioritize these for a comprehensive answer."
+            "16. If you see even brief mentions of specific conditions in the context, prioritize these for a comprehensive answer.\n"
+            
+            "SPECIALIZED RHEUMATOLOGY GUIDELINES:\n"
+            "17. You are a comprehensive rheumatology knowledge base covering ALL rheumatic conditions including:\n"
+            "   - Inflammatory arthritides (RA, PsA, SpA, AS, etc.)\n"
+            "   - Connective tissue diseases (SLE, SSc, myositis, Sjögren's, MCTD, etc.)\n"
+            "   - Vasculitides (GCA, Takayasu's, ANCA-associated, IgG4-RD, etc.)\n"
+            "   - Crystal arthropathies (gout, CPPD, BCP, etc.)\n"
+            "   - Autoinflammatory syndromes (AOSD, FMF, CAPS, etc.)\n"
+            "   - Other conditions (fibromyalgia, osteoarthritis, PMR, etc.)\n"
+            
+            "18. When encountering disease abbreviations or terms in context, recognize their significance:\n"
+            "   - 'RA' → rheumatoid arthritis, 'PsA' → psoriatic arthritis, 'SpA' → spondyloarthritis\n"
+            "   - 'AS' → ankylosing spondylitis, 'axSpA' → axial spondyloarthritis\n"
+            "   - 'SLE' → systemic lupus erythematosus, 'SSc' → systemic sclerosis, 'MCTD' → mixed connective tissue disease\n"
+            "   - 'GCA' → giant cell arteritis, 'PMR' → polymyalgia rheumatica\n"
+            "   - 'ANCA' → anti-neutrophil cytoplasmic antibody, 'GPA' → granulomatosis with polyangiitis\n"
+            "   - 'IgG4-RD' → IgG4-related disease\n"
+            
+            "19. Emphasize the multisystem nature and disease spectrum of rheumatic conditions, acknowledging that many have overlapping features\n"
+            
+            "20. Interpret website navigation sections about specific diseases as strong evidence that the site contains comprehensive information about these conditions"
         )
         
         response = client.chat.completions.create(
@@ -299,7 +320,26 @@ def generate_response(query, context_documents):
                     "4. If a rheumatology website has ANY mention of a specific condition in its structure, it should be interpreted as covering this topic in depth.\n"
                     "5. For disease-specific questions, look for clinical phenotypes, organ involvement patterns, diagnostic criteria, and treatment approaches.\n"
                     "6. Even passing mentions of autoimmune or inflammatory conditions should be included in your answer as they may be relevant.\n"
-                    "7. CRITICAL: Websites that list specific rheumatology diseases as categories are specialty sources that absolutely have detailed information on those conditions."
+                    "7. CRITICAL: Websites that list specific rheumatology diseases as categories are specialty sources that absolutely have detailed information on those conditions.\n\n"
+                    
+                    "COMPREHENSIVE RHEUMATOLOGY KNOWLEDGE BASE:\n"
+                    "You cover ALL rheumatic conditions including:\n"
+                    "- Inflammatory arthritides (RA, PsA, SpA, AS, etc.)\n"
+                    "- Connective tissue diseases (SLE, SSc, myositis, Sjögren's, MCTD, etc.)\n"
+                    "- Vasculitides (GCA, Takayasu's, ANCA-associated, IgG4-RD, etc.)\n"
+                    "- Crystal arthropathies (gout, CPPD, BCP, etc.)\n"
+                    "- Autoinflammatory syndromes (AOSD, FMF, CAPS, etc.)\n"
+                    "- Other conditions (fibromyalgia, osteoarthritis, PMR, etc.)\n\n"
+                    
+                    "When encountering disease abbreviations in context, recognize them:\n"
+                    "- 'RA' → rheumatoid arthritis, 'PsA' → psoriatic arthritis, 'SpA' → spondyloarthritis\n"
+                    "- 'AS' → ankylosing spondylitis, 'axSpA' → axial spondyloarthritis\n"
+                    "- 'SLE' → systemic lupus erythematosus, 'SSc' → systemic sclerosis\n"
+                    "- 'GCA' → giant cell arteritis, 'PMR' → polymyalgia rheumatica\n"
+                    "- 'ANCA' → anti-neutrophil cytoplasmic antibody, 'GPA' → granulomatosis with polyangiitis\n"
+                    "- 'IgG4-RD' → IgG4-related disease\n\n"
+                    
+                    "Emphasize the multisystem nature of rheumatic conditions, and acknowledge that many have overlapping features."
                 )
                 
                 retry_response = client.chat.completions.create(

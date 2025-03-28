@@ -274,20 +274,67 @@ class VectorStore:
                         logger.debug(f"Applied query term relevance boost: {relevance_boost}")
                     
                     # Special boost for disease-specific content
-                    # These terms are common in rheumatology disease pages
-                    disease_terms = ["rheumatoid arthritis", "lupus", "sle", "psoriatic", "vasculitis", 
-                                      "scleroderma", "myositis", "igg4", "sjögren", "sjogren", "gout", 
-                                      "ankylosing", "spondylitis", "inflammatory", "arthritis", "connective tissue",
-                                      "fibromyalgia", "osteoarthritis", "autoimmune", "uveitis", "ibd", 
-                                      "rheumatic", "dermatomyositis", "polymyositis", "systemic sclerosis"]
+                    # These terms are common in rheumatology disease pages, expanded to include more conditions
+                    disease_terms = [
+                        # Common inflammatory arthritides
+                        "rheumatoid arthritis", "ra", "psoriatic arthritis", "psa", "ankylosing spondylitis", "as",
+                        "axial spondyloarthritis", "peripheral spondyloarthritis", "spondyloarthritis", 
+                        "reactive arthritis", "inflammatory arthritis",
+                        
+                        # Connective tissue diseases
+                        "lupus", "sle", "systemic lupus erythematosus", "scleroderma", "systemic sclerosis", "ssc",
+                        "myositis", "dermatomyositis", "polymyositis", "inclusion body myositis", 
+                        "sjögren", "sjogren", "sjögrens", "sjogrens", "mixed connective tissue disease", "mctd",
+                        "undifferentiated connective tissue disease", "uctd", "connective tissue disease",
+                        
+                        # Vasculitides
+                        "vasculitis", "giant cell arteritis", "gca", "takayasus", "polyarteritis nodosa", 
+                        "kawasaki", "anca vasculitis", "granulomatosis with polyangiitis", "gpa", "wegeners",
+                        "microscopic polyangiitis", "mpa", "eosinophilic granulomatosis", "egpa", "churg strauss",
+                        "igg4", "igg4-related disease", "igg4-rd", "behcets",
+                        
+                        # Autoinflammatory conditions
+                        "stills disease", "juvenile idiopathic arthritis", "periodic fever syndrome",
+                        "familial mediterranean fever", "cryopyrin associated periodic syndrome", "caps",
+                        
+                        # Crystal arthropathies
+                        "gout", "calcium pyrophosphate deposition", "cppd", "pseudogout", "crystal arthritis",
+                        
+                        # Other rheumatic conditions
+                        "osteoarthritis", "oa", "fibromyalgia", "polymyalgia rheumatica", "pmr",
+                        "autoimmune", "uveitis", "sarcoidosis", "anti-phospholipid syndrome", "aps",
+                        "relapsing polychondritis", "raynauds", "arthritis", "rheumatic"
+                    ]
                     
                     # Check if any disease terms are in the text (case insensitive)
                     text_lower = result['text'].lower()
                     found_disease_terms = [term for term in disease_terms if term in text_lower]
                     
-                    if found_disease_terms:
+                    # Check for disease terms in the URL or page title
+                    url = result['metadata'].get('url', '').lower()
+                    title = result['metadata'].get('title', '').lower()
+                    
+                    # Check if URL contains disease-specific patterns common in rheumatology websites
+                    url_disease_indicators = any(pattern in url for pattern in [
+                        "topic/", "disease/", "condition/", "chapters/", "articles/", 
+                        "rheumatoid", "lupus", "arthritis", "myositis", "sjogren", "vasculitis"
+                    ])
+                    
+                    # Combine found terms with URL indicators for stronger boost for actual disease pages
+                    if found_disease_terms or url_disease_indicators:
                         # Apply stronger boost for disease-specific content
-                        disease_boost = 0.15 + (0.02 * len(found_disease_terms))  # Base + additional for more terms
+                        disease_boost = 0.15 + (0.03 * len(found_disease_terms))  # Base + additional for more terms
+                        
+                        # Extra boost for disease terms in URL or title (likely more relevant page)
+                        if url_disease_indicators:
+                            disease_boost += 0.10  # Significant boost for disease-specific URLs
+                            logger.debug(f"Applied URL disease pattern boost: {url}")
+                            
+                        # Additional boost if disease terms are found in title
+                        title_disease_terms = [term for term in disease_terms if term in title]
+                        if title_disease_terms:
+                            disease_boost += 0.08  # Good boost for disease terms in title
+                            logger.debug(f"Applied title disease term boost: {title}")
                         
                         # Apply additional boost for content that directly matches keywords in the query
                         # This helps any disease-specific query, not just a specific condition
