@@ -625,8 +625,14 @@ def add_topic_pages():
                 # Process the topic page with strict limits to avoid memory issues
                 logger.info(f"Processing topic page: {url}")
                 try:
-                    # Try with very limited crawling (2 pages max, 45 second timeout)
-                    chunks = scrape_website(url, max_pages=2, max_wait_time=45)
+                    # Use minimal content fetching for topic pages to prevent memory issues
+                    # First try direct minimal content extraction which is optimized for topic pages
+                    chunks = create_minimal_content_for_topic(url)
+                    
+                    # If that fails, fall back to very limited crawling with strict memory constraints
+                    if not chunks:
+                        logger.info(f"Minimal content extraction failed for {url}, trying limited crawler")
+                        chunks = scrape_website(url, max_pages=1, max_wait_time=30)
                 except Exception as e:
                     logger.error(f"Error processing topic {topic}: {str(e)}")
                     failed_topics.append({"topic": topic, "reason": f"Error: {str(e)}"})

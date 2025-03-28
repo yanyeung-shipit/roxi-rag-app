@@ -1392,7 +1392,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: formData
             });
             
-            const data = await response.json();
+            // Check if response is OK and contains JSON
+            if (!response.ok) {
+                throw new Error(`Server returned status ${response.status}: ${response.statusText}`);
+            }
+            
+            // Try to parse as JSON with error handling
+            let data;
+            try {
+                const text = await response.text();
+                data = JSON.parse(text);
+            } catch (parseError) {
+                console.error("Error parsing JSON response:", parseError);
+                throw new Error("Server returned an invalid response format. Please try again.");
+            }
             
             if (data.success) {
                 // Success message
