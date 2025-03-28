@@ -27,18 +27,20 @@ document.addEventListener('DOMContentLoaded', () => {
         backToDocumentsBtn: document.getElementById('backToDocumentsBtn'),
         refreshDocumentsBtn: document.getElementById('refreshDocumentsBtn'),
         
-        // Background processing
-        refreshBackgroundStatusBtn: document.getElementById('refresh-background-status'),
-        backgroundStatusContent: document.getElementById('background-status-content'),
-        
         // Collection elements
-        newCollectionBtn: document.getElementById('newCollectionBtn'),
-        createCollectionBtn: document.getElementById('createCollectionBtn'),
         collectionsList: document.getElementById('collectionsList'),
         collectionDetailCard: document.getElementById('collectionDetailCard'),
         collectionDetailTitle: document.getElementById('collectionDetailTitle'),
         collectionDescription: document.getElementById('collectionDescription'),
         collectionDocumentsList: document.getElementById('collectionDocumentsList'),
+        refreshCollectionsBtn: document.getElementById('refreshCollectionsBtn'),
+        backToCollectionsBtn: document.getElementById('backToCollectionsBtn'),
+        newCollectionBtn: document.getElementById('newCollectionBtn'),
+        createCollectionBtn: document.getElementById('createCollectionBtn'),
+        
+        // Background processing
+        refreshBackgroundStatusBtn: document.getElementById('refresh-background-status'),
+        backgroundStatusContent: document.getElementById('background-status-content'),
         addToCollectionBtn: document.getElementById('addToCollectionBtn'),
         documentSelectionList: document.getElementById('documentSelectionList'),
         confirmAddToCollectionBtn: document.getElementById('confirmAddToCollectionBtn'),
@@ -152,6 +154,15 @@ document.addEventListener('DOMContentLoaded', () => {
         safeAddEventListener('createCollectionBtn', 'click', createCollection);
         safeAddEventListener('confirmAddToCollectionBtn', 'click', addDocumentsToCollection);
         safeAddEventListener('confirmDeleteBtn', 'click', deleteDocument);
+        safeAddEventListener('refreshCollectionsBtn', 'click', loadCollections);
+        safeAddEventListener('backToCollectionsBtn', 'click', () => {
+            if (elements.collectionDetailCard) {
+                elements.collectionDetailCard.style.display = 'none';
+                selectedCollectionId = null;
+                // Make sure collections are visible
+                loadCollections();
+            }
+        });
         
         // Setup new collection button modal trigger
         safeAddEventListener('newCollectionBtn', 'click', function() {

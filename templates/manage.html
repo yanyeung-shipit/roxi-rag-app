@@ -226,8 +226,13 @@
 
     <div class="col-lg-4">
         <div class="card bg-dark border-secondary mb-4">
-            <div class="card-header bg-dark text-light">
+            <div class="card-header bg-dark text-light d-flex justify-content-between align-items-center">
                 <h5><i class="fas fa-layer-group me-2"></i>Collections</h5>
+                <div class="btn-group" role="group">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="refreshCollectionsBtn">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
             </div>
             <div class="card-body">
                 <div id="collectionsContainer">
@@ -244,8 +249,13 @@
         </div>
 
         <div class="card bg-dark border-secondary mb-4" id="collectionDetailCard" style="display:none;">
-            <div class="card-header bg-dark text-light">
+            <div class="card-header bg-dark text-light d-flex justify-content-between align-items-center">
                 <h5 id="collectionDetailTitle"><i class="fas fa-folder me-2"></i>Collection Details</h5>
+                <div class="btn-group" role="group">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="backToCollectionsBtn">
+                        <i class="fas fa-arrow-left"></i> Back
+                    </button>
+                </div>
             </div>
             <div class="card-body">
                 <div id="collectionDetailContainer">
