@@ -302,8 +302,8 @@ def bulk_upload_pdfs():
                 'message': 'No valid PDF files provided. Only PDF files are allowed.'
             }), 400
         
-        # Maximum number of files to process at once
-        max_files = 5  # Reduced from 10 to 5 files in one batch
+        # Maximum number of files to queue at once
+        max_files = 50  # Increased limit to 50 files
         if len(valid_files) > max_files:
             logger.warning(f"Too many files: {len(valid_files)}. Maximum allowed is {max_files}")
             return jsonify({
@@ -367,101 +367,19 @@ def bulk_upload_pdfs():
                 'message': 'Failed to save any of the provided files.'
             }), 500
         
-        # Process the first document immediately, and queue the rest
+        # Queue all documents for background processing
         try:
             if document_ids:
-                # Get just the first document to process immediately (for responsive UI)
-                first_doc = Document.query.get(document_ids[0])
+                logger.info(f"Queued {len(document_ids)} documents for background processing")
                 
-                if first_doc and first_doc.file_path:
-                    logger.info(f"Starting immediate processing of first document: {first_doc.filename}")
-                    try:
-                        # Process this PDF
-                        chunks, metadata = process_pdf(first_doc.file_path, first_doc.filename)
-                        
-                        # Update document with metadata if available
-                        if metadata:
-                            # Skip documents with errors
-                            if 'error' not in metadata:
-                                if 'page_count' in metadata:
-                                    first_doc.page_count = metadata['page_count']
-                                if 'doi' in metadata and metadata['doi']:
-                                    first_doc.doi = metadata['doi']
-                                if 'authors' in metadata and metadata['authors']:
-                                    first_doc.authors = metadata['authors']
-                                if 'journal' in metadata and metadata['journal']:
-                                    first_doc.journal = metadata['journal']
-                                if 'publication_year' in metadata and metadata['publication_year']:
-                                    first_doc.publication_year = metadata['publication_year']
-                                if 'volume' in metadata and metadata['volume']:
-                                    first_doc.volume = metadata['volume']
-                                if 'issue' in metadata and metadata['issue']:
-                                    first_doc.issue = metadata['issue']
-                                if 'pages' in metadata and metadata['pages']:
-                                    first_doc.pages = metadata['pages']
-                                if 'formatted_citation' in metadata and metadata['formatted_citation']:
-                                    first_doc.formatted_citation = metadata['formatted_citation']
-                                
-                                # If we have at least a journal name or authors, set a better title
-                                if first_doc.journal and not first_doc.title.startswith(first_doc.journal):
-                                    if first_doc.authors:
-                                        authors_short = first_doc.authors.split(';')[0] + " et al." if ";" in first_doc.authors else first_doc.authors
-                                        first_doc.title = f"{authors_short} - {first_doc.journal}"
-                                    else:
-                                        first_doc.title = first_doc.journal
-                                
-                                # Process chunks if available
-                                if chunks:
-                                    # Limit chunks to a reasonable number
-                                    max_chunks = 40
-                                    process_chunks = chunks[:max_chunks] if len(chunks) > max_chunks else chunks
-                                    
-                                    # Add chunks to vector store and database
-                                    chunk_records = []
-                                    for i, chunk in enumerate(process_chunks):
-                                        try:
-                                            # Add to vector store
-                                            vector_store.add_text(chunk['text'], chunk['metadata'])
-                                            
-                                            # Create chunk record
-                                            chunk_record = DocumentChunk(
-                                                document_id=first_doc.id,
-                                                chunk_index=i,
-                                                page_number=chunk['metadata'].get('page', None),
-                                                text_content=chunk['text']
-                                            )
-                                            chunk_records.append(chunk_record)
-                                        except Exception as chunk_error:
-                                            logger.warning(f"Error adding chunk {i} from {first_doc.filename}: {str(chunk_error)}")
-                                    
-                                    # Save chunk records
-                                    if chunk_records:
-                                        db.session.add_all(chunk_records)
-                                
-                                # Mark document as processed
-                                first_doc.processed = True
-                                
-                                # Save changes
-                                db.session.commit()
-                                vector_store._save()
-                                
-                                logger.info(f"Successfully processed first document: {first_doc.filename}")
-                    except Exception as doc_error:
-                        logger.warning(f"Error processing first document: {str(doc_error)}")
-                        # Continue execution, we still want to return successfully
-            
-            # Start a separate thread for processing the rest of the documents
-            # This is simulated for now - in production you'd use a job queue like Celery
-            if len(document_ids) > 1:
-                logger.info(f"Queued {len(document_ids) - 1} additional documents for background processing")
-            
-            # Return success
-            return jsonify({
-                'success': True,
-                'message': f'Successfully uploaded {len(pdf_paths)} PDF files. First document processed, others queued for background processing.',
-                'document_ids': document_ids,
-                'pending_processing': len(document_ids) > 1
-            })
+                # Return success
+                return jsonify({
+                    'success': True,
+                    'message': f'Successfully uploaded {len(pdf_paths)} PDF files. All files have been queued for background processing.',
+                    'document_ids': document_ids,
+                    'queued_count': len(document_ids),
+                    'pending_processing': True
+                })
             
         except Exception as processing_error:
             logger.exception(f"Error in processing: {str(processing_error)}")
