@@ -41,6 +41,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentCollections = [];
     let selectedCollectionId = null;
     let documentToDeleteId = null;
+    let collectionToDeleteId = null;
 
     // Initialize
     loadDocuments();
@@ -151,6 +152,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (bsModal) {
                 bsModal.hide();
                 console.log("Modal hidden using Bootstrap 5 API");
+                
+                // Extra cleanup for backdrop
+                setTimeout(() => {
+                    cleanupModalBackdrop();
+                }, 300);
                 return;
             }
         } catch (error1) {
@@ -161,6 +167,11 @@ document.addEventListener('DOMContentLoaded', () => {
             // Try jQuery way
             $(modalElement).modal('hide');
             console.log("Modal hidden using jQuery");
+            
+            // Extra cleanup for backdrop
+            setTimeout(() => {
+                cleanupModalBackdrop();
+            }, 300);
             return;
         } catch (error2) {
             console.warn("jQuery modal hide failed:", error2);
@@ -172,15 +183,32 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.body.classList.remove('modal-open');
                 
                 // Remove backdrop
-                const backdrop = document.querySelector('.modal-backdrop');
-                if (backdrop) {
-                    backdrop.parentNode.removeChild(backdrop);
-                }
+                cleanupModalBackdrop();
                 console.log("Modal hidden manually by DOM manipulation");
             } catch (error3) {
                 console.error("Manual modal hide failed:", error3);
             }
         }
+    }
+    
+    // Helper function to clean up modal backdrops
+    function cleanupModalBackdrop() {
+        console.log("Cleaning up modal backdrop");
+        
+        // Remove all modal-backdrop elements
+        const backdrops = document.querySelectorAll('.modal-backdrop');
+        backdrops.forEach(backdrop => {
+            backdrop.parentNode.removeChild(backdrop);
+        });
+        
+        // Make sure body doesn't have modal-open class
+        document.body.classList.remove('modal-open');
+        
+        // Remove inline style that might have been added to body
+        document.body.style.removeProperty('padding-right');
+        document.body.style.removeProperty('overflow');
+        
+        console.log(`Removed ${backdrops.length} backdrops`);
     }
 
     // Load all documents
@@ -507,28 +535,58 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             
-            const item = document.createElement('a');
-            item.href = '#';
-            item.className = 'list-group-item list-group-item-action d-flex justify-content-between align-items-center';
+            const item = document.createElement('div');
+            item.className = 'list-group-item list-group-item-dark d-flex justify-content-between align-items-center';
             item.dataset.id = collection.id;
             
             const documentCount = collection.document_count || 0;
             
             item.innerHTML = `
-                <div>
-                    <i class="fas fa-folder me-2"></i>
-                    <span>${collection.name || 'Unnamed Collection'}</span>
+                <a href="#" class="text-decoration-none collection-link" data-id="${collection.id}">
+                    <div class="d-flex align-items-center">
+                        <i class="fas fa-folder me-2"></i>
+                        <span>${collection.name || 'Unnamed Collection'}</span>
+                        <span class="badge bg-primary rounded-pill ms-2">${documentCount}</span>
+                    </div>
+                </a>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-info btn-sm edit-collection" data-id="${collection.id}" title="Edit Collection">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    <button class="btn btn-outline-danger btn-sm delete-collection" data-id="${collection.id}" title="Delete Collection">
+                        <i class="fas fa-trash"></i>
+                    </button>
                 </div>
-                <span class="badge bg-primary rounded-pill">${documentCount}</span>
             `;
             
             elements.collectionsList.appendChild(item);
             
-            // Add click event
-            item.addEventListener('click', (e) => {
-                e.preventDefault();
-                viewCollection(collection.id);
-            });
+            // Add click events
+            const collectionLink = item.querySelector('.collection-link');
+            if (collectionLink) {
+                collectionLink.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    viewCollection(collection.id);
+                });
+            }
+            
+            const editBtn = item.querySelector('.edit-collection');
+            if (editBtn) {
+                editBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    showEditCollectionModal(collection);
+                });
+            }
+            
+            const deleteBtn = item.querySelector('.delete-collection');
+            if (deleteBtn) {
+                deleteBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    showDeleteCollectionConfirmation(collection.id, collection.name);
+                });
+            }
         });
     }
 
@@ -867,6 +925,208 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error("Error deleting document:", error);
             alert(`Error deleting document: ${error.message}`);
+        }
+    }
+    
+    // Show edit collection modal
+    function showEditCollectionModal(collection) {
+        try {
+            console.log(`Showing edit modal for collection ${collection.id}: "${collection.name}"`);
+            
+            const idInput = document.getElementById('editCollectionId');
+            const nameInput = document.getElementById('editCollectionName');
+            const descriptionInput = document.getElementById('editCollectionDescription');
+            
+            if (idInput) idInput.value = collection.id;
+            if (nameInput) nameInput.value = collection.name || '';
+            if (descriptionInput) descriptionInput.value = collection.description || '';
+            
+            // Show the modal
+            showModal('editCollectionModal');
+            
+            // Set up update button click handler
+            const updateBtn = document.getElementById('updateCollectionBtn');
+            if (updateBtn) {
+                // Remove any existing event listeners to prevent duplicates
+                const newUpdateBtn = updateBtn.cloneNode(true);
+                updateBtn.parentNode.replaceChild(newUpdateBtn, updateBtn);
+                
+                newUpdateBtn.addEventListener('click', updateCollection);
+            }
+        } catch (error) {
+            console.error("Error showing edit collection modal:", error);
+            alert(`Error preparing collection edit: ${error.message}`);
+        }
+    }
+    
+    // Update collection
+    async function updateCollection() {
+        try {
+            console.log("Updating collection");
+            
+            const idInput = document.getElementById('editCollectionId');
+            const nameInput = document.getElementById('editCollectionName');
+            const descriptionInput = document.getElementById('editCollectionDescription');
+            
+            if (!idInput || !idInput.value) {
+                console.error("No collection ID for update");
+                alert('Error: Missing collection ID');
+                return;
+            }
+            
+            const collectionId = idInput.value;
+            const name = nameInput ? nameInput.value.trim() : '';
+            const description = descriptionInput ? descriptionInput.value.trim() : '';
+            
+            if (!name) {
+                alert('Please enter a collection name');
+                return;
+            }
+            
+            // Disable the update button
+            const updateBtn = document.getElementById('updateCollectionBtn');
+            if (updateBtn) {
+                updateBtn.disabled = true;
+                updateBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Updating...';
+            }
+            
+            // Prepare request data
+            const payload = {
+                name: name,
+                description: description
+            };
+            
+            console.log(`Updating collection ${collectionId} with data:`, payload);
+            
+            // Make the API request
+            const response = await fetch(`/collections/${collectionId}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+            
+            const data = await response.json();
+            
+            // Hide the modal
+            hideModal('editCollectionModal');
+            
+            if (data.success) {
+                console.log("Collection updated successfully");
+                alert(data.message || 'Collection updated successfully');
+                
+                // Refresh collections
+                loadCollections();
+            } else {
+                console.error("Error updating collection:", data.message);
+                alert(`Error: ${data.message || 'Unknown error updating collection'}`);
+            }
+        } catch (error) {
+            console.error("Error updating collection:", error);
+            alert(`Error updating collection: ${error.message}`);
+        } finally {
+            // Re-enable the button
+            const updateBtn = document.getElementById('updateCollectionBtn');
+            if (updateBtn) {
+                updateBtn.disabled = false;
+                updateBtn.innerHTML = 'Save Changes';
+            }
+        }
+    }
+    
+    // Show delete collection confirmation
+    function showDeleteCollectionConfirmation(collectionId, name) {
+        try {
+            console.log(`Showing delete confirmation for collection ${collectionId}: "${name}"`);
+            
+            // Store the collection ID for deletion
+            collectionToDeleteId = collectionId;
+            
+            // Set the name in the confirmation dialog
+            const nameElement = document.getElementById('deleteCollectionName');
+            if (nameElement) {
+                nameElement.textContent = name || 'this collection';
+            }
+            
+            // Show the modal
+            showModal('deleteCollectionModal');
+            
+            // Set up delete button click handler
+            const deleteBtn = document.getElementById('confirmDeleteCollectionBtn');
+            if (deleteBtn) {
+                // Remove any existing event listeners to prevent duplicates
+                const newDeleteBtn = deleteBtn.cloneNode(true);
+                deleteBtn.parentNode.replaceChild(newDeleteBtn, deleteBtn);
+                
+                newDeleteBtn.addEventListener('click', deleteCollection);
+            }
+        } catch (error) {
+            console.error("Error showing delete collection confirmation:", error);
+            
+            // Fallback if modal doesn't work
+            const confirmDelete = confirm(`Do you want to delete "${name || 'this collection'}"?`);
+            if (confirmDelete) {
+                deleteCollection();
+            }
+        }
+    }
+    
+    // Delete a collection
+    async function deleteCollection() {
+        try {
+            if (!collectionToDeleteId) {
+                console.error("No collection selected for deletion");
+                return;
+            }
+            
+            console.log(`Deleting collection ${collectionToDeleteId}`);
+            
+            // Disable the delete button
+            const deleteBtn = document.getElementById('confirmDeleteCollectionBtn');
+            if (deleteBtn) {
+                deleteBtn.disabled = true;
+                deleteBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting...';
+            }
+            
+            const response = await fetch(`/collections/${collectionToDeleteId}`, {
+                method: 'DELETE'
+            });
+            
+            const data = await response.json();
+            
+            // Hide the modal
+            hideModal('deleteCollectionModal');
+            
+            if (data.success) {
+                console.log("Collection deleted successfully");
+                
+                // Reload collections
+                loadCollections();
+                
+                // If we're viewing the deleted collection, clear the view
+                if (selectedCollectionId == collectionToDeleteId) {
+                    selectedCollectionId = null;
+                    if (elements.collectionDetailCard) {
+                        elements.collectionDetailCard.style.display = 'none';
+                    }
+                }
+                
+                alert(data.message || 'Collection deleted successfully');
+            } else {
+                console.error("Error deleting collection:", data.message);
+                alert(`Error: ${data.message || 'Unknown error deleting collection'}`);
+            }
+        } catch (error) {
+            console.error("Error deleting collection:", error);
+            alert(`Error deleting collection: ${error.message}`);
+        } finally {
+            // Re-enable the button
+            const deleteBtn = document.getElementById('confirmDeleteCollectionBtn');
+            if (deleteBtn) {
+                deleteBtn.disabled = false;
+                deleteBtn.innerHTML = 'Delete Collection';
+            }
         }
     }
 });

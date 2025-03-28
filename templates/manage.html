@@ -195,4 +195,53 @@
         </div>
     </div>
 </div>
+
+<!-- Edit Collection Modal -->
+<div class="modal fade" id="editCollectionModal" tabindex="-1" aria-labelledby="editCollectionModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark text-light">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editCollectionModalLabel">Edit Collection</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editCollectionForm">
+                    <input type="hidden" id="editCollectionId">
+                    <div class="mb-3">
+                        <label for="editCollectionName" class="form-label">Collection Name</label>
+                        <input type="text" class="form-control" id="editCollectionName" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editCollectionDescription" class="form-label">Description</label>
+                        <textarea class="form-control" id="editCollectionDescription" rows="3"></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="updateCollectionBtn">Save Changes</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Collection Confirmation Modal -->
+<div class="modal fade" id="deleteCollectionModal" tabindex="-1" aria-labelledby="deleteCollectionModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark text-light">
+            <div class="modal-header">
+                <h5 class="modal-title" id="deleteCollectionModalLabel">Confirm Collection Deletion</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to delete the collection "<span id="deleteCollectionName"></span>"?</p>
+                <p class="text-danger">This action cannot be undone. Documents in this collection will not be deleted, but they will be removed from this collection.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmDeleteCollectionBtn">Delete Collection</button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}

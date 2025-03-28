@@ -725,3 +725,146 @@ def add_document_to_collection(collection_id):
             'success': False, 
             'message': f'Error adding document to collection: {str(e)}'
         }), 500
+
+@app.route('/collections/<int:collection_id>', methods=['GET'])
+def get_collection(collection_id):
+    """Get details of a specific collection."""
+    try:
+        collection = Collection.query.get(collection_id)
+        
+        if not collection:
+            return jsonify({
+                'success': False,
+                'message': f'Collection with ID {collection_id} not found'
+            }), 404
+            
+        # Get documents in this collection
+        documents = []
+        for doc in collection.documents:
+            documents.append({
+                'id': doc.id,
+                'title': doc.title,
+                'filename': doc.filename,
+                'file_type': doc.file_type,
+                'created_at': doc.created_at.isoformat() if doc.created_at else None
+            })
+            
+        result = {
+            'id': collection.id,
+            'name': collection.name,
+            'description': collection.description,
+            'created_at': collection.created_at.isoformat() if collection.created_at else None,
+            'updated_at': collection.updated_at.isoformat() if collection.updated_at else None,
+            'documents': documents
+        }
+        
+        return jsonify({
+            'success': True,
+            'collection': result
+        })
+    except Exception as e:
+        logger.exception(f"Error retrieving collection {collection_id}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error retrieving collection: {str(e)}'
+        }), 500
+
+@app.route('/collections/<int:collection_id>', methods=['PUT'])
+def update_collection(collection_id):
+    """Update a collection."""
+    try:
+        logger.debug(f"Collection update request for ID {collection_id}: {request.get_data(as_text=True)}")
+        
+        # Check content type
+        if request.content_type != 'application/json':
+            logger.warning(f"Incorrect content type: {request.content_type}")
+            return jsonify({
+                'success': False,
+                'message': 'Content-Type must be application/json'
+            }), 400
+        
+        data = request.json
+        logger.debug(f"Parsed JSON data: {data}")
+        
+        if not data:
+            logger.warning("No data provided in the request")
+            return jsonify({
+                'success': False,
+                'message': 'No update data provided'
+            }), 400
+            
+        # Check if collection exists
+        collection = Collection.query.get(collection_id)
+        if not collection:
+            logger.warning(f"Collection with ID {collection_id} not found")
+            return jsonify({
+                'success': False,
+                'message': f'Collection with ID {collection_id} not found'
+            }), 404
+            
+        # Update collection fields
+        if 'name' in data:
+            # Check if name is already taken by another collection
+            existing = Collection.query.filter(Collection.name == data['name'], Collection.id != collection_id).first()
+            if existing:
+                logger.warning(f"Collection with name '{data['name']}' already exists")
+                return jsonify({
+                    'success': False,
+                    'message': f'Collection with name "{data["name"]}" already exists'
+                }), 400
+                
+            collection.name = data['name']
+            
+        if 'description' in data:
+            collection.description = data['description']
+            
+        # Update the updated_at timestamp
+        collection.updated_at = datetime.datetime.now(datetime.timezone.utc)
+        
+        db.session.commit()
+        
+        logger.info(f"Collection {collection_id} updated successfully")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Collection updated successfully',
+            'collection_id': collection.id
+        })
+    except Exception as e:
+        logger.exception(f"Error updating collection {collection_id}: {str(e)}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error updating collection: {str(e)}'
+        }), 500
+
+@app.route('/collections/<int:collection_id>', methods=['DELETE'])
+def delete_collection(collection_id):
+    """Delete a collection."""
+    try:
+        # Check if collection exists
+        collection = Collection.query.get(collection_id)
+        if not collection:
+            return jsonify({
+                'success': False,
+                'message': f'Collection with ID {collection_id} not found'
+            }), 404
+            
+        # Store name for response message
+        collection_name = collection.name
+            
+        # Delete the collection
+        db.session.delete(collection)
+        db.session.commit()
+        
+        logger.info(f"Collection {collection_id} '{collection_name}' deleted successfully")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Collection "{collection_name}" deleted successfully'
+        })
+    except Exception as e:
+        logger.exception(f"Error deleting collection {collection_id}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error deleting collection: {str(e)}'
+        }), 500
