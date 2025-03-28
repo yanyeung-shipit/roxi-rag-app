@@ -670,6 +670,73 @@ def clear():
             'success': False, 
             'message': f'Error clearing knowledge base: {str(e)}'
         }), 500
+
+@app.route('/remove_by_url', methods=['POST'])
+def remove_documents_by_url():
+    """Administrative endpoint to remove all documents with a specific URL pattern from the vector store."""
+    try:
+        url_pattern = request.form.get('url_pattern', '')
+        
+        if not url_pattern or len(url_pattern) < 5:
+            return jsonify({
+                'success': False,
+                'message': 'URL pattern is required and must be at least 5 characters'
+            }), 400
+            
+        # For safety, verify this is an administrative action
+        confirmation = request.form.get('confirmation', '')
+        if confirmation != 'yes_delete_all_matching_documents':
+            return jsonify({
+                'success': False,
+                'message': 'Confirmation required for this operation'
+            }), 400
+            
+        logger.info(f"Removing all documents with URL pattern: {url_pattern}")
+        
+        # Remove from vector store
+        try:
+            removed_count = vector_store.remove_document_by_url(url_pattern)
+            logger.info(f"Removed {removed_count} chunks from vector store")
+        except Exception as e:
+            logger.error(f"Error removing from vector store: {e}")
+            # Continue with database deletion even if vector store fails
+            removed_count = 0
+            
+        # Also delete from database
+        try:
+            # Find all document IDs with matching URL pattern
+            documents = Document.query.filter(Document.source_url.like(f'%{url_pattern}%')).all()
+            doc_ids = [doc.id for doc in documents]
+            
+            if doc_ids:
+                # Delete chunks first
+                chunks_deleted = DocumentChunk.query.filter(DocumentChunk.document_id.in_(doc_ids)).delete()
+                logger.info(f"Deleted {chunks_deleted} database chunks for {len(doc_ids)} documents")
+                
+                # Delete documents
+                for doc_id in doc_ids:
+                    doc = Document.query.get(doc_id)
+                    if doc:
+                        db.session.delete(doc)
+                        
+                db.session.commit()
+                logger.info(f"Deleted {len(doc_ids)} documents from database")
+                
+        except Exception as e:
+            logger.error(f"Error deleting from database: {e}")
+            # Continue with response even if database fails
+        
+        return jsonify({
+            'success': True,
+            'message': f'Removed {removed_count} chunks with URL pattern "{url_pattern}" from vector store'
+        })
+        
+    except Exception as e:
+        logger.exception(f"Error removing documents by URL: {str(e)}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error removing documents: {str(e)}'
+        }), 500
         
 # New endpoint specifically for adding multiple rheum.reviews topic pages at once
 @app.route('/add_topic_pages', methods=['POST'])
@@ -1324,8 +1391,40 @@ def delete_document(document_id):
         
         # First, remove the document from the vector store
         try:
-            removed_chunks = vector_store.remove_document(document_id)
-            logger.info(f"Removed {removed_chunks} chunks for document {document_id} from vector store")
+            # Enhanced removal with URL pattern backup for website documents
+            removed_chunks = 0
+            
+            # If it's a website document, try to extract a URL pattern for more thorough cleaning
+            if doc.file_type == 'website' and doc.source_url:
+                # For rheum.reviews, extract the topic pattern
+                if 'rheum.reviews' in doc.source_url:
+                    url_parts = doc.source_url.split('/')
+                    for part in url_parts:
+                        if part and len(part) > 5 and '-' in part:  # Likely a slug/pattern
+                            pattern = part
+                            logger.info(f"Trying URL pattern-based removal for pattern: {pattern}")
+                            try:
+                                # Remove by URL pattern first
+                                url_removed = vector_store.remove_document_by_url(pattern)
+                                if url_removed > 0:
+                                    logger.info(f"Removed {url_removed} chunks by URL pattern '{pattern}'")
+                                    removed_chunks += url_removed
+                            except Exception as url_err:
+                                logger.error(f"Error during URL pattern removal: {url_err}")
+            
+            # Now try the standard document ID-based removal as well
+            try:
+                id_removed = vector_store.remove_document(document_id)
+                logger.info(f"Removed {id_removed} chunks by document ID {document_id}")
+                removed_chunks += id_removed
+            except Exception as id_err:
+                logger.error(f"Error during document ID removal: {id_err}")
+                
+            if removed_chunks > 0:
+                logger.info(f"Successfully removed total of {removed_chunks} chunks for document {document_id} from vector store")
+            else:
+                logger.warning(f"No chunks were removed for document {document_id} from vector store")
+                
         except Exception as e:
             logger.error(f"Error removing document from vector store: {e}")
             # Continue with database deletion even if vector store deletion fails
