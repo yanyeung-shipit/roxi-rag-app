@@ -9,6 +9,7 @@ from models import Document, DocumentChunk
 from utils.document_processor import process_pdf
 from utils.vector_store import VectorStore
 from utils.citation_manager import extract_citation_info
+from utils.web_scraper import scrape_website, chunk_text
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -75,7 +76,6 @@ class BackgroundProcessor:
                 # Find unprocessed documents
                 unprocessed_docs = session.query(Document).filter_by(
                     processed=False,
-                    file_type='pdf'  # Only process PDF documents
                 ).limit(self.batch_size).all()
                 
                 if not unprocessed_docs:
@@ -87,16 +87,45 @@ class BackgroundProcessor:
                 # Process each document
                 for doc in unprocessed_docs:
                     try:
-                        logger.info(f"Background processing document {doc.id}: {doc.filename}")
+                        logger.info(f"Background processing document {doc.id}: {doc.filename} (type: {doc.file_type})")
                         
-                        if not doc.file_path or not os.path.exists(doc.file_path):
-                            logger.warning(f"File not found for document {doc.id}: {doc.file_path}")
-                            doc.processed = True  # Mark as processed to skip it
-                            session.commit()
-                            continue
+                        # Handle PDF documents
+                        if doc.file_type == 'pdf':
+                            if not doc.file_path or not os.path.exists(doc.file_path):
+                                logger.warning(f"File not found for document {doc.id}: {doc.file_path}")
+                                doc.processed = True  # Mark as processed to skip it
+                                session.commit()
+                                continue
+                                
+                            # Process the PDF
+                            chunks, metadata = process_pdf(doc.file_path, doc.filename)
+                        
+                        # Handle website documents
+                        elif doc.file_type == 'website':
+                            if not doc.source_url:
+                                logger.warning(f"URL not found for document {doc.id}")
+                                doc.processed = True  # Mark as processed to skip it
+                                session.commit()
+                                continue
+                                
+                            # Process the website
+                            logger.info(f"Processing website: {doc.source_url}")
+                            result = scrape_website(doc.source_url, max_pages=10)
                             
-                        # Process the PDF
-                        chunks, metadata = process_pdf(doc.file_path, doc.filename)
+                            chunks = []
+                            for i, chunk_data in enumerate(result):
+                                chunks.append({
+                                    'text': chunk_data['text'],
+                                    'metadata': {
+                                        'url': chunk_data.get('metadata', {}).get('url', doc.source_url),
+                                        'page_number': i  # Use index as a pseudo-page number
+                                    }
+                                })
+                            
+                            metadata = {
+                                'title': doc.title or "Website Document",
+                                'source_url': doc.source_url
+                            }
                         
                         if not chunks or not metadata:
                             logger.warning(f"No content extracted from document {doc.id}")
@@ -126,7 +155,7 @@ class BackgroundProcessor:
                                 'chunk_index': i,
                                 'page_number': chunk.get('metadata', {}).get('page_number', None),
                                 'document_title': doc.title or doc.filename,
-                                'file_type': 'pdf'
+                                'file_type': doc.file_type
                             }
                             
                             # Add to vector store

@@ -459,7 +459,7 @@ def add_website():
                 'success': False,
                 'message': 'For rheum.reviews, it\'s better to add specific topic pages directly. For example: https://rheum.reviews/topic/myositis/, https://rheum.reviews/topic/scleroderma/, etc.'
             }), 400
-        
+            
         # Create a new document record in the database
         new_document = Document(
             filename=url,  # Use URL as filename
@@ -498,134 +498,55 @@ def add_website():
             is_topic_page = True
             logger.info(f"Detected specific topic URL: {url} - this will be given special priority")
             
-        # Scrape website with multi-page crawling
+        # Scrape just the first page to get basic metadata
         try:
-            # Handle topic pages differently to avoid memory issues
-            if is_topic_page:
-                logger.debug(f"Processing single topic page: {url}")
-                # For topic pages, we prioritize direct content extraction over crawling
-                # This avoids memory issues while still getting the important content
-                chunks = scrape_website(url, max_pages=5, max_wait_time=90)  # Very limited crawling for topic pages
-            elif '/rheum.reviews/' in url:
-                # For rheum.reviews domain, be very conservative to avoid memory issues
-                logger.debug(f"Starting limited rheum.reviews crawl from: {url}")
-                chunks = scrape_website(url, max_pages=5, max_wait_time=90)  # More conservative for this specific site
-            else:
-                logger.debug(f"Starting standard multi-page crawl from: {url}")
-                # Use the enhanced multi-page crawler with reasonable limits
-                chunks = scrape_website(url, max_pages=12, max_wait_time=90)  # Balanced approach
-                
-            logger.debug(f"Crawled website with {len(chunks) if chunks else 0} chunks from multiple pages")
+            # Use a special single-page scraper to just get metadata
+            from utils.web_scraper import _scrape_single_page
+            page_data = _scrape_single_page(url)
             
-            if not chunks:
-                logger.warning(f"No content extracted from website: {url}")
-                # Document exists but processing failed
-                return jsonify({
-                    'success': False, 
-                    'message': 'Could not extract any content from the provided URL or its linked pages'
-                }), 400
-        except Exception as scrape_error:
-            logger.exception(f"Error crawling website: {str(scrape_error)}")
-            return jsonify({
-                'success': False, 
-                'message': f'Error crawling website: {str(scrape_error)}'
-            }), 500
-            
-        # Update document with title from the first page
-        if chunks and 'title' in chunks[0]['metadata']:
-            new_document.title = chunks[0]['metadata']['title']
-            db.session.commit()
-            logger.debug(f"Updated document with title: {new_document.title}")
-            
-        logger.info(f"Successfully crawled website with {len(chunks)} chunks from multiple pages")
-        
-        # Limit chunks to prevent memory issues
-        max_chunks = 200  # Increased from 150 to 200 to better cover multi-page websites
-        if len(chunks) > max_chunks:
-            logger.warning(f"Limiting {len(chunks)} chunks to first {max_chunks}")
-            chunks = chunks[:max_chunks]
-        
-        # Process chunks in smaller batches to prevent timeouts
-        batch_size = 10
-        total_batches = (len(chunks) + batch_size - 1) // batch_size
-        
-        success_count = 0
-        chunk_records = []
-        
-        # Track unique URLs processed
-        processed_urls = set()
-        for chunk in chunks:
-            if 'url' in chunk['metadata']:
-                processed_urls.add(chunk['metadata']['url'])
-        
-        logger.info(f"Processing chunks from {len(processed_urls)} unique URLs")
-        
-        try:
-            for i in range(0, len(chunks), batch_size):
-                batch = chunks[i:i + batch_size]
-                logger.debug(f"Processing batch {(i // batch_size) + 1}/{total_batches} with {len(batch)} chunks")
-                
-                # Process each chunk with error handling
-                for chunk_index, chunk in enumerate(batch):
-                    try:
-                        # Add additional metadata for debugging
-                        chunk['metadata']['document_id'] = new_document.id
-                        
-                        # Add to vector store
-                        vector_store.add_text(chunk['text'], chunk['metadata'])
-                        
-                        # Create database record for this chunk
-                        chunk_record = DocumentChunk(
-                            document_id=new_document.id,
-                            chunk_index=i + chunk_index,
-                            page_number=chunk['metadata'].get('page_number', None),  # Store page number if available
-                            text_content=chunk['text']
-                        )
-                        chunk_records.append(chunk_record)
-                        success_count += 1
-                    except Exception as chunk_error:
-                        logger.warning(f"Error adding chunk to vector store: {str(chunk_error)}")
-                        # Continue with next chunk
-                
-                # Save vector store after each batch
-                try:
-                    vector_store._save()
-                    logger.debug(f"Saved vector store after batch {(i // batch_size) + 1}")
-                    
-                    # Commit chunk records to database in batches
-                    if chunk_records:
-                        db.session.add_all(chunk_records)
-                        db.session.commit()
-                        logger.debug(f"Saved {len(chunk_records)} chunk records to database")
-                        chunk_records = []  # Clear for next batch
-                except Exception as save_error:
-                    logger.warning(f"Error saving batch: {str(save_error)}")
-                    # Continue processing
-                    
-        except Exception as batch_error:
-            logger.exception(f"Error processing batch: {str(batch_error)}")
-            # Continue to mark document as processed and return partial success
-        finally:
-            # Mark document as processed if any chunks were successful
-            if success_count > 0:
-                new_document.processed = True
+            if page_data and 'title' in page_data['metadata']:
+                # Update the document with the page title
+                new_document.title = page_data['metadata']['title']
                 db.session.commit()
-                logger.debug("Document marked as processed")
+                logger.debug(f"Updated document with title: {new_document.title}")
+                
+                # Create an initial chunk record for immediate searching
+                # This provides instant value while the full crawl happens in background
+                chunk_record = DocumentChunk(
+                    document_id=new_document.id,
+                    chunk_index=0,
+                    page_number=0,  # First page
+                    text_content=page_data['text']
+                )
+                db.session.add(chunk_record)
+                
+                # Add to vector store
+                metadata = {
+                    'document_id': new_document.id,
+                    'chunk_index': 0,
+                    'page_number': 0,
+                    'document_title': new_document.title,
+                    'file_type': 'website',
+                    'url': url
+                }
+                vector_store.add_text(page_data['text'], metadata)
+                vector_store._save()
+                
+                db.session.commit()
+                logger.info(f"Added initial chunk for document {new_document.id}")
+            else:
+                logger.warning(f"Could not extract title from first page: {url}")
+        except Exception as e:
+            logger.warning(f"Error extracting initial data from website: {str(e)}")
+            # Continue processing as the background processor will attempt full extraction
         
-        # Return success even if only some chunks were processed
-        if success_count > 0:
-            return jsonify({
-                'success': True, 
-                'message': f'Successfully processed website: {url} ({success_count} chunks from {len(processed_urls)} pages)',
-                'document_id': new_document.id,
-                'chunks': success_count,
-                'pages': len(processed_urls)
-            })
-        else:
-            return jsonify({
-                'success': False, 
-                'message': 'Could not add any content from the website to the knowledge base.'
-            }), 500
+        # Return success immediately, with processing to continue in the background
+        return jsonify({
+            'success': True, 
+            'message': f'Website {url} has been queued for processing in the background. Initial metadata and content has been extracted for immediate searching.',
+            'document_id': new_document.id,
+            'note': 'The document will be fully processed in the background, adding more content gradually.'
+        })
             
     except Exception as e:
         logger.exception(f"Error processing website: {str(e)}")
