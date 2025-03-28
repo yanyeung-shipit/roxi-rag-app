@@ -76,10 +76,31 @@ document.addEventListener('DOMContentLoaded', () => {
         safeAddEventListener('pdfForm', 'submit', handlePdfFormSubmit);
         safeAddEventListener('websiteForm', 'submit', handleWebsiteFormSubmit);
 
-        // Add topic pages button click handler using the safe method
-        // First, add it to the elements object
-        elements.addTopicsBtn = document.getElementById('add-topics-btn');
-        safeAddEventListener('addTopicsBtn', 'click', handleTopicPagesSubmit);
+        // Bind to the form directly for topic pages to avoid button reference issues
+        if (elements.topicPagesForm) {
+            console.log('Found topic-pages-form, binding events');
+            
+            // Bind to the form's submit event
+            elements.topicPagesForm.addEventListener('submit', function(event) {
+                event.preventDefault();
+                handleTopicPagesSubmit(event);
+            });
+            
+            // Also try to bind to the button directly if possible
+            const addTopicsBtn = document.getElementById('add-topics-btn');
+            if (addTopicsBtn) {
+                elements.addTopicsBtn = addTopicsBtn;
+                console.log('Found add-topics-btn element, adding click event listener');
+                addTopicsBtn.addEventListener('click', function(event) {
+                    event.preventDefault();
+                    handleTopicPagesSubmit(event);
+                });
+            } else {
+                console.warn('Could not find add-topics-btn element, but form is still bound');
+            }
+        } else {
+            console.error('Topic pages form not found in DOM');
+        }
         
         // Document navigation
         safeAddEventListener('refreshDocumentsBtn', 'click', loadDocuments);
