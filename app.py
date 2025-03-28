@@ -8,7 +8,7 @@ from flask import Flask, render_template, request, jsonify, flash, redirect, url
 from werkzeug.utils import secure_filename
 from werkzeug.security import safe_join
 from utils.document_processor import process_pdf
-from utils.web_scraper import scrape_website
+from utils.web_scraper import scrape_website, create_minimal_content_for_topic
 from utils.vector_store import VectorStore
 from utils.llm_service import generate_response
 from models import db, Document, DocumentChunk, Collection
