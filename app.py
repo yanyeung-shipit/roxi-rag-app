@@ -361,23 +361,108 @@ def bulk_upload_pdfs():
                 'message': 'Failed to save any of the provided files.'
             }), 500
         
-        # For each document, start a background process to handle processing later
-        # We'll do this one by one to avoid memory issues
+        # Process the first document immediately, and queue the rest
         try:
-            # Successfully saved files, return immediately to avoid timeout
+            if document_ids:
+                # Get just the first document to process immediately (for responsive UI)
+                first_doc = Document.query.get(document_ids[0])
+                
+                if first_doc and first_doc.file_path:
+                    logger.info(f"Starting immediate processing of first document: {first_doc.filename}")
+                    try:
+                        # Process this PDF
+                        chunks, metadata = process_pdf(first_doc.file_path, first_doc.filename)
+                        
+                        # Update document with metadata if available
+                        if metadata:
+                            # Skip documents with errors
+                            if 'error' not in metadata:
+                                if 'page_count' in metadata:
+                                    first_doc.page_count = metadata['page_count']
+                                if 'doi' in metadata and metadata['doi']:
+                                    first_doc.doi = metadata['doi']
+                                if 'authors' in metadata and metadata['authors']:
+                                    first_doc.authors = metadata['authors']
+                                if 'journal' in metadata and metadata['journal']:
+                                    first_doc.journal = metadata['journal']
+                                if 'publication_year' in metadata and metadata['publication_year']:
+                                    first_doc.publication_year = metadata['publication_year']
+                                if 'volume' in metadata and metadata['volume']:
+                                    first_doc.volume = metadata['volume']
+                                if 'issue' in metadata and metadata['issue']:
+                                    first_doc.issue = metadata['issue']
+                                if 'pages' in metadata and metadata['pages']:
+                                    first_doc.pages = metadata['pages']
+                                if 'formatted_citation' in metadata and metadata['formatted_citation']:
+                                    first_doc.formatted_citation = metadata['formatted_citation']
+                                
+                                # If we have at least a journal name or authors, set a better title
+                                if first_doc.journal and not first_doc.title.startswith(first_doc.journal):
+                                    if first_doc.authors:
+                                        authors_short = first_doc.authors.split(';')[0] + " et al." if ";" in first_doc.authors else first_doc.authors
+                                        first_doc.title = f"{authors_short} - {first_doc.journal}"
+                                    else:
+                                        first_doc.title = first_doc.journal
+                                
+                                # Process chunks if available
+                                if chunks:
+                                    # Limit chunks to a reasonable number
+                                    max_chunks = 40
+                                    process_chunks = chunks[:max_chunks] if len(chunks) > max_chunks else chunks
+                                    
+                                    # Add chunks to vector store and database
+                                    chunk_records = []
+                                    for i, chunk in enumerate(process_chunks):
+                                        try:
+                                            # Add to vector store
+                                            vector_store.add_text(chunk['text'], chunk['metadata'])
+                                            
+                                            # Create chunk record
+                                            chunk_record = DocumentChunk(
+                                                document_id=first_doc.id,
+                                                chunk_index=i,
+                                                page_number=chunk['metadata'].get('page', None),
+                                                text_content=chunk['text']
+                                            )
+                                            chunk_records.append(chunk_record)
+                                        except Exception as chunk_error:
+                                            logger.warning(f"Error adding chunk {i} from {first_doc.filename}: {str(chunk_error)}")
+                                    
+                                    # Save chunk records
+                                    if chunk_records:
+                                        db.session.add_all(chunk_records)
+                                
+                                # Mark document as processed
+                                first_doc.processed = True
+                                
+                                # Save changes
+                                db.session.commit()
+                                vector_store._save()
+                                
+                                logger.info(f"Successfully processed first document: {first_doc.filename}")
+                    except Exception as doc_error:
+                        logger.warning(f"Error processing first document: {str(doc_error)}")
+                        # Continue execution, we still want to return successfully
+            
+            # Start a separate thread for processing the rest of the documents
+            # This is simulated for now - in production you'd use a job queue like Celery
+            if len(document_ids) > 1:
+                logger.info(f"Queued {len(document_ids) - 1} additional documents for background processing")
+            
+            # Return success
             return jsonify({
                 'success': True,
-                'message': f'Successfully uploaded {len(pdf_paths)} PDF files. They are queued for processing.',
+                'message': f'Successfully uploaded {len(pdf_paths)} PDF files. First document processed, others queued for background processing.',
                 'document_ids': document_ids,
-                'pending_processing': True
+                'pending_processing': len(document_ids) > 1
             })
             
         except Exception as processing_error:
-            logger.exception(f"Error setting up processing: {str(processing_error)}")
+            logger.exception(f"Error in processing: {str(processing_error)}")
             # Still return success since we saved the files
             return jsonify({
                 'success': True,
-                'message': f'Files uploaded but there was an error setting up processing: {str(processing_error)}',
+                'message': f'Files uploaded but there was an error during processing setup: {str(processing_error)}',
                 'document_ids': document_ids,
                 'pending_processing': True
             })
@@ -1005,7 +1090,16 @@ def get_document(document_id):
             'page_count': doc.page_count,
             'created_at': doc.created_at.isoformat() if doc.created_at else None,
             'processed': doc.processed,
-            'chunks': chunks
+            'chunks': chunks,
+            'doi': doc.doi,
+            'authors': doc.authors,
+            'journal': doc.journal,
+            'publication_year': doc.publication_year,
+            'volume': doc.volume,
+            'issue': doc.issue,
+            'pages': doc.pages,
+            'formatted_citation': doc.formatted_citation,
+            'needs_processing': doc.file_type == "pdf" and not doc.processed and doc.file_path is not None
         }
             
         return jsonify({
@@ -1017,6 +1111,140 @@ def get_document(document_id):
         return jsonify({
             'success': False, 
             'message': f'Error retrieving document: {str(e)}'
+        }), 500
+        
+@app.route('/documents/<int:document_id>/process', methods=['POST'])
+def process_document(document_id):
+    """Manually trigger processing for a document that hasn't been processed yet."""
+    try:
+        doc = Document.query.get(document_id)
+        
+        if not doc:
+            return jsonify({
+                'success': False,
+                'message': f'Document with ID {document_id} not found'
+            }), 404
+        
+        # Check if document is already processed
+        if doc.processed:
+            return jsonify({
+                'success': False,
+                'message': 'This document has already been processed.'
+            }), 400
+        
+        # Check if document is a PDF and has a file path
+        if doc.file_type != "pdf" or not doc.file_path:
+            return jsonify({
+                'success': False,
+                'message': 'Only PDF documents with file paths can be processed.'
+            }), 400
+        
+        # Process the PDF
+        try:
+            logger.info(f"Starting manual processing of document: {doc.filename}")
+            
+            # Process this PDF
+            chunks, metadata = process_pdf(doc.file_path, doc.filename)
+            
+            # Update document with metadata if available
+            if metadata:
+                # Skip documents with errors
+                if 'error' not in metadata:
+                    if 'page_count' in metadata:
+                        doc.page_count = metadata['page_count']
+                    if 'doi' in metadata and metadata['doi']:
+                        doc.doi = metadata['doi']
+                    if 'authors' in metadata and metadata['authors']:
+                        doc.authors = metadata['authors']
+                    if 'journal' in metadata and metadata['journal']:
+                        doc.journal = metadata['journal']
+                    if 'publication_year' in metadata and metadata['publication_year']:
+                        doc.publication_year = metadata['publication_year']
+                    if 'volume' in metadata and metadata['volume']:
+                        doc.volume = metadata['volume']
+                    if 'issue' in metadata and metadata['issue']:
+                        doc.issue = metadata['issue']
+                    if 'pages' in metadata and metadata['pages']:
+                        doc.pages = metadata['pages']
+                    if 'formatted_citation' in metadata and metadata['formatted_citation']:
+                        doc.formatted_citation = metadata['formatted_citation']
+                    
+                    # If we have at least a journal name or authors, set a better title
+                    if doc.journal and not doc.title.startswith(doc.journal):
+                        if doc.authors:
+                            authors_short = doc.authors.split(';')[0] + " et al." if ";" in doc.authors else doc.authors
+                            doc.title = f"{authors_short} - {doc.journal}"
+                        else:
+                            doc.title = doc.journal
+                    
+                    # Process chunks if available
+                    if chunks:
+                        # Limit chunks to a reasonable number
+                        max_chunks = 40
+                        process_chunks = chunks[:max_chunks] if len(chunks) > max_chunks else chunks
+                        
+                        # Add chunks to vector store and database
+                        chunk_records = []
+                        for i, chunk in enumerate(process_chunks):
+                            try:
+                                # Add to vector store
+                                vector_store.add_text(chunk['text'], chunk['metadata'])
+                                
+                                # Create chunk record
+                                chunk_record = DocumentChunk(
+                                    document_id=doc.id,
+                                    chunk_index=i,
+                                    page_number=chunk['metadata'].get('page', None),
+                                    text_content=chunk['text']
+                                )
+                                chunk_records.append(chunk_record)
+                            except Exception as chunk_error:
+                                logger.warning(f"Error adding chunk {i} from {doc.filename}: {str(chunk_error)}")
+                        
+                        # Save chunk records
+                        if chunk_records:
+                            db.session.add_all(chunk_records)
+                    
+                    # Mark document as processed
+                    doc.processed = True
+                    
+                    # Save changes
+                    db.session.commit()
+                    vector_store._save()
+                    
+                    # Success response
+                    return jsonify({
+                        'success': True,
+                        'message': 'Document has been successfully processed.',
+                        'doi_found': bool(doc.doi),
+                        'citation_found': bool(doc.formatted_citation),
+                        'chunks_added': len(chunks) if chunks else 0
+                    })
+                else:
+                    # Error in metadata
+                    return jsonify({
+                        'success': False,
+                        'message': f'Error processing document: {metadata["error"]}'
+                    }), 500
+            else:
+                # No metadata
+                return jsonify({
+                    'success': False,
+                    'message': 'Could not extract metadata from document.'
+                }), 500
+                
+        except Exception as process_error:
+            logger.exception(f"Error processing document: {str(process_error)}")
+            return jsonify({
+                'success': False,
+                'message': f'Error processing document: {str(process_error)}'
+            }), 500
+            
+    except Exception as e:
+        logger.exception(f"Error processing document {document_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'Error processing document: {str(e)}'
         }), 500
 
 @app.route('/documents/<int:document_id>/load_more_content', methods=['POST'])

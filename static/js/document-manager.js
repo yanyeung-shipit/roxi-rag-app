@@ -423,6 +423,45 @@ document.addEventListener('DOMContentLoaded', () => {
                             <span>${doc.page_count || 'N/A'}</span>
                         </li>
                     `;
+                    
+                    // Add DOI if available
+                    if (doc.doi) {
+                        html += `
+                            <li class="list-group-item bg-transparent">
+                                <div><strong>DOI:</strong></div>
+                                <div class="mt-1">
+                                    <a href="https://doi.org/${doc.doi}" target="_blank" class="text-info">${doc.doi}</a>
+                                </div>
+                            </li>
+                        `;
+                    }
+                    
+                    // Add citation if available
+                    if (doc.formatted_citation) {
+                        html += `
+                            <li class="list-group-item bg-transparent">
+                                <div><strong>Citation:</strong></div>
+                                <div class="mt-1">
+                                    <small>${doc.formatted_citation}</small>
+                                </div>
+                            </li>
+                        `;
+                    }
+                    
+                    // Add process button for unprocessed PDFs
+                    if (!doc.processed && doc.file_path) {
+                        html += `
+                            </ul>
+                            <div class="alert alert-secondary mt-3">
+                                <p><i class="fas fa-exclamation-circle me-2"></i> This document needs to be processed to extract DOI and citation info.</p>
+                                <button id="processDocBtn" class="btn btn-sm btn-primary" onclick="processDocument(${doc.id})">
+                                    <i class="fas fa-cogs me-1"></i> Process Document
+                                </button>
+                                <div id="processStatus" class="mt-2"></div>
+                            </div>
+                            <ul class="list-group list-group-flush bg-transparent">
+                        `;
+                    }
                 } else if (doc.source_url) {
                     html += `
                         <li class="list-group-item bg-transparent d-flex justify-content-between">
@@ -1381,7 +1420,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="alert alert-success">
                             <i class="fas fa-check-circle me-2"></i>
                             Successfully uploaded ${uploadedCount} PDF file${uploadedCount !== 1 ? 's' : ''}. 
-                            They will be processed in the background.
+                            ${uploadedCount > 0 ? 'The first document should be processed immediately and viewable now.' : ''}
+                            ${uploadedCount > 1 ? 'Additional documents will be processed in the background.' : ''}
                             <div class="small text-muted mt-1">You can continue using the app while processing completes.</div>
                         </div>
                     `;
@@ -1757,6 +1797,96 @@ async function loadMoreContent(documentId) {
             loadMoreBtn.innerHTML = `
                 <i class="fas fa-cloud-download-alt me-2"></i>
                 Try Again
+            `;
+        }
+    }
+}
+
+// Global function to manually process a document
+async function processDocument(documentId) {
+    try {
+        const processBtn = document.getElementById('processDocBtn');
+        const statusEl = document.getElementById('processStatus');
+        
+        if (!processBtn || !statusEl) {
+            console.error("Process button or status element not found");
+            return;
+        }
+        
+        // Show loading state
+        processBtn.disabled = true;
+        processBtn.innerHTML = `
+            <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+            Processing...
+        `;
+        
+        statusEl.innerHTML = `
+            <div class="alert alert-info">
+                <i class="fas fa-sync fa-spin me-2"></i>
+                Processing document. This may take a minute or two...
+            </div>
+        `;
+        
+        // Call API to process the document
+        const response = await fetch(`/documents/${documentId}/process`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            // Show success message
+            statusEl.innerHTML = `
+                <div class="alert alert-success">
+                    <i class="fas fa-check-circle me-2"></i>
+                    ${data.message}
+                    ${data.doi_found ? '<div>✓ DOI information extracted</div>' : ''}
+                    ${data.citation_found ? '<div>✓ Citation information extracted</div>' : ''}
+                    ${data.chunks_added > 0 ? `<div>✓ ${data.chunks_added} content chunks processed</div>` : ''}
+                </div>
+            `;
+            
+            // Reload the document view to show updated information
+            setTimeout(() => {
+                viewDocument(documentId);
+            }, 2000);
+        } else {
+            // Show error message
+            statusEl.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    ${data.message || 'Error processing document'}
+                </div>
+            `;
+            
+            // Re-enable the button
+            processBtn.disabled = false;
+            processBtn.innerHTML = `
+                <i class="fas fa-cogs me-1"></i> Process Document
+            `;
+        }
+    } catch (error) {
+        console.error("Error processing document:", error);
+        
+        const statusEl = document.getElementById('processStatus');
+        const processBtn = document.getElementById('processDocBtn');
+        
+        if (statusEl) {
+            statusEl.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    Error: ${error.message}
+                </div>
+            `;
+        }
+        
+        if (processBtn) {
+            processBtn.disabled = false;
+            processBtn.innerHTML = `
+                <i class="fas fa-cogs me-1"></i> Process Document
             `;
         }
     }
