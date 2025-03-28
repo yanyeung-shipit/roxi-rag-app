@@ -498,6 +498,17 @@ document.addEventListener('DOMContentLoaded', () => {
                         `;
                     }
                     
+                    // Add view PDF button if we have a file path
+                    if (doc.file_path) {
+                        html += `
+                            <li class="list-group-item bg-transparent">
+                                <a href="/view_pdf/${doc.id}" target="_blank" class="btn btn-sm btn-outline-info">
+                                    <i class="fas fa-file-pdf me-1"></i> Open PDF in New Window
+                                </a>
+                            </li>
+                        `;
+                    }
+                    
                     // Add process button for unprocessed PDFs
                     if (!doc.processed && doc.file_path) {
                         html += `
