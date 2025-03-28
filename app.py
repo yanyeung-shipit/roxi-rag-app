@@ -277,15 +277,20 @@ def add_website():
             
         # Scrape website with multi-page crawling
         try:
+            # Handle topic pages differently - less aggressive crawling to avoid memory issues
             if is_topic_page:
                 logger.debug(f"Starting topic-specific crawl from: {url}")
-                # For topic-specific pages, we prioritize deeper crawling
-                chunks = scrape_website(url, max_pages=25, max_wait_time=180)  # Extended timeout for topic pages
+                # For topic pages, we'll prioritize the direct page content over extensive crawling
+                # This avoids memory issues while still getting the most important content
+                chunks = scrape_website(url, max_pages=10, max_wait_time=120)  # Reduced pages for topic pages
+            elif '/rheum.reviews/' in url:
+                # For rheum.reviews domain, be more conservative to avoid memory issues
+                logger.debug(f"Starting rheum.reviews domain crawl from: {url}")
+                chunks = scrape_website(url, max_pages=8, max_wait_time=90)  # More conservative for this specific site
             else:
                 logger.debug(f"Starting multi-page crawl from: {url}")
                 # Use the enhanced multi-page crawler with increased limits for better content discovery
-                # Increased from 10 to 25 pages and extended timeout to 120 seconds to better explore disease/topic subpages
-                chunks = scrape_website(url, max_pages=25, max_wait_time=120)
+                chunks = scrape_website(url, max_pages=15, max_wait_time=90)  # Scaled back slightly
                 
             logger.debug(f"Crawled website with {len(chunks) if chunks else 0} chunks from multiple pages")
             

@@ -35,15 +35,28 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="spinner-border spinner-border-sm me-2" role="status">
                             <span class="visually-hidden">Loading...</span>
                         </div>
-                        <div>Processing website...</div>
+                        <div>Processing website... (this may take a minute or two)</div>
                     </div>
+                    <div class="small mt-2">For sites like rheum.reviews, we carefully extract content while managing memory usage. Please be patient.</div>
                 </div>
             `;
             
             const response = await fetch('/add_website', {
                 method: 'POST',
-                body: formData
+                body: formData,
+                // Add a longer timeout for larger websites
+                signal: AbortSignal.timeout(300000) // 5-minute timeout 
             });
+            
+            // Check if the response is ok before parsing
+            if (!response.ok) {
+                if (response.status === 500) {
+                    // Server error might be due to memory issues
+                    throw new Error("The website processing failed, possibly due to the site being too large or complex. Try with a specific page URL instead of the homepage.");
+                }
+                const errorText = await response.text();
+                throw new Error(`Server error: ${response.status} ${errorText.substring(0, 100)}`);
+            }
             
             const data = await response.json();
             
@@ -51,10 +64,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 showResult(websiteResult, `${data.message} (${data.chunks} chunks extracted)`, true);
                 fetchStats();
             } else {
-                showResult(websiteResult, data.message, false);
+                if (data.message && data.message.includes("memory")) {
+                    // Specific memory error message
+                    showResult(websiteResult, `${data.message}. Try using a more specific URL instead of the homepage.`, false);
+                } else {
+                    showResult(websiteResult, data.message, false);
+                }
             }
         } catch (error) {
-            showResult(websiteResult, `Error: ${error.message}`, false);
+            // Handle specific error types
+            if (error.name === 'AbortError') {
+                showResult(websiteResult, `Processing timed out. The website might be too large or complex. Try using a more specific URL instead of the homepage.`, false);
+            } else if (error.message.includes('Unexpected token')) {
+                showResult(websiteResult, `Error parsing server response. This often happens when the website is too large to process. Try using a more specific URL instead of the homepage.`, false);
+            } else {
+                showResult(websiteResult, `Error: ${error.message}`, false);
+            }
         }
     });
     
