@@ -1300,6 +1300,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         // Prepare UI for submission - Step 1: Uploading
+        const selectedFileCount = fileInput.files.length;
         elements.bulkPdfResult.innerHTML = `
             <div class="alert alert-info">
                 <div class="d-flex align-items-center">
@@ -1307,7 +1308,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <span class="visually-hidden">Loading...</span>
                     </div>
                     <div>
-                        <strong>Step 1/2:</strong> Uploading ${fileInput.files.length} PDF files...
+                        <strong>Step 1/2:</strong> Uploading ${selectedFileCount} PDF file${selectedFileCount !== 1 ? 's' : ''}...
                         <div class="small text-muted mt-1">Please wait while the files are being uploaded...</div>
                     </div>
                 </div>
@@ -1345,6 +1346,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 
                 // If we reach here, upload was successful
+                const uploadedCount = uploadData.document_ids ? uploadData.document_ids.length : selectedFileCount;
                 elements.bulkPdfResult.innerHTML = `
                     <div class="alert alert-info">
                         <div class="d-flex align-items-center">
@@ -1352,7 +1354,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 <span class="visually-hidden">Loading...</span>
                             </div>
                             <div>
-                                <strong>Step 2/2:</strong> Processing ${fileInput.files.length} PDF files with citation extraction...
+                                <strong>Step 2/2:</strong> Processing ${uploadedCount} PDF file${uploadedCount !== 1 ? 's' : ''} with citation extraction...
                                 <div class="small text-muted mt-1">This may take several minutes. You can continue using the app.</div>
                                 <div class="small text-muted mt-1">Processing large PDFs may take 1-2 minutes per file.</div>
                                 <div class="progress mt-2">
@@ -1374,10 +1376,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 // Show success message and indicate background processing
                 setTimeout(() => {
+                    // Use the same uploaded count variable we defined earlier
                     elements.bulkPdfResult.innerHTML = `
                         <div class="alert alert-success">
                             <i class="fas fa-check-circle me-2"></i>
-                            Successfully uploaded ${fileInput.files.length} PDF files. 
+                            Successfully uploaded ${uploadedCount} PDF file${uploadedCount !== 1 ? 's' : ''}. 
                             They will be processed in the background.
                             <div class="small text-muted mt-1">You can continue using the app while processing completes.</div>
                         </div>
