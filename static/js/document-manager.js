@@ -6,25 +6,35 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log("Not on manage page, exiting script");
         return;
     }
-
-    // Document elements
-    const documentsTableBody = document.getElementById('documentsTableBody');
-    const documentDetailContainer = document.getElementById('documentDetailContainer');
-    const documentsTableContainer = document.getElementById('documentsTableContainer');
-    const documentDetailContent = document.getElementById('documentDetailContent');
-    const backToDocumentsBtn = document.getElementById('backToDocumentsBtn');
-    const refreshDocumentsBtn = document.getElementById('refreshDocumentsBtn');
-    const newCollectionBtn = document.getElementById('newCollectionBtn');
-    const createCollectionBtn = document.getElementById('createCollectionBtn');
-    const collectionsList = document.getElementById('collectionsList');
-    const collectionDetailCard = document.getElementById('collectionDetailCard');
-    const collectionDetailTitle = document.getElementById('collectionDetailTitle');
-    const collectionDescription = document.getElementById('collectionDescription');
-    const collectionDocumentsList = document.getElementById('collectionDocumentsList');
-    const addToCollectionBtn = document.getElementById('addToCollectionBtn');
-    const documentSelectionList = document.getElementById('documentSelectionList');
-    const confirmAddToCollectionBtn = document.getElementById('confirmAddToCollectionBtn');
-    const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
+    
+    // DOM element references - all elements are optional and get checked before use
+    const elements = {
+        // Document elements
+        documentsTableBody: document.getElementById('documentsTableBody'),
+        documentDetailContainer: document.getElementById('documentDetailContainer'),
+        documentsTableContainer: document.getElementById('documentsTableContainer'),
+        documentDetailContent: document.getElementById('documentDetailContent'),
+        backToDocumentsBtn: document.getElementById('backToDocumentsBtn'),
+        refreshDocumentsBtn: document.getElementById('refreshDocumentsBtn'),
+        
+        // Collection elements
+        newCollectionBtn: document.getElementById('newCollectionBtn'),
+        createCollectionBtn: document.getElementById('createCollectionBtn'),
+        collectionsList: document.getElementById('collectionsList'),
+        collectionDetailCard: document.getElementById('collectionDetailCard'),
+        collectionDetailTitle: document.getElementById('collectionDetailTitle'),
+        collectionDescription: document.getElementById('collectionDescription'),
+        collectionDocumentsList: document.getElementById('collectionDocumentsList'),
+        addToCollectionBtn: document.getElementById('addToCollectionBtn'),
+        documentSelectionList: document.getElementById('documentSelectionList'),
+        confirmAddToCollectionBtn: document.getElementById('confirmAddToCollectionBtn'),
+        confirmDeleteBtn: document.getElementById('confirmDeleteBtn')
+    };
+    
+    // Log which elements were found or missing
+    Object.entries(elements).forEach(([name, element]) => {
+        console.log(`Element ${name}: ${element ? 'Found' : 'Missing'}`);
+    });
 
     // Global state
     let currentDocuments = [];
@@ -36,69 +46,150 @@ document.addEventListener('DOMContentLoaded', () => {
     loadDocuments();
     loadCollections();
 
-    // Event listeners
-    console.log("Setting up event listeners");
+    // Event listeners - using safe method that checks for null
+    setupEventListeners();
     
-    // Function to safely add event listeners with console logging
-    function safeAddEventListener(element, event, handler, name) {
-        if (element) {
-            console.log(`Adding ${event} event listener to ${name}`);
-            element.addEventListener(event, handler);
-        } else {
-            console.warn(`Element ${name} not found, cannot add ${event} event listener`);
+    function setupEventListeners() {
+        console.log("Setting up event listeners");
+        
+        // Function to safely add event listeners with console logging
+        function safeAddEventListener(elementKey, event, handler) {
+            const element = elements[elementKey];
+            if (element) {
+                console.log(`Adding ${event} event listener to ${elementKey}`);
+                element.addEventListener(event, handler);
+            } else {
+                console.warn(`Element ${elementKey} not found, cannot add ${event} event listener`);
+            }
         }
+        
+        // Document navigation
+        safeAddEventListener('refreshDocumentsBtn', 'click', loadDocuments);
+        safeAddEventListener('backToDocumentsBtn', 'click', () => {
+            if (elements.documentDetailContainer && elements.documentsTableContainer) {
+                elements.documentDetailContainer.classList.add('d-none');
+                elements.documentsTableContainer.classList.remove('d-none');
+            }
+        });
+        
+        // Collection actions
+        safeAddEventListener('createCollectionBtn', 'click', createCollection);
+        safeAddEventListener('confirmAddToCollectionBtn', 'click', addDocumentsToCollection);
+        safeAddEventListener('confirmDeleteBtn', 'click', deleteDocument);
+        
+        // Setup new collection button modal trigger
+        safeAddEventListener('newCollectionBtn', 'click', function() {
+            console.log("New collection button clicked");
+            const modalId = 'newCollectionModal';
+            showModal(modalId);
+        });
     }
     
-    // Add event listeners with better error handling
-    safeAddEventListener(refreshDocumentsBtn, 'click', loadDocuments, 'refreshDocumentsBtn');
-    
-    safeAddEventListener(backToDocumentsBtn, 'click', () => {
-        documentDetailContainer.classList.add('d-none');
-        documentsTableContainer.classList.remove('d-none');
-    }, 'backToDocumentsBtn');
-    
-    safeAddEventListener(createCollectionBtn, 'click', createCollection, 'createCollectionBtn');
-    
-    safeAddEventListener(confirmAddToCollectionBtn, 'click', addDocumentsToCollection, 'confirmAddToCollectionBtn');
-    
-    safeAddEventListener(confirmDeleteBtn, 'click', deleteDocument, 'confirmDeleteBtn');
-    
-    // Add event listener for new collection button since it opens the modal
-    const newCollectionBtn = document.getElementById('newCollectionBtn');
-    safeAddEventListener(newCollectionBtn, 'click', () => {
-        console.log("New collection button clicked, opening modal");
+    // Helper function to show a modal
+    function showModal(modalId) {
+        console.log(`Attempting to show modal: ${modalId}`);
+        const modalElement = document.getElementById(modalId);
+        
+        if (!modalElement) {
+            console.error(`Modal element ${modalId} not found`);
+            return;
+        }
+        
+        // Try multiple approaches to show modal
         try {
-            const modal = new bootstrap.Modal(document.getElementById('newCollectionModal'));
-            modal.show();
-        } catch (modalError) {
-            console.error("Error showing modal with Bootstrap API:", modalError);
+            // Try Bootstrap 5 way
+            const bsModal = new bootstrap.Modal(modalElement);
+            bsModal.show();
+            console.log("Modal shown using Bootstrap 5 API");
+            return;
+        } catch (error1) {
+            console.warn("Bootstrap 5 modal show failed:", error1);
+            
             try {
-                $('#newCollectionModal').modal('show');
-            } catch (jqueryError) {
-                console.error("Error showing modal with jQuery:", jqueryError);
-                // Last resort - manually show modal
-                const modalElement = document.getElementById('newCollectionModal');
-                if (modalElement) {
+                // Try jQuery way
+                $(modalElement).modal('show');
+                console.log("Modal shown using jQuery");
+                return;
+            } catch (error2) {
+                console.warn("jQuery modal show failed:", error2);
+                
+                try {
+                    // Manual way
                     modalElement.classList.add('show');
                     modalElement.style.display = 'block';
                     document.body.classList.add('modal-open');
                     
                     // Add backdrop
-                    const backdropDiv = document.createElement('div');
-                    backdropDiv.className = 'modal-backdrop fade show';
-                    document.body.appendChild(backdropDiv);
+                    let backdrop = document.querySelector('.modal-backdrop');
+                    if (!backdrop) {
+                        backdrop = document.createElement('div');
+                        backdrop.className = 'modal-backdrop fade show';
+                        document.body.appendChild(backdrop);
+                    }
+                    console.log("Modal shown manually by DOM manipulation");
+                } catch (error3) {
+                    console.error("Manual modal show failed:", error3);
                 }
             }
         }
-    }, 'newCollectionBtn');
-
-    // Functions
+    }
+    
+    // Helper function to hide a modal
+    function hideModal(modalId) {
+        console.log(`Attempting to hide modal: ${modalId}`);
+        const modalElement = document.getElementById(modalId);
+        
+        if (!modalElement) {
+            console.error(`Modal element ${modalId} not found`);
+            return;
+        }
+        
+        // Try multiple approaches to hide modal
+        try {
+            // Try Bootstrap 5 way
+            const bsModal = bootstrap.Modal.getInstance(modalElement);
+            if (bsModal) {
+                bsModal.hide();
+                console.log("Modal hidden using Bootstrap 5 API");
+                return;
+            }
+        } catch (error1) {
+            console.warn("Bootstrap 5 modal hide failed:", error1);
+        }
+        
+        try {
+            // Try jQuery way
+            $(modalElement).modal('hide');
+            console.log("Modal hidden using jQuery");
+            return;
+        } catch (error2) {
+            console.warn("jQuery modal hide failed:", error2);
+            
+            try {
+                // Manual way
+                modalElement.classList.remove('show');
+                modalElement.style.display = 'none';
+                document.body.classList.remove('modal-open');
+                
+                // Remove backdrop
+                const backdrop = document.querySelector('.modal-backdrop');
+                if (backdrop) {
+                    backdrop.parentNode.removeChild(backdrop);
+                }
+                console.log("Modal hidden manually by DOM manipulation");
+            } catch (error3) {
+                console.error("Manual modal hide failed:", error3);
+            }
+        }
+    }
 
     // Load all documents
     async function loadDocuments() {
         try {
             console.log("Loading documents...");
-            documentsTableBody.innerHTML = '<tr><td colspan="5" class="text-center">Loading documents...</td></tr>';
+            if (elements.documentsTableBody) {
+                elements.documentsTableBody.innerHTML = '<tr><td colspan="5" class="text-center">Loading documents...</td></tr>';
+            }
             
             const response = await fetch('/documents');
             const data = await response.json();
@@ -109,32 +200,41 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderDocumentsTable();
             } else {
                 console.error("Error loading documents:", data.message);
-                documentsTableBody.innerHTML = `
+                if (elements.documentsTableBody) {
+                    elements.documentsTableBody.innerHTML = `
+                        <tr>
+                            <td colspan="5" class="text-center text-danger">
+                                <i class="fas fa-exclamation-circle me-2"></i>
+                                ${data.message}
+                            </td>
+                        </tr>
+                    `;
+                }
+            }
+        } catch (error) {
+            console.error("Exception loading documents:", error);
+            if (elements.documentsTableBody) {
+                elements.documentsTableBody.innerHTML = `
                     <tr>
                         <td colspan="5" class="text-center text-danger">
                             <i class="fas fa-exclamation-circle me-2"></i>
-                            ${data.message}
+                            Error loading documents: ${error.message}
                         </td>
                     </tr>
                 `;
             }
-        } catch (error) {
-            console.error("Exception loading documents:", error);
-            documentsTableBody.innerHTML = `
-                <tr>
-                    <td colspan="5" class="text-center text-danger">
-                        <i class="fas fa-exclamation-circle me-2"></i>
-                        Error loading documents: ${error.message}
-                    </td>
-                </tr>
-            `;
         }
     }
 
     // Render documents table
     function renderDocumentsTable() {
+        if (!elements.documentsTableBody) {
+            console.error("Cannot render documents table: documentsTableBody element not found");
+            return;
+        }
+        
         if (currentDocuments.length === 0) {
-            documentsTableBody.innerHTML = `
+            elements.documentsTableBody.innerHTML = `
                 <tr>
                     <td colspan="5" class="text-center">
                         No documents found. Upload documents from the search page.
@@ -144,7 +244,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        documentsTableBody.innerHTML = '';
+        elements.documentsTableBody.innerHTML = '';
         
         currentDocuments.forEach(doc => {
             const row = document.createElement('tr');
@@ -162,12 +262,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     sizeInfo = `${(doc.file_size / 1024 / 1024).toFixed(2)} MB`;
                 }
             } else {
-                sizeInfo = `${doc.chunk_count} chunks`;
+                sizeInfo = `${doc.chunk_count || 'Unknown'} chunks`;
             }
+            
+            const safeTitle = doc.title || doc.filename || 'Untitled Document';
             
             row.innerHTML = `
                 <td>
-                    <strong>${doc.title || doc.filename}</strong>
+                    <strong>${safeTitle}</strong>
                 </td>
                 <td>
                     <span class="badge bg-${doc.file_type === 'pdf' ? 'warning' : 'info'}">
@@ -181,14 +283,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         <button type="button" class="btn btn-sm btn-outline-info view-doc-btn" data-id="${doc.id}">
                             <i class="fas fa-eye"></i>
                         </button>
-                        <button type="button" class="btn btn-sm btn-outline-danger delete-doc-btn" data-id="${doc.id}" data-title="${doc.title || doc.filename}">
+                        <button type="button" class="btn btn-sm btn-outline-danger delete-doc-btn" data-id="${doc.id}" data-title="${safeTitle}">
                             <i class="fas fa-trash"></i>
                         </button>
                     </div>
                 </td>
             `;
             
-            documentsTableBody.appendChild(row);
+            elements.documentsTableBody.appendChild(row);
         });
         
         // Add event listeners to buttons
@@ -205,9 +307,15 @@ document.addEventListener('DOMContentLoaded', () => {
     async function viewDocument(docId) {
         try {
             console.log(`Viewing document: ${docId}`);
-            documentDetailContent.innerHTML = '<p class="text-center">Loading document details...</p>';
-            documentDetailContainer.classList.remove('d-none');
-            documentsTableContainer.classList.add('d-none');
+            
+            if (!elements.documentDetailContent || !elements.documentDetailContainer || !elements.documentsTableContainer) {
+                console.error("Cannot view document: required DOM elements not found");
+                return;
+            }
+            
+            elements.documentDetailContent.innerHTML = '<p class="text-center">Loading document details...</p>';
+            elements.documentDetailContainer.classList.remove('d-none');
+            elements.documentsTableContainer.classList.add('d-none');
             
             const response = await fetch(`/documents/${docId}`);
             const data = await response.json();
@@ -219,7 +327,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 // Build detailed view
                 let html = `
-                    <h4>${doc.title || doc.filename}</h4>
+                    <h4>${doc.title || doc.filename || 'Untitled Document'}</h4>
                     <div class="row mb-4">
                         <div class="col-md-6">
                             <ul class="list-group list-group-flush bg-transparent">
@@ -233,7 +341,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                     <span>Added:</span>
                                     <span>${dateStr}</span>
                                 </li>
-                    `;
+                `;
                     
                 if (doc.file_type === 'pdf') {
                     html += `
@@ -246,7 +354,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             <span>${doc.page_count || 'N/A'}</span>
                         </li>
                     `;
-                } else {
+                } else if (doc.source_url) {
                     html += `
                         <li class="list-group-item bg-transparent d-flex justify-content-between">
                             <span>Source URL:</span>
@@ -258,7 +366,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 html += `
                         <li class="list-group-item bg-transparent d-flex justify-content-between">
                             <span>Text Chunks:</span>
-                            <span>${doc.chunks.length}</span>
+                            <span>${doc.chunks ? doc.chunks.length : 0}</span>
                         </li>
                     </ul>
                 </div>
@@ -276,8 +384,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 `;
                 
                 // Add content preview (first few chunks)
-                const maxChunks = Math.min(3, doc.chunks.length);
-                if (doc.chunks.length > 0) {
+                if (doc.chunks && doc.chunks.length > 0) {
+                    const maxChunks = Math.min(3, doc.chunks.length);
                     for (let i = 0; i < maxChunks; i++) {
                         html += `
                             <div class="mb-3">
@@ -310,26 +418,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
                 `;
                 
-                documentDetailContent.innerHTML = html;
+                elements.documentDetailContent.innerHTML = html;
                 
                 // Load collections for this document (Would need to implement this endpoint)
                 // loadDocumentCollections(docId);
             } else {
-                documentDetailContent.innerHTML = `
+                elements.documentDetailContent.innerHTML = `
                     <div class="alert alert-danger" role="alert">
                         <i class="fas fa-exclamation-circle me-2"></i>
-                        ${data.message}
+                        ${data.message || 'Error loading document details'}
                     </div>
                 `;
             }
         } catch (error) {
             console.error("Error viewing document:", error);
-            documentDetailContent.innerHTML = `
-                <div class="alert alert-danger" role="alert">
-                    <i class="fas fa-exclamation-circle me-2"></i>
-                    Error loading document: ${error.message}
-                </div>
-            `;
+            if (elements.documentDetailContent) {
+                elements.documentDetailContent.innerHTML = `
+                    <div class="alert alert-danger" role="alert">
+                        <i class="fas fa-exclamation-circle me-2"></i>
+                        Error loading document: ${error.message}
+                    </div>
+                `;
+            }
         }
     }
 
@@ -337,7 +447,12 @@ document.addEventListener('DOMContentLoaded', () => {
     async function loadCollections() {
         try {
             console.log("Loading collections...");
-            collectionsList.innerHTML = '<div class="list-group-item list-group-item-dark">Loading collections...</div>';
+            if (!elements.collectionsList) {
+                console.error("Cannot load collections: collectionsList element not found");
+                return;
+            }
+            
+            elements.collectionsList.innerHTML = '<div class="list-group-item list-group-item-dark">Loading collections...</div>';
             
             const response = await fetch('/collections');
             const data = await response.json();
@@ -348,28 +463,35 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderCollectionsList();
             } else {
                 console.error("Error loading collections:", data.message);
-                collectionsList.innerHTML = `
+                elements.collectionsList.innerHTML = `
                     <div class="list-group-item list-group-item-dark text-danger">
                         <i class="fas fa-exclamation-circle me-2"></i>
-                        ${data.message}
+                        ${data.message || 'Error loading collections'}
                     </div>
                 `;
             }
         } catch (error) {
             console.error("Exception loading collections:", error);
-            collectionsList.innerHTML = `
-                <div class="list-group-item list-group-item-dark text-danger">
-                    <i class="fas fa-exclamation-circle me-2"></i>
-                    Error loading collections: ${error.message}
-                </div>
-            `;
+            if (elements.collectionsList) {
+                elements.collectionsList.innerHTML = `
+                    <div class="list-group-item list-group-item-dark text-danger">
+                        <i class="fas fa-exclamation-circle me-2"></i>
+                        Error loading collections: ${error.message}
+                    </div>
+                `;
+            }
         }
     }
 
     // Render collections list
     function renderCollectionsList() {
-        if (currentCollections.length === 0) {
-            collectionsList.innerHTML = `
+        if (!elements.collectionsList) {
+            console.error("Cannot render collections list: collectionsList element not found");
+            return;
+        }
+        
+        if (!currentCollections || currentCollections.length === 0) {
+            elements.collectionsList.innerHTML = `
                 <div class="list-group-item list-group-item-dark">
                     No collections found. Create a new collection to organize your documents.
                 </div>
@@ -377,23 +499,30 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        collectionsList.innerHTML = '';
+        elements.collectionsList.innerHTML = '';
         
         currentCollections.forEach(collection => {
+            if (!collection || !collection.id) {
+                console.warn("Skipping invalid collection in renderCollectionsList");
+                return;
+            }
+            
             const item = document.createElement('a');
             item.href = '#';
             item.className = 'list-group-item list-group-item-action d-flex justify-content-between align-items-center';
             item.dataset.id = collection.id;
             
+            const documentCount = collection.document_count || 0;
+            
             item.innerHTML = `
                 <div>
                     <i class="fas fa-folder me-2"></i>
-                    <span>${collection.name}</span>
+                    <span>${collection.name || 'Unnamed Collection'}</span>
                 </div>
-                <span class="badge bg-primary rounded-pill">${collection.document_count}</span>
+                <span class="badge bg-primary rounded-pill">${documentCount}</span>
             `;
             
-            collectionsList.appendChild(item);
+            elements.collectionsList.appendChild(item);
             
             // Add click event
             item.addEventListener('click', (e) => {
@@ -408,27 +537,24 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             console.log("Creating collection function called");
             
-            // Get a reference to the form and button
-            const collectionNameInput = document.getElementById('collectionName');
-            // Be explicit about the form field to avoid confusion with the paragraph element
+            // Get form field references using more specific selectors
+            const collectionNameInput = document.querySelector('#newCollectionForm #collectionName');
             const descriptionInput = document.querySelector('#newCollectionForm #collectionDescription');
-            const createButton = document.getElementById('createCollectionBtn');
             
-            console.log("Form elements:", {
-                collectionNameInput: collectionNameInput ? "found" : "missing",
-                descriptionInput: descriptionInput ? "found" : "missing",
-                createButton: createButton ? "found" : "missing"
+            console.log("Form element lookup results:", {
+                nameInput: collectionNameInput ? "found" : "missing",
+                descriptionInput: descriptionInput ? "found" : "missing"
             });
             
-            // Check if elements were found
+            // Check if name input was found
             if (!collectionNameInput) {
                 console.error("Collection name input not found");
                 alert('Error: Collection name input not found');
                 return;
             }
             
-            // Safely get values with null checks
-            const collectionName = collectionNameInput && collectionNameInput.value ? collectionNameInput.value.trim() : '';
+            // Safely get values
+            const collectionName = collectionNameInput.value ? collectionNameInput.value.trim() : '';
             const description = descriptionInput && descriptionInput.value ? descriptionInput.value.trim() : '';
             
             console.log("Form values:", { collectionName, description });
@@ -439,15 +565,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             
-            // Disable the button to prevent multiple submissions
-            if (createButton) {
-                createButton.disabled = true;
-                createButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating...';
+            // Disable the create button and show spinner
+            if (elements.createCollectionBtn) {
+                elements.createCollectionBtn.disabled = true;
+                elements.createCollectionBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating...';
                 console.log("Button disabled and spinner shown");
-            } else {
-                console.error("Create button not found");
             }
             
+            // Prepare request data
             const payload = {
                 name: collectionName,
                 description: description
@@ -465,7 +590,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             console.log("Response status:", response.status);
             
-            // Try to parse the response as JSON
+            // Parse response
             let data;
             try {
                 data = await response.json();
@@ -477,37 +602,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error("Invalid response format");
             }
             
+            // Close the modal regardless of success/failure
+            hideModal('newCollectionModal');
+            
             if (data.success) {
-                console.log("Collection created successfully:", data.collection_id);
-                
-                // Close modal - try different approaches
-                try {
-                    console.log("Trying to close modal with jQuery");
-                    $('#newCollectionModal').modal('hide');
-                } catch (modalError1) {
-                    console.error("jQuery close failed:", modalError1);
-                    try {
-                        console.log("Trying to close modal with Bootstrap API");
-                        const modal = bootstrap.Modal.getInstance(document.getElementById('newCollectionModal'));
-                        if (modal) modal.hide();
-                    } catch (modalError2) {
-                        console.error("Bootstrap close failed:", modalError2);
-                        // Last resort - manipulate DOM directly
-                        try {
-                            console.log("Trying to close modal by manipulating DOM");
-                            const modalElement = document.getElementById('newCollectionModal');
-                            if (modalElement) {
-                                modalElement.classList.remove('show');
-                                modalElement.style.display = 'none';
-                                document.body.classList.remove('modal-open');
-                                const backdrop = document.querySelector('.modal-backdrop');
-                                if (backdrop) backdrop.parentNode.removeChild(backdrop);
-                            }
-                        } catch (modalError3) {
-                            console.error("DOM manipulation failed:", modalError3);
-                        }
-                    }
-                }
+                console.log("Collection created successfully");
                 
                 // Clear form
                 if (collectionNameInput) collectionNameInput.value = '';
@@ -516,20 +615,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Show success message
                 alert(`Collection "${collectionName}" created successfully`);
                 
-                // Reload collections
+                // Reload collections to show the new one
                 loadCollections();
             } else {
-                alert(`Error: ${data.message}`);
+                console.error("Error from server:", data.message);
+                alert(`Error: ${data.message || 'Unknown error creating collection'}`);
             }
         } catch (error) {
             console.error("Exception creating collection:", error);
             alert(`Error creating collection: ${error.message}`);
         } finally {
             // Re-enable the button
-            const createButton = document.getElementById('createCollectionBtn');
-            if (createButton) {
-                createButton.disabled = false;
-                createButton.innerHTML = 'Create Collection';
+            if (elements.createCollectionBtn) {
+                elements.createCollectionBtn.disabled = false;
+                elements.createCollectionBtn.innerHTML = 'Create Collection';
                 console.log("Button re-enabled");
             }
         }
@@ -538,34 +637,45 @@ document.addEventListener('DOMContentLoaded', () => {
     // View a single collection
     async function viewCollection(collectionId) {
         try {
+            console.log(`Viewing collection: ${collectionId}`);
+            
+            if (!elements.collectionDetailTitle || !elements.collectionDescription || !elements.collectionDetailCard || !elements.collectionDocumentsList) {
+                console.error("Cannot view collection: required DOM elements not found");
+                return;
+            }
+            
             selectedCollectionId = collectionId;
             
             // Find the collection in the current list
             const collection = currentCollections.find(c => c.id == collectionId);
             
             if (!collection) {
+                console.error(`Collection with ID ${collectionId} not found`);
                 alert('Collection not found');
                 return;
             }
             
             // Update UI with collection info
-            collectionDetailTitle.innerHTML = `<i class="fas fa-folder-open me-2"></i>${collection.name}`;
-            collectionDescription.textContent = collection.description || 'No description provided.';
+            elements.collectionDetailTitle.innerHTML = `<i class="fas fa-folder-open me-2"></i>${collection.name || 'Unnamed Collection'}`;
+            elements.collectionDescription.textContent = collection.description || 'No description provided.';
             
             // Show the collection detail card
-            collectionDetailCard.style.display = 'block';
+            elements.collectionDetailCard.style.display = 'block';
             
             // Load documents in this collection (would need to implement this API endpoint)
             // For now, just show a placeholder
-            collectionDocumentsList.innerHTML = `
+            elements.collectionDocumentsList.innerHTML = `
                 <li class="list-group-item list-group-item-dark">
                     Loading documents in this collection...
                 </li>
             `;
             
             // When the add to collection button is clicked
-            if (addToCollectionBtn) {
-                addToCollectionBtn.onclick = () => prepareAddToCollection(collectionId);
+            if (elements.addToCollectionBtn) {
+                elements.addToCollectionBtn.onclick = () => {
+                    prepareAddToCollection(collectionId);
+                    showModal('addToCollectionModal');
+                };
             }
         } catch (error) {
             console.error("Error viewing collection:", error);
@@ -576,8 +686,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // Prepare the add to collection modal
     function prepareAddToCollection(collectionId) {
         try {
+            console.log(`Preparing document selection for collection ${collectionId}`);
+            
+            if (!elements.documentSelectionList) {
+                console.error("Cannot prepare document selection: documentSelectionList element not found");
+                return;
+            }
+            
             if (!currentDocuments || currentDocuments.length === 0) {
-                documentSelectionList.innerHTML = `
+                elements.documentSelectionList.innerHTML = `
                     <div class="list-group-item list-group-item-dark">
                         No documents available to add
                     </div>
@@ -585,17 +702,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             
-            documentSelectionList.innerHTML = '';
+            elements.documentSelectionList.innerHTML = '';
             
             currentDocuments.forEach(doc => {
+                if (!doc || !doc.id) {
+                    console.warn("Skipping invalid document in prepareAddToCollection");
+                    return;
+                }
+                
                 const item = document.createElement('div');
                 item.className = 'list-group-item list-group-item-dark';
+                
+                const safeTitle = doc.title || doc.filename || 'Untitled Document';
                 
                 item.innerHTML = `
                     <div class="form-check">
                         <input class="form-check-input" type="checkbox" value="${doc.id}" id="doc-check-${doc.id}">
                         <label class="form-check-label" for="doc-check-${doc.id}">
-                            ${doc.title || doc.filename}
+                            ${safeTitle}
                             <span class="badge bg-${doc.file_type === 'pdf' ? 'warning' : 'info'} ms-1">
                                 ${doc.file_type === 'pdf' ? 'PDF' : 'Website'}
                             </span>
@@ -603,7 +727,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                 `;
                 
-                documentSelectionList.appendChild(item);
+                elements.documentSelectionList.appendChild(item);
             });
         } catch (error) {
             console.error("Error preparing add to collection:", error);
@@ -614,19 +738,31 @@ document.addEventListener('DOMContentLoaded', () => {
     // Add selected documents to the collection
     async function addDocumentsToCollection() {
         try {
-            const selectedDocs = Array.from(document.querySelectorAll('#documentSelectionList input[type="checkbox"]:checked'))
-                .map(cb => cb.value);
+            console.log("Adding documents to collection");
             
-            if (selectedDocs.length === 0) {
+            if (!selectedCollectionId) {
+                console.error("No collection selected");
+                alert('Error: No collection selected');
+                return;
+            }
+            
+            const checkboxes = document.querySelectorAll('#documentSelectionList input[type="checkbox"]:checked');
+            if (!checkboxes || checkboxes.length === 0) {
+                console.warn("No documents selected");
                 alert('Please select at least one document');
                 return;
             }
+            
+            const selectedDocs = Array.from(checkboxes).map(cb => cb.value);
+            console.log(`Selected ${selectedDocs.length} documents to add to collection ${selectedCollectionId}`);
             
             const successfullyAdded = [];
             
             // Add each document one by one
             for (const docId of selectedDocs) {
                 try {
+                    console.log(`Adding document ${docId} to collection ${selectedCollectionId}`);
+                    
                     const response = await fetch(`/collections/${selectedCollectionId}/documents`, {
                         method: 'POST',
                         headers: {
@@ -640,26 +776,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     const data = await response.json();
                     
                     if (data.success) {
+                        console.log(`Successfully added document ${docId} to collection`);
                         successfullyAdded.push(docId);
+                    } else {
+                        console.error(`Failed to add document ${docId} to collection:`, data.message);
                     }
                 } catch (innerError) {
                     console.error(`Error adding document ${docId} to collection:`, innerError);
                 }
             }
             
-            // Close modal using jQuery
-            try {
-                $('#addToCollectionModal').modal('hide');
-            } catch (modalError) {
-                console.error("Error closing modal:", modalError);
-                // Fallback to bootstrap API
-                try {
-                    const modal = bootstrap.Modal.getInstance(document.getElementById('addToCollectionModal'));
-                    if (modal) modal.hide();
-                } catch (bsError) {
-                    console.error("Bootstrap modal error:", bsError);
-                }
-            }
+            // Close the modal
+            hideModal('addToCollectionModal');
             
             // Show result
             if (successfullyAdded.length > 0) {
@@ -683,30 +811,37 @@ document.addEventListener('DOMContentLoaded', () => {
     // Show delete document confirmation
     function showDeleteConfirmation(docId, title) {
         try {
+            console.log(`Showing delete confirmation for document ${docId}: "${title}"`);
+            
             documentToDeleteId = docId;
+            
             const nameElement = document.getElementById('deleteDocumentName');
             if (nameElement) {
-                nameElement.textContent = title;
+                nameElement.textContent = title || 'this document';
             }
             
             // Show the modal
-            try {
-                const modal = new bootstrap.Modal(document.getElementById('deleteDocumentModal'));
-                modal.show();
-            } catch (modalError) {
-                console.error("Error showing modal:", modalError);
-                alert(`Please confirm: Do you want to delete "${title}"?`);
-            }
+            showModal('deleteDocumentModal');
         } catch (error) {
             console.error("Error showing delete confirmation:", error);
-            alert(`Error showing delete confirmation: ${error.message}`);
+            
+            // Fallback if modal doesn't work
+            const confirmDelete = confirm(`Do you want to delete "${title || 'this document'}"?`);
+            if (confirmDelete) {
+                deleteDocument();
+            }
         }
     }
 
     // Delete a document
     async function deleteDocument() {
         try {
-            if (!documentToDeleteId) return;
+            if (!documentToDeleteId) {
+                console.error("No document selected for deletion");
+                return;
+            }
+            
+            console.log(`Deleting document ${documentToDeleteId}`);
             
             const response = await fetch(`/documents/${documentToDeleteId}`, {
                 method: 'DELETE'
@@ -714,28 +849,20 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const data = await response.json();
             
-            // Close the modal using jQuery
-            try {
-                $('#deleteDocumentModal').modal('hide');
-            } catch (modalError) {
-                console.error("Error closing modal:", modalError);
-                // Fallback to bootstrap API
-                try {
-                    const modal = bootstrap.Modal.getInstance(document.getElementById('deleteDocumentModal'));
-                    if (modal) modal.hide();
-                } catch (bsError) {
-                    console.error("Bootstrap modal error:", bsError);
-                }
-            }
+            // Close the modal
+            hideModal('deleteDocumentModal');
             
             if (data.success) {
-                // Reload documents
+                console.log("Document deleted successfully");
+                
+                // Reload documents and collections
                 loadDocuments();
-                // Also reload collections as the document counts may have changed
                 loadCollections();
-                alert(data.message);
+                
+                alert(data.message || 'Document deleted successfully');
             } else {
-                alert(`Error: ${data.message}`);
+                console.error("Error deleting document:", data.message);
+                alert(`Error: ${data.message || 'Unknown error deleting document'}`);
             }
         } catch (error) {
             console.error("Error deleting document:", error);
