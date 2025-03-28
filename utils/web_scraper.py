@@ -891,6 +891,7 @@ def create_minimal_content_for_topic(url):
     """
     Create minimal content for topic pages when other methods fail.
     This is a robust direct method that bypasses trafilatura for better reliability with topic pages.
+    Memory-optimized version to prevent OOM errors.
     
     Args:
         url (str): URL of the topic page
@@ -898,7 +899,7 @@ def create_minimal_content_for_topic(url):
     Returns:
         list: List of dictionaries containing text chunks and metadata or empty list if failed
     """
-    logger.info(f"Creating minimal content for important topic page: {url}")
+    logger.info(f"Creating memory-optimized minimal content for topic page: {url}")
     
     # Parse URL
     parsed_url = urllib.parse.urlparse(url)
@@ -906,60 +907,80 @@ def create_minimal_content_for_topic(url):
     # Extract topic name from URL path for fallback content
     topic_name = parsed_url.path.strip('/').split('/')[-1].replace('-', ' ').title()
     
-    # Try to get page content directly
+    # Try to get page content directly with strict memory limits
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-        response = requests.get(url, headers=headers, timeout=10)
         
-        # Default title
-        title = f"Rheumatology Topic: {topic_name}"
-        content_text = ""
-        
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
+        # Use a session to minimize memory usage and add timeout
+        with requests.Session() as session:
+            response = session.get(url, headers=headers, timeout=5, stream=True)
             
-            # Extract title
-            title_element = soup.find('title')
-            if title_element and title_element.text:
-                title = title_element.text.strip()
-                logger.info(f"Extracted title: {title}")
+            # Default title
+            title = f"Rheumatology Topic: {topic_name}"
+            content_text = ""
             
-            # Extract content from article element
-            article = soup.find('article')
-            if article:
-                content_text = article.get_text(separator=' ', strip=True)
-                logger.info(f"Extracted {len(content_text)} chars from article element")
-            
-            # If article didn't work, try other content containers
-            if not content_text or len(content_text) < 100:
-                for selector in ['.content', '#content', 'main', '#main', '.main-content', 
-                                 '.entry-content', '.page-content', '.article', '#article']:
-                    element = None
-                    if selector.startswith('.'):
-                        elements = soup.find_all(class_=selector[1:])
-                        if elements:
-                            element = elements[0]
-                    elif selector.startswith('#'):
-                        element = soup.find(id=selector[1:])
-                    else:
-                        elements = soup.find_all(selector)
-                        if elements:
-                            element = elements[0]
+            if response.status_code == 200:
+                # Read content in chunks to minimize memory usage
+                html_content = ""
+                for chunk in response.iter_content(chunk_size=1024 * 8, decode_unicode=True):
+                    if chunk:
+                        html_content += chunk
+                        # Safety limit to avoid memory issues - stop at 100KB
+                        if len(html_content) > 100 * 1024:
+                            logger.warning(f"Reached HTML content size limit for {url}, truncating")
+                            break
+                
+                # Process with BeautifulSoup using lxml parser (faster and more memory-efficient)
+                soup = BeautifulSoup(html_content, 'lxml')
+                
+                # Clear html_content to free memory
+                html_content = None
+                
+                # Extract title
+                title_element = soup.find('title')
+                if title_element and title_element.text:
+                    title = title_element.text.strip()
+                    logger.info(f"Extracted title: {title}")
+                
+                # Extract content from article element - only look for main content
+                article = soup.find('article')
+                if article:
+                    content_text = article.get_text(separator=' ', strip=True)
+                    logger.info(f"Extracted {len(content_text)} chars from article element")
+                    
+                    # Clear article to free memory
+                    article = None
+                
+                # If article didn't work, try only main/content containers (limited set)
+                if not content_text or len(content_text) < 100:
+                    # Only check the most common containers to avoid memory issues
+                    for selector in ['.content', 'main', '.main-content', '.entry-content']:
+                        element = None
+                        if selector.startswith('.'):
+                            element = soup.find(class_=selector[1:])
+                        else:
+                            element = soup.find(selector)
+                                
+                        if element:
+                            extracted = element.get_text(separator=' ', strip=True)
+                            if len(extracted) > len(content_text):
+                                content_text = extracted
+                                logger.info(f"Extracted {len(content_text)} chars from {selector}")
                             
-                    if element:
-                        extracted = element.get_text(separator=' ', strip=True)
-                        if len(extracted) > len(content_text):
-                            content_text = extracted
-                            logger.info(f"Extracted {len(content_text)} chars from {selector}")
+                            # Clear to free memory
+                            element = None
+                            extracted = None
+                
+                # Clear soup to free memory
+                soup = None
         
         # Create content
-        text = ""
         if content_text and len(content_text) > 200:
-            # Format with title and content
-            text = f"{title}\n\n{content_text}"
-            logger.info(f"Created content with actual extracted text ({len(text)} chars)")
+            # Format with title and content, but limit size
+            text = f"{title}\n\n{content_text[:8000]}"  # Limit to 8000 chars
+            logger.info(f"Created content with actual extracted text (limited to {len(text)} chars)")
         else:
             # Create minimal fallback
             text = f"""Rheumatology Topic Page: {title}
@@ -969,13 +990,20 @@ This is a specialized page about {topic_name} in rheumatology.
 The page appears to contain information about this specific condition or topic."""
             logger.info(f"Created minimal fallback content ({len(text)} chars)")
         
-        # Format as chunks
+        # Format as chunks - but limit number of chunks
         citation = generate_website_citation(title, url)
         chunks = []
         
-        # Use our standard chunking function
-        text_chunks = chunk_text(text, max_length=800, overlap=200)
+        # Use our standard chunking function but with smaller chunks
+        text_chunks = chunk_text(text, max_length=600, overlap=100)
         
+        # Limit to max 6 chunks
+        max_chunks = 6
+        if len(text_chunks) > max_chunks:
+            logger.warning(f"Limiting chunks from {len(text_chunks)} to {max_chunks}")
+            text_chunks = text_chunks[:max_chunks]
+        
+        # Create chunk objects
         for i, chunk in enumerate(text_chunks):
             chunks.append({
                 "text": chunk,
@@ -984,25 +1012,25 @@ The page appears to contain information about this specific condition or topic."
                     "title": title,
                     "url": url,
                     "chunk_index": i,
-                    "page_number": 1,  # Always page 1 for minimal content
+                    "page_number": 1,
                     "citation": citation,
                     "date_scraped": datetime.now().isoformat(),
-                    "is_minimal_content": True  # Flag to indicate this is minimal content
+                    "is_minimal_content": True
                 }
             })
         
-        logger.info(f"Created {len(chunks)} chunks for minimal topic page content")
+        logger.info(f"Created {len(chunks)} memory-optimized chunks for topic page")
         return chunks
     
     except Exception as e:
         logger.exception(f"Error creating minimal content: {str(e)}")
         
-        # Last-resort fallback - create a single chunk with basic info
+        # Absolute minimal fallback with a single chunk
         try:
             text = f"""Rheumatology Topic Page: {topic_name}
 URL: {url}
 
-This is a specialized page about {topic_name} in rheumatology."""
+This is a page about {topic_name} in rheumatology."""
             
             citation = f"Information about {topic_name}. Retrieved {datetime.now().strftime('%B %d, %Y')}, from {url}"
             
@@ -1021,7 +1049,7 @@ This is a specialized page about {topic_name} in rheumatology."""
                 }
             }]
         except Exception as e2:
-            logger.exception(f"Error creating last-resort fallback: {str(e2)}")
+            logger.exception(f"Error creating fallback: {str(e2)}")
             return []
 
 def _scrape_single_page(url):

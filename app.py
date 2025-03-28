@@ -539,7 +539,7 @@ def clear():
 # New endpoint specifically for adding multiple rheum.reviews topic pages at once
 @app.route('/add_topic_pages', methods=['POST'])
 def add_topic_pages():
-    """Add multiple rheum.reviews topic pages at once."""
+    """Add multiple rheum.reviews topic pages at once. Memory-optimized version."""
     try:
         # Try to get data from JSON or form data
         topics = None
@@ -587,20 +587,23 @@ def add_topic_pages():
                 'message': 'Topics must be provided as a non-empty list.'
             }), 400
         
-        # Maximum number of topics to process at once
-        max_topics = 5
+        # MEMORY OPTIMIZATION: Reduce maximum number of topics to 2
+        max_topics = 2
         if len(topics) > max_topics:
-            return jsonify({
-                'success': False,
-                'message': f'Too many topics requested. Maximum {max_topics} topics can be processed at once.'
-            }), 400
+            topics = topics[:max_topics]  # Silently truncate to reduce memory issues
+            logger.warning(f"Limiting to first {max_topics} topics to prevent memory issues")
         
         # Format topic URLs
         base_url = "https://rheum.reviews/topic/"
         processed_topics = []
         failed_topics = []
         
+        # Process one topic at a time to reduce memory pressure
         for topic in topics:
+            # Reset variables to help with memory cleanup
+            chunks = None
+            chunk_records = []
+            
             # Clean the topic name for URL
             topic_slug = topic.strip().lower().replace(' ', '-')
             if not topic_slug:
@@ -623,23 +626,39 @@ def add_topic_pages():
                 db.session.commit()
                 
                 # Process the topic page with strict limits to avoid memory issues
-                logger.info(f"Processing topic page: {url}")
+                logger.info(f"Processing topic page with memory optimization: {url}")
                 try:
-                    # Use minimal content fetching for topic pages to prevent memory issues
-                    # First try direct minimal content extraction which is optimized for topic pages
+                    # Use memory-optimized content fetching for topic pages 
                     chunks = create_minimal_content_for_topic(url)
                     
-                    # If that fails, fall back to very limited crawling with strict memory constraints
+                    # Don't even try crawling to avoid memory issues
                     if not chunks:
-                        logger.info(f"Minimal content extraction failed for {url}, trying limited crawler")
-                        chunks = scrape_website(url, max_pages=1, max_wait_time=30)
+                        logger.warning(f"Memory-optimized content extraction failed for {url}")
+                        raise Exception("Could not extract content from topic page")
+                    
                 except Exception as e:
                     logger.error(f"Error processing topic {topic}: {str(e)}")
                     failed_topics.append({"topic": topic, "reason": f"Error: {str(e)}"})
+                    
+                    # Clean up any partial document
+                    try:
+                        db.session.delete(new_document)
+                        db.session.commit()
+                    except Exception:
+                        pass
+                    
                     continue
                 
                 if not chunks or len(chunks) == 0:
                     failed_topics.append({"topic": topic, "reason": "No content extracted"})
+                    
+                    # Clean up any partial document
+                    try:
+                        db.session.delete(new_document)
+                        db.session.commit()
+                    except Exception:
+                        pass
+                    
                     continue
                 
                 # Update document with title
@@ -647,39 +666,39 @@ def add_topic_pages():
                     new_document.title = chunks[0]['metadata']['title']
                     db.session.commit()
                 
-                # Process chunks (limited to 100 per topic)
-                max_chunks = 100
+                # MEMORY OPTIMIZATION: Process chunks with much stricter limits
+                max_chunks = 5  # Drastically reduce number of chunks to prevent memory issues
                 if len(chunks) > max_chunks:
+                    logger.warning(f"Limiting chunks from {len(chunks)} to {max_chunks} for memory optimization")
                     chunks = chunks[:max_chunks]
                 
                 success_count = 0
-                chunk_records = []
                 
-                # Process chunks in batches
+                # Process chunks one at a time with explicit database commits
                 for i, chunk in enumerate(chunks):
                     try:
                         # Add to vector store
                         vector_store.add_text(chunk['text'], chunk['metadata'])
                         
-                        # Create database record
+                        # Create and immediately save database record to minimize memory usage
                         chunk_record = DocumentChunk(
                             document_id=new_document.id,
                             chunk_index=i,
                             page_number=chunk['metadata'].get('page_number', 1),
                             text_content=chunk['text']
                         )
-                        chunk_records.append(chunk_record)
+                        
+                        db.session.add(chunk_record)
+                        db.session.commit()
+                        
                         success_count += 1
                         
-                        # Save in batches of 10
-                        if i % 10 == 9 or i == len(chunks) - 1:
-                            vector_store._save()
-                            if chunk_records:
-                                db.session.add_all(chunk_records)
-                                db.session.commit()
-                                chunk_records = []
+                        # Save vector store after each chunk to prevent memory buildup
+                        vector_store._save()
+                        
                     except Exception as e:
                         logger.error(f"Error processing chunk {i} for topic {topic}: {str(e)}")
+                        # Continue processing next chunk
                 
                 # Mark document as processed if any chunks were successful
                 if success_count > 0:
@@ -693,22 +712,37 @@ def add_topic_pages():
                     })
                 else:
                     failed_topics.append({"topic": topic, "reason": "Failed to add chunks to database"})
+                    
+                    # Clean up any partial document
+                    try:
+                        db.session.delete(new_document)
+                        db.session.commit()
+                    except Exception:
+                        pass
+                
+                # Explicitly clean up memory
+                chunks = None
+                chunk_records = []
                 
             except Exception as e:
                 logger.exception(f"Error processing topic {topic}: {str(e)}")
                 failed_topics.append({"topic": topic, "reason": str(e)})
+            
+            # Force Python garbage collection to free memory
+            import gc
+            gc.collect()
         
         if processed_topics:
             return jsonify({
                 'success': True,
-                'message': f'Successfully processed {len(processed_topics)} topic pages',
+                'message': f'Successfully processed {len(processed_topics)} topic pages with memory optimization',
                 'processed': processed_topics,
                 'failed': failed_topics
             })
         else:
             return jsonify({
                 'success': False,
-                'message': 'Failed to process any topic pages',
+                'message': 'Failed to process any topic pages. Try with fewer topics (1-2 max).',
                 'failed': failed_topics
             }), 500
             
