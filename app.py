@@ -130,6 +130,23 @@ def upload_pdf():
             db.session.commit()
             logger.info(f"Created document record with ID: {new_document.id}")
             
+            # Check if a collection was specified
+            collection_id = request.form.get('collection_id')
+            if collection_id and collection_id.strip():
+                try:
+                    # Find the collection
+                    collection = db.session.get(Collection, int(collection_id))
+                    if collection:
+                        # Add document to collection
+                        collection.documents.append(new_document)
+                        db.session.commit()
+                        logger.info(f"Added document {new_document.id} to collection {collection_id}")
+                    else:
+                        logger.warning(f"Collection with ID {collection_id} not found")
+                except Exception as e:
+                    logger.error(f"Error adding document to collection: {e}")
+                    # Continue processing, don't fail the upload
+            
             try:
                 # Process PDF and add to vector store
                 chunks, metadata = process_pdf(file_path, filename)
@@ -316,6 +333,18 @@ def bulk_upload_pdfs():
         documents = []
         document_ids = []
         
+        # Check if a collection was specified
+        collection_id = request.form.get('collection_id')
+        collection = None
+        if collection_id and collection_id.strip():
+            try:
+                # Find the collection
+                collection = db.session.get(Collection, int(collection_id))
+                if not collection:
+                    logger.warning(f"Collection with ID {collection_id} not found")
+            except Exception as e:
+                logger.error(f"Error finding collection: {e}")
+        
         for file in valid_files:
             try:
                 filename = secure_filename(file.filename)
@@ -347,6 +376,15 @@ def bulk_upload_pdfs():
                 
                 db.session.add(new_document)
                 db.session.commit()
+                
+                # Add to collection if specified
+                if collection:
+                    try:
+                        collection.documents.append(new_document)
+                        db.session.commit()
+                        logger.info(f"Added document {new_document.id} to collection {collection_id}")
+                    except Exception as collection_error:
+                        logger.error(f"Error adding document to collection: {collection_error}")
                 
                 # Save information for response
                 pdf_paths.append(file_path)
@@ -434,6 +472,23 @@ def add_website():
         db.session.add(new_document)
         db.session.commit()
         logger.info(f"Created document record with ID: {new_document.id}")
+        
+        # Check if a collection was specified
+        collection_id = request.form.get('collection_id')
+        if collection_id and collection_id.strip():
+            try:
+                # Find the collection
+                collection = db.session.get(Collection, int(collection_id))
+                if collection:
+                    # Add document to collection
+                    collection.documents.append(new_document)
+                    db.session.commit()
+                    logger.info(f"Added document {new_document.id} to collection {collection_id}")
+                else:
+                    logger.warning(f"Collection with ID {collection_id} not found")
+            except Exception as e:
+                logger.error(f"Error adding document to collection: {e}")
+                # Continue processing, don't fail the upload
         
         # Check if URL appears to be a specific topic/disease page
         is_topic_page = False

@@ -35,6 +35,19 @@
                         <div class="form-text">Maximum size: 20MB</div>
                         <div class="invalid-feedback">Please select a valid PDF file.</div>
                     </div>
+                    <div class="mb-3">
+                        <label for="pdf-collection" class="form-label">Add to Collection (Optional)</label>
+                        <div class="input-group">
+                            <select class="form-select" id="pdf-collection" name="collection_id">
+                                <option value="">-- Select Collection --</option>
+                                <!-- Collection options will be loaded via JavaScript -->
+                            </select>
+                            <button class="btn btn-outline-secondary" type="button" id="pdf-new-collection-btn">
+                                <i class="fas fa-plus"></i> New
+                            </button>
+                        </div>
+                        <div class="form-text">Select a collection to automatically add this file to it</div>
+                    </div>
                     <button type="submit" class="btn btn-primary">Upload PDF</button>
                 </form>
                 
@@ -55,11 +68,23 @@
                         <label for="bulk-pdf-files" class="form-label">PDF Files</label>
                         <input type="file" class="form-control" id="bulk-pdf-files" name="pdf_files[]" accept=".pdf" multiple required>
                         <div class="form-text">
-                            Select multiple PDFs (max: 5 files, 50MB each). <br>
-                            For best reliability, upload only 2-3 files at once.<br>
+                            Select multiple PDFs (max: 50 files, 50MB each). <br>
                             Files will be processed in the background after upload.
                         </div>
                         <div class="invalid-feedback">Please select at least one PDF file.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="bulk-collection" class="form-label">Add to Collection (Optional)</label>
+                        <div class="input-group">
+                            <select class="form-select" id="bulk-collection" name="collection_id">
+                                <option value="">-- Select Collection --</option>
+                                <!-- Collection options will be loaded via JavaScript -->
+                            </select>
+                            <button class="btn btn-outline-secondary" type="button" id="bulk-new-collection-btn">
+                                <i class="fas fa-plus"></i> New
+                            </button>
+                        </div>
+                        <div class="form-text">Select a collection to automatically add these files to it</div>
                     </div>
                     <button type="submit" class="btn btn-primary">Bulk Upload</button>
                 </form>
@@ -84,6 +109,19 @@
                             placeholder="https://example.com" required>
                         <div class="form-text">Enter the URL of a website to crawl. The system will follow links to related pages.</div>
                         <div class="invalid-feedback">Please enter a valid URL.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="website-collection" class="form-label">Add to Collection (Optional)</label>
+                        <div class="input-group">
+                            <select class="form-select" id="website-collection" name="collection_id">
+                                <option value="">-- Select Collection --</option>
+                                <!-- Collection options will be loaded via JavaScript -->
+                            </select>
+                            <button class="btn btn-outline-secondary" type="button" id="website-new-collection-btn">
+                                <i class="fas fa-plus"></i> New
+                            </button>
+                        </div>
+                        <div class="form-text">Select a collection to automatically add this website to it</div>
                     </div>
                     <button type="submit" class="btn btn-primary">Add Website</button>
                 </form>

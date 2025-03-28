@@ -56,6 +56,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let selectedCollectionId = null;
     let documentToDeleteId = null;
     let collectionToDeleteId = null;
+    let sourceCollectionSelect = null; // Track which collection select triggered the modal
 
     // Initialize
     loadDocuments();
@@ -77,6 +78,31 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 console.warn(`Element ${elementKey} not found, cannot add ${event} event listener`);
             }
+        }
+        
+        // Setup the new collection buttons for each form
+        const pdfNewCollectionBtn = document.getElementById('pdf-new-collection-btn');
+        if (pdfNewCollectionBtn) {
+            pdfNewCollectionBtn.addEventListener('click', function() {
+                sourceCollectionSelect = document.getElementById('pdf-collection');
+                showNewCollectionModal();
+            });
+        }
+        
+        const bulkNewCollectionBtn = document.getElementById('bulk-new-collection-btn');
+        if (bulkNewCollectionBtn) {
+            bulkNewCollectionBtn.addEventListener('click', function() {
+                sourceCollectionSelect = document.getElementById('bulk-collection');
+                showNewCollectionModal();
+            });
+        }
+        
+        const websiteNewCollectionBtn = document.getElementById('website-new-collection-btn');
+        if (websiteNewCollectionBtn) {
+            websiteNewCollectionBtn.addEventListener('click', function() {
+                sourceCollectionSelect = document.getElementById('website-collection');
+                showNewCollectionModal();
+            });
         }
         
         // Form submissions
@@ -604,6 +630,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.log(`Loaded ${data.collections.length} collections`);
                 currentCollections = data.collections;
                 renderCollectionsList();
+                
+                // Update collection dropdowns in all forms
+                populateCollectionDropdown(document.getElementById('pdf-collection'));
+                populateCollectionDropdown(document.getElementById('bulk-collection'));
+                populateCollectionDropdown(document.getElementById('website-collection'));
             } else {
                 console.error("Error loading collections:", data.message);
                 elements.collectionsList.innerHTML = `
@@ -623,6 +654,32 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                 `;
             }
+        }
+    }
+    
+    // Helper function to populate a collection dropdown
+    function populateCollectionDropdown(dropdown) {
+        if (!dropdown) return;
+        
+        // Save the current value
+        const currentValue = dropdown.value;
+        
+        // Clear existing options (except the default)
+        while (dropdown.options.length > 1) {
+            dropdown.remove(1);
+        }
+        
+        // Add collection options
+        currentCollections.forEach(collection => {
+            const option = document.createElement('option');
+            option.value = collection.id;
+            option.text = collection.name;
+            dropdown.appendChild(option);
+        });
+        
+        // Restore the value if it still exists
+        if (currentValue) {
+            dropdown.value = currentValue;
         }
     }
 
@@ -705,6 +762,22 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Show modal to create a new collection
+    function showNewCollectionModal() {
+        // Clear previous inputs
+        const collectionNameInput = document.querySelector('#newCollectionForm #collectionName');
+        const descriptionInput = document.querySelector('#newCollectionForm #collectionDescription');
+        
+        if (collectionNameInput) {
+            collectionNameInput.value = '';
+        }
+        if (descriptionInput) {
+            descriptionInput.value = '';
+        }
+        
+        showModal('newCollectionModal');
+    }
+    
     // Create a new collection
     async function createCollection() {
         try {
@@ -785,11 +858,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (collectionNameInput) collectionNameInput.value = '';
                 if (descriptionInput) descriptionInput.value = '';
                 
-                // Show success message
-                alert(`Collection "${collectionName}" created successfully`);
-                
-                // Reload collections to show the new one
-                loadCollections();
+                // If this was triggered from a form's "New" button, update its dropdown
+                if (sourceCollectionSelect) {
+                    console.log("Updating source collection dropdown:", sourceCollectionSelect);
+                    
+                    // First refresh the collections
+                    await loadCollections();
+                    
+                    // Then select the newly created collection
+                    if (sourceCollectionSelect && data.collection && data.collection.id) {
+                        sourceCollectionSelect.value = data.collection.id;
+                    }
+                    
+                    // Reset the source select
+                    sourceCollectionSelect = null;
+                } else {
+                    // Just reload collections to show the new one
+                    await loadCollections();
+                }
             } else {
                 console.error("Error from server:", data.message);
                 alert(`Error: ${data.message || 'Unknown error creating collection'}`);
