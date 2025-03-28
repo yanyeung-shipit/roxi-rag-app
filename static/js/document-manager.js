@@ -1352,12 +1352,15 @@ document.addEventListener('DOMContentLoaded', () => {
         submitBtn.disabled = true;
         
         try {
-            // Send request using FormData instead of JSON
-            const formData = new FormData();
+            // Send request using simple URLSearchParams for better compatibility
+            const formData = new URLSearchParams();
             formData.append('topic_list', topics.join('\n'));
             
             const response = await fetch('/add_topic_pages', {
                 method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
                 body: formData
             });
             
