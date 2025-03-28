@@ -2,6 +2,7 @@ import os
 import gc
 import logging
 import re
+import time
 from datetime import datetime
 import fitz  # PyMuPDF
 from typing import Dict, List, Any, Optional, Tuple
@@ -308,20 +309,20 @@ def process_pdf(file_path, file_name, extract_citation=True):
         logger.exception(f"Error processing PDF: {str(e)}")
         raise Exception(f"Failed to process PDF: {str(e)}")
 
-def bulk_process_pdfs(pdf_files, batch_size=5):
+def bulk_process_pdfs(pdf_files, batch_size=3):
     """
     Process multiple PDF files in a memory-efficient way.
     
     Args:
         pdf_files (List[Tuple[str, str]]): List of (file_path, file_name) tuples
-        batch_size (int): Number of PDFs to process in each batch
+        batch_size (int): Number of PDFs to process in each batch (default: 3)
         
     Returns:
         List[Tuple[List, Dict]]: List of (chunks, metadata) tuples
     """
     results = []
     
-    # Process in batches to avoid memory issues
+    # Process in smaller batches to avoid memory issues
     for i in range(0, len(pdf_files), batch_size):
         batch = pdf_files[i:i+batch_size]
         batch_results = []
@@ -329,8 +330,14 @@ def bulk_process_pdfs(pdf_files, batch_size=5):
         for file_path, file_name in batch:
             try:
                 logger.debug(f"Processing PDF in batch: {file_name}")
+                # Add sleep to allow some background processes to complete
+                time.sleep(0.5)
+                
                 chunks, metadata = process_pdf(file_path, file_name)
                 batch_results.append((chunks, metadata))
+                
+                # Force garbage collection after each file
+                gc.collect()
             except Exception as e:
                 logger.error(f"Error processing PDF {file_name}: {str(e)}")
                 batch_results.append(([], {'error': str(e)}))
@@ -338,8 +345,12 @@ def bulk_process_pdfs(pdf_files, batch_size=5):
         # Extend results with this batch
         results.extend(batch_results)
         
-        # Force garbage collection after each batch
-        gc.collect()
+        # Force more aggressive garbage collection after each batch
+        for _ in range(3):
+            gc.collect()
+        
+        # Add a small delay between batches to allow system to stabilize
+        time.sleep(1)
     
     return results
 

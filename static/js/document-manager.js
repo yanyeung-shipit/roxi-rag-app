@@ -1299,6 +1299,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div>
                         Uploading and processing ${fileInput.files.length} PDFs with citation extraction...
                         <div class="small text-muted mt-1">This may take several minutes. Please wait.</div>
+                        <div class="small text-muted mt-1">Processing large PDFs may take 1-2 minutes per file.</div>
                     </div>
                 </div>
             </div>
@@ -1307,43 +1308,107 @@ document.addEventListener('DOMContentLoaded', () => {
         const submitBtn = elements.bulkPdfForm.querySelector('button[type="submit"]');
         submitBtn.disabled = true;
         
+        // Set a longer timeout for large uploads
+        const timeoutDuration = 120000; // 2 minutes
+        
         try {
             // Get form data
             const formData = new FormData(elements.bulkPdfForm);
             
-            // Send request
-            const response = await fetch('/bulk_upload_pdfs', {
-                method: 'POST',
-                body: formData
-            });
+            // Create an AbortController to handle timeouts
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeoutDuration);
             
-            const data = await response.json();
+            // Function to attempt the upload with retry capability
+            const attemptUpload = async (retryCount = 0, maxRetries = 1) => {
+                try {
+                    // Send request with timeout
+                    const response = await fetch('/bulk_upload_pdfs', {
+                        method: 'POST',
+                        body: formData,
+                        signal: controller.signal
+                    });
+                    
+                    // Check if response is valid JSON
+                    const contentType = response.headers.get('content-type');
+                    if (!contentType || !contentType.includes('application/json')) {
+                        throw new Error('Server returned an invalid response format. The server might be overloaded.');
+                    }
+                    
+                    const data = await response.json();
+                    clearTimeout(timeoutId);
+                    
+                    if (data.success) {
+                        // Success message
+                        elements.bulkPdfResult.innerHTML = `
+                            <div class="alert alert-success">
+                                <i class="fas fa-check-circle me-2"></i>
+                                ${data.message}
+                            </div>
+                        `;
+                        // Reset form
+                        elements.bulkPdfForm.reset();
+                        elements.bulkPdfForm.classList.remove('was-validated');
+                        
+                        // Refresh documents list
+                        loadDocuments();
+                    } else {
+                        // Error message
+                        elements.bulkPdfResult.innerHTML = `
+                            <div class="alert alert-danger">
+                                <i class="fas fa-exclamation-circle me-2"></i>
+                                ${data.message}
+                            </div>
+                        `;
+                    }
+                } catch (error) {
+                    clearTimeout(timeoutId);
+                    
+                    // Check if we should retry
+                    if (retryCount < maxRetries) {
+                        console.log(`Retrying upload (attempt ${retryCount + 1}/${maxRetries + 1})...`);
+                        
+                        // Update UI to show retry attempt
+                        elements.bulkPdfResult.innerHTML = `
+                            <div class="alert alert-warning">
+                                <div class="d-flex align-items-center">
+                                    <div class="spinner-border spinner-border-sm me-2" role="status">
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
+                                    <div>
+                                        Request timed out. Retrying upload (attempt ${retryCount + 1}/${maxRetries + 1})...
+                                        <div class="small text-muted mt-1">Please continue to wait. Processing large files takes time.</div>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                        
+                        // Wait a bit before retrying
+                        await new Promise(resolve => setTimeout(resolve, 3000));
+                        
+                        // Retry the upload
+                        return attemptUpload(retryCount + 1, maxRetries);
+                    }
+                    
+                    // If we've exhausted our retries, show the error
+                    const errorMessage = error.name === 'AbortError' 
+                        ? 'Request timed out. The server is taking too long to process your files. Try uploading fewer files at once.'
+                        : `Error: ${error.message}`;
+                    
+                    elements.bulkPdfResult.innerHTML = `
+                        <div class="alert alert-danger">
+                            <i class="fas fa-exclamation-circle me-2"></i>
+                            ${errorMessage}
+                        </div>
+                    `;
+                }
+            };
             
-            if (data.success) {
-                // Success message
-                elements.bulkPdfResult.innerHTML = `
-                    <div class="alert alert-success">
-                        <i class="fas fa-check-circle me-2"></i>
-                        ${data.message}
-                    </div>
-                `;
-                // Reset form
-                elements.bulkPdfForm.reset();
-                elements.bulkPdfForm.classList.remove('was-validated');
-                
-                // Refresh documents list
-                loadDocuments();
-            } else {
-                // Error message
-                elements.bulkPdfResult.innerHTML = `
-                    <div class="alert alert-danger">
-                        <i class="fas fa-exclamation-circle me-2"></i>
-                        ${data.message}
-                    </div>
-                `;
-            }
+            // Start the upload process
+            await attemptUpload();
+            
         } catch (error) {
-            // Exception message
+            // Final exception fallback
             elements.bulkPdfResult.innerHTML = `
                 <div class="alert alert-danger">
                     <i class="fas fa-exclamation-circle me-2"></i>

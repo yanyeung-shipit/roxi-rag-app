@@ -362,119 +362,159 @@ def bulk_upload_pdfs():
         # Process PDF files in batch mode with citation extraction
         processing_results = []
         try:
-            # Use batch processing with 5 PDFs per batch
-            results = bulk_process_pdfs([(p[0], p[1]) for p in pdf_paths], batch_size=5)
+            # Use smaller batch size to reduce memory usage
+            batch_size = 3  # Reduce from 5 to 3 files per batch
             
-            # Process results for each document
+            # Use batch processing with smaller batch size
+            results = bulk_process_pdfs([(p[0], p[1]) for p in pdf_paths], batch_size=batch_size)
+            
+            # Process results for each document, with frequent commits
             for i, (chunks, metadata) in enumerate(results):
-                document_id = pdf_paths[i][2]
-                filename = pdf_paths[i][1]
-                document = next((d for d in documents if d.id == document_id), None)
-                
-                if not document:
-                    logger.warning(f"Could not find document record for ID: {document_id}")
-                    continue
-                
-                # Update document with metadata from processing
-                if metadata:
-                    # Skip documents with errors
-                    if 'error' in metadata:
-                        logger.warning(f"Error processing {filename}: {metadata['error']}")
+                try:
+                    document_id = pdf_paths[i][2]
+                    filename = pdf_paths[i][1]
+                    document = next((d for d in documents if d.id == document_id), None)
+                    
+                    if not document:
+                        logger.warning(f"Could not find document record for ID: {document_id}")
+                        continue
+                    
+                    # Update document with metadata from processing
+                    if metadata:
+                        # Skip documents with errors
+                        if 'error' in metadata:
+                            logger.warning(f"Error processing {filename}: {metadata['error']}")
+                            processing_results.append({
+                                'filename': filename,
+                                'document_id': document_id,
+                                'success': False,
+                                'message': f"Error: {metadata['error']}"
+                            })
+                            continue
+                        
+                        # Update document metadata
+                        try:
+                            if 'page_count' in metadata:
+                                document.page_count = metadata['page_count']
+                            if 'doi' in metadata and metadata['doi']:
+                                document.doi = metadata['doi']
+                            if 'authors' in metadata and metadata['authors']:
+                                document.authors = metadata['authors']
+                            if 'journal' in metadata and metadata['journal']:
+                                document.journal = metadata['journal']
+                            if 'publication_year' in metadata and metadata['publication_year']:
+                                document.publication_year = metadata['publication_year']
+                            if 'volume' in metadata and metadata['volume']:
+                                document.volume = metadata['volume']
+                            if 'issue' in metadata and metadata['issue']:
+                                document.issue = metadata['issue']
+                            if 'pages' in metadata and metadata['pages']:
+                                document.pages = metadata['pages']
+                            if 'formatted_citation' in metadata and metadata['formatted_citation']:
+                                document.formatted_citation = metadata['formatted_citation']
+                            
+                            # If we have at least a journal name or authors, set a better title
+                            if document.journal and not document.title.startswith(document.journal):
+                                if document.authors:
+                                    authors_short = document.authors.split(';')[0] + " et al." if ";" in document.authors else document.authors
+                                    document.title = f"{authors_short} - {document.journal}"
+                                else:
+                                    document.title = document.journal
+                            
+                            # Commit metadata updates immediately to avoid long transactions
+                            db.session.commit()
+                        except Exception as meta_error:
+                            logger.warning(f"Error updating metadata for {filename}: {str(meta_error)}")
+                            db.session.rollback()
+                            # Continue processing the document chunks
+                    
+                    # Process chunks if available
+                    if chunks:
+                        # Limit chunks per document to avoid memory issues
+                        max_chunks = 40  # Reduced from 50 to 40
+                        if len(chunks) > max_chunks:
+                            logger.warning(f"Limiting {len(chunks)} chunks to first {max_chunks} for {filename}")
+                            chunks = chunks[:max_chunks]
+                        
+                        # Add chunks to vector store and database
+                        success_count = 0
+                        
+                        # Process chunks in smaller batches
+                        chunk_batch_size = 10
+                        for chunk_batch_start in range(0, len(chunks), chunk_batch_size):
+                            chunk_batch_end = min(chunk_batch_start + chunk_batch_size, len(chunks))
+                            chunk_batch = chunks[chunk_batch_start:chunk_batch_end]
+                            chunk_records = []
+                            
+                            for j, chunk in enumerate(chunk_batch):
+                                try:
+                                    # Add to vector store
+                                    vector_store.add_text(chunk['text'], chunk['metadata'])
+                                    
+                                    # Create chunk record
+                                    chunk_record = DocumentChunk(
+                                        document_id=document_id,
+                                        chunk_index=chunk_batch_start + j,
+                                        page_number=chunk['metadata'].get('page', None),
+                                        text_content=chunk['text']
+                                    )
+                                    chunk_records.append(chunk_record)
+                                    success_count += 1
+                                except Exception as chunk_error:
+                                    logger.warning(f"Error adding chunk {chunk_batch_start + j} from {filename}: {str(chunk_error)}")
+                            
+                            try:
+                                # Save chunk records to database for this mini-batch
+                                if chunk_records:
+                                    db.session.add_all(chunk_records)
+                                    db.session.commit()
+                                
+                                # Save vector store after each batch
+                                vector_store._save()
+                            except Exception as batch_save_error:
+                                logger.warning(f"Error saving chunk batch for {filename}: {str(batch_save_error)}")
+                                db.session.rollback()
+                                # Continue with next batch
+                        
+                        # Mark document as processed if any chunks were successful
+                        if success_count > 0:
+                            try:
+                                document.processed = True
+                                db.session.commit()
+                            except Exception as update_error:
+                                logger.warning(f"Error marking document as processed: {str(update_error)}")
+                                db.session.rollback()
+                        
+                        # Add to results
+                        processing_results.append({
+                            'filename': filename,
+                            'document_id': document_id,
+                            'success': success_count > 0,
+                            'chunks': success_count,
+                            'citation': document.formatted_citation if document.formatted_citation else None
+                        })
+                    else:
+                        # No chunks extracted
                         processing_results.append({
                             'filename': filename,
                             'document_id': document_id,
                             'success': False,
-                            'message': f"Error: {metadata['error']}"
+                            'message': 'Could not extract any text content'
                         })
-                        continue
+                except Exception as doc_error:
+                    # Check if variables are defined before using them
+                    doc_filename = filename if 'filename' in locals() else pdf_paths[i][1] if i < len(pdf_paths) else "unknown"
+                    doc_id = document_id if 'document_id' in locals() else pdf_paths[i][2] if i < len(pdf_paths) else None
                     
-                    # Update document metadata
-                    if 'page_count' in metadata:
-                        document.page_count = metadata['page_count']
-                    if 'doi' in metadata and metadata['doi']:
-                        document.doi = metadata['doi']
-                    if 'authors' in metadata and metadata['authors']:
-                        document.authors = metadata['authors']
-                    if 'journal' in metadata and metadata['journal']:
-                        document.journal = metadata['journal']
-                    if 'publication_year' in metadata and metadata['publication_year']:
-                        document.publication_year = metadata['publication_year']
-                    if 'volume' in metadata and metadata['volume']:
-                        document.volume = metadata['volume']
-                    if 'issue' in metadata and metadata['issue']:
-                        document.issue = metadata['issue']
-                    if 'pages' in metadata and metadata['pages']:
-                        document.pages = metadata['pages']
-                    if 'formatted_citation' in metadata and metadata['formatted_citation']:
-                        document.formatted_citation = metadata['formatted_citation']
-                    
-                    # If we have at least a journal name or authors, set a better title
-                    if document.journal and not document.title.startswith(document.journal):
-                        if document.authors:
-                            authors_short = document.authors.split(';')[0] + " et al." if ";" in document.authors else document.authors
-                            document.title = f"{authors_short} - {document.journal}"
-                        else:
-                            document.title = document.journal
-                
-                # Process chunks if available
-                if chunks:
-                    # Limit chunks per document to avoid memory issues
-                    max_chunks = 50
-                    if len(chunks) > max_chunks:
-                        logger.warning(f"Limiting {len(chunks)} chunks to first {max_chunks} for {filename}")
-                        chunks = chunks[:max_chunks]
-                    
-                    # Add chunks to vector store and database
-                    success_count = 0
-                    chunk_records = []
-                    
-                    for i, chunk in enumerate(chunks):
-                        try:
-                            # Add to vector store
-                            vector_store.add_text(chunk['text'], chunk['metadata'])
-                            
-                            # Create chunk record
-                            chunk_record = DocumentChunk(
-                                document_id=document_id,
-                                chunk_index=i,
-                                page_number=chunk['metadata'].get('page', None),
-                                text_content=chunk['text']
-                            )
-                            chunk_records.append(chunk_record)
-                            success_count += 1
-                        except Exception as chunk_error:
-                            logger.warning(f"Error adding chunk {i} from {filename}: {str(chunk_error)}")
-                    
-                    # Save vector store
-                    vector_store._save()
-                    
-                    # Save chunk records to database
-                    if chunk_records:
-                        db.session.add_all(chunk_records)
-                    
-                    # Mark document as processed if any chunks were successful
-                    if success_count > 0:
-                        document.processed = True
-                    
-                    # Add to results
+                    logger.exception(f"Error processing document {doc_filename}: {str(doc_error)}")
+                    db.session.rollback()
+                    # Continue with next document
                     processing_results.append({
-                        'filename': filename,
-                        'document_id': document_id,
-                        'success': success_count > 0,
-                        'chunks': success_count,
-                        'citation': document.formatted_citation if document.formatted_citation else None
-                    })
-                else:
-                    # No chunks extracted
-                    processing_results.append({
-                        'filename': filename,
-                        'document_id': document_id,
+                        'filename': doc_filename,
+                        'document_id': doc_id,
                         'success': False,
-                        'message': 'Could not extract any text content'
+                        'message': f'Error: {str(doc_error)}'
                     })
-            
-            # Commit all database changes at once
-            db.session.commit()
             
             # Return summary of processing results
             success_count = sum(1 for r in processing_results if r.get('success', False))
