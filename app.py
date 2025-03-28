@@ -297,12 +297,12 @@ def bulk_upload_pdfs():
             }), 400
         
         # Maximum number of files to process at once
-        max_files = 50  # Allow up to 50 files in one batch
+        max_files = 10  # Allow up to 10 files in one batch
         if len(valid_files) > max_files:
             logger.warning(f"Too many files: {len(valid_files)}. Maximum allowed is {max_files}")
             return jsonify({
                 'success': False,
-                'message': f'Too many files: {len(valid_files)}. Maximum allowed is {max_files}.'
+                'message': f'Too many files: {len(valid_files)}. Maximum allowed is {max_files}. For better reliability, upload 3-5 files at a time.'
             }), 400
         
         # Save files and create document records

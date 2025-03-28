@@ -1279,14 +1279,27 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Check file count limit
         const fileInput = document.getElementById('bulk-pdf-files');
-        if (fileInput.files.length > 50) {
+        if (fileInput.files.length > 10) {
             elements.bulkPdfResult.innerHTML = `
                 <div class="alert alert-danger">
                     <i class="fas fa-exclamation-circle me-2"></i>
-                    Too many files. Maximum 50 files allowed.
+                    Too many files. Maximum 10 files allowed at once.
                 </div>
             `;
             return;
+        }
+        
+        // Warning for more than 5 files
+        if (fileInput.files.length > 5) {
+            const shouldContinue = confirm(`You've selected ${fileInput.files.length} files. 
+Processing more than 5 files at once may cause timeouts or errors.
+For better reliability, consider uploading in smaller batches.
+
+Do you want to continue anyway?`);
+            
+            if (!shouldContinue) {
+                return;
+            }
         }
         
         // Prepare UI for submission
