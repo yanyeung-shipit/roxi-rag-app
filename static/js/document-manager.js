@@ -1352,13 +1352,13 @@ document.addEventListener('DOMContentLoaded', () => {
         submitBtn.disabled = true;
         
         try {
-            // Send request
+            // Send request using FormData instead of JSON
+            const formData = new FormData();
+            formData.append('topic_list', topics.join('\n'));
+            
             const response = await fetch('/add_topic_pages', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ topics })
+                body: formData
             });
             
             const data = await response.json();

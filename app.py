@@ -3,6 +3,7 @@ import logging
 import tempfile
 import datetime
 import urllib.parse
+import json
 from flask import Flask, render_template, request, jsonify, flash, redirect, url_for, abort
 from werkzeug.utils import secure_filename
 from werkzeug.security import safe_join
@@ -540,14 +541,46 @@ def clear():
 def add_topic_pages():
     """Add multiple rheum.reviews topic pages at once."""
     try:
-        data = request.get_json()
-        if not data or 'topics' not in data:
+        # Try to get data from JSON or form data
+        topics = None
+        
+        # Check if we have JSON data
+        if request.is_json:
+            data = request.get_json()
+            if data and 'topics' in data:
+                topics = data['topics']
+        
+        # If not JSON, try form data with topic_list
+        if topics is None and request.form:
+            topic_list = request.form.get('topic_list', '')
+            if topic_list:
+                # Split by newlines and filter empty lines
+                topics = [t.strip() for t in topic_list.split('\n') if t.strip()]
+        
+        # If still no topics, check direct form data
+        if topics is None and request.form and 'topics' in request.form:
+            topics_str = request.form.get('topics')
+            if topics_str:
+                # Try to parse as JSON string
+                try:
+                    topics = json.loads(topics_str)
+                except json.JSONDecodeError:
+                    # If not JSON, treat as comma-separated or newline-separated list
+                    if ',' in topics_str:
+                        topics = [t.strip() for t in topics_str.split(',') if t.strip()]
+                    else:
+                        topics = [t.strip() for t in topics_str.split('\n') if t.strip()]
+        
+        # Final validation
+        if not topics:
             return jsonify({
                 'success': False,
                 'message': 'No topics provided. Please include a list of topic names.'
             }), 400
         
-        topics = data['topics']
+        # Ensure topics is a list
+        if not isinstance(topics, list):
+            topics = [topics]
         if not isinstance(topics, list) or len(topics) == 0:
             return jsonify({
                 'success': False,
