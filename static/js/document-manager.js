@@ -37,28 +37,60 @@ document.addEventListener('DOMContentLoaded', () => {
     loadCollections();
 
     // Event listeners
-    if (refreshDocumentsBtn) {
-        refreshDocumentsBtn.addEventListener('click', loadDocuments);
+    console.log("Setting up event listeners");
+    
+    // Function to safely add event listeners with console logging
+    function safeAddEventListener(element, event, handler, name) {
+        if (element) {
+            console.log(`Adding ${event} event listener to ${name}`);
+            element.addEventListener(event, handler);
+        } else {
+            console.warn(`Element ${name} not found, cannot add ${event} event listener`);
+        }
     }
-
-    if (backToDocumentsBtn) {
-        backToDocumentsBtn.addEventListener('click', () => {
-            documentDetailContainer.classList.add('d-none');
-            documentsTableContainer.classList.remove('d-none');
-        });
-    }
-
-    if (createCollectionBtn) {
-        createCollectionBtn.addEventListener('click', createCollection);
-    }
-
-    if (confirmAddToCollectionBtn) {
-        confirmAddToCollectionBtn.addEventListener('click', addDocumentsToCollection);
-    }
-
-    if (confirmDeleteBtn) {
-        confirmDeleteBtn.addEventListener('click', deleteDocument);
-    }
+    
+    // Add event listeners with better error handling
+    safeAddEventListener(refreshDocumentsBtn, 'click', loadDocuments, 'refreshDocumentsBtn');
+    
+    safeAddEventListener(backToDocumentsBtn, 'click', () => {
+        documentDetailContainer.classList.add('d-none');
+        documentsTableContainer.classList.remove('d-none');
+    }, 'backToDocumentsBtn');
+    
+    safeAddEventListener(createCollectionBtn, 'click', createCollection, 'createCollectionBtn');
+    
+    safeAddEventListener(confirmAddToCollectionBtn, 'click', addDocumentsToCollection, 'confirmAddToCollectionBtn');
+    
+    safeAddEventListener(confirmDeleteBtn, 'click', deleteDocument, 'confirmDeleteBtn');
+    
+    // Add event listener for new collection button since it opens the modal
+    const newCollectionBtn = document.getElementById('newCollectionBtn');
+    safeAddEventListener(newCollectionBtn, 'click', () => {
+        console.log("New collection button clicked, opening modal");
+        try {
+            const modal = new bootstrap.Modal(document.getElementById('newCollectionModal'));
+            modal.show();
+        } catch (modalError) {
+            console.error("Error showing modal with Bootstrap API:", modalError);
+            try {
+                $('#newCollectionModal').modal('show');
+            } catch (jqueryError) {
+                console.error("Error showing modal with jQuery:", jqueryError);
+                // Last resort - manually show modal
+                const modalElement = document.getElementById('newCollectionModal');
+                if (modalElement) {
+                    modalElement.classList.add('show');
+                    modalElement.style.display = 'block';
+                    document.body.classList.add('modal-open');
+                    
+                    // Add backdrop
+                    const backdropDiv = document.createElement('div');
+                    backdropDiv.className = 'modal-backdrop fade show';
+                    document.body.appendChild(backdropDiv);
+                }
+            }
+        }
+    }, 'newCollectionBtn');
 
     // Functions
 
@@ -378,8 +410,15 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Get a reference to the form and button
             const collectionNameInput = document.getElementById('collectionName');
-            const descriptionInput = document.getElementById('collectionDescription');
+            // Be explicit about the form field to avoid confusion with the paragraph element
+            const descriptionInput = document.querySelector('#newCollectionForm #collectionDescription');
             const createButton = document.getElementById('createCollectionBtn');
+            
+            console.log("Form elements:", {
+                collectionNameInput: collectionNameInput ? "found" : "missing",
+                descriptionInput: descriptionInput ? "found" : "missing",
+                createButton: createButton ? "found" : "missing"
+            });
             
             // Check if elements were found
             if (!collectionNameInput) {
@@ -388,8 +427,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             
-            const collectionName = collectionNameInput.value.trim();
-            const description = descriptionInput ? descriptionInput.value.trim() : '';
+            // Safely get values with null checks
+            const collectionName = collectionNameInput && collectionNameInput.value ? collectionNameInput.value.trim() : '';
+            const description = descriptionInput && descriptionInput.value ? descriptionInput.value.trim() : '';
+            
+            console.log("Form values:", { collectionName, description });
             
             if (!collectionName) {
                 console.warn("Collection name is empty");
