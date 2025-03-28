@@ -503,6 +503,92 @@ class VectorStore:
             logger.exception(f"Error clearing vector store: {str(e)}")
             raise
     
+    def remove_document(self, document_id):
+        """
+        Remove all chunks for a specific document from the vector store.
+        
+        Args:
+            document_id (int): ID of the document to remove
+            
+        Returns:
+            int: Number of chunks removed
+        """
+        try:
+            # Convert document_id to string for comparison
+            doc_id_str = str(document_id)
+            
+            # Find all chunks that belong to this document
+            chunks_to_remove = []
+            for i, (doc_key, doc) in enumerate(list(self.documents.items())):
+                metadata = doc.get('metadata', {})
+                
+                # Check if this chunk belongs to the document we want to remove
+                if metadata.get('document_id') == document_id:
+                    chunks_to_remove.append((i, doc_key))
+                    
+            if not chunks_to_remove:
+                logger.warning(f"No chunks found for document_id {document_id} in vector store")
+                return 0
+                
+            logger.info(f"Removing {len(chunks_to_remove)} chunks for document_id {document_id}")
+            
+            # Sort in reverse order to avoid index shifting issues
+            chunks_to_remove.sort(reverse=True)
+            
+            # Since FAISS doesn't support direct removal, we need to rebuild the index
+            # First, collect all embeddings to keep
+            embeddings_to_keep = []
+            new_documents = {}
+            
+            # Get all embeddings from the index
+            all_embeddings = np.zeros((self.index.ntotal, self.dimension), dtype=np.float32)
+            faiss.extract_index_vectors(self.index, all_embeddings)
+            
+            # Track indices to remove
+            indices_to_remove = set([idx for idx, _ in chunks_to_remove])
+            
+            # Keep track of the mapping from old to new indices
+            old_to_new_idx = {}
+            new_idx = 0
+            
+            # For each document that we want to keep
+            for old_idx, (doc_key, doc) in enumerate(self.documents.items()):
+                if old_idx not in indices_to_remove:
+                    # Keep this embedding
+                    embeddings_to_keep.append(all_embeddings[old_idx])
+                    
+                    # Update the documents dictionary
+                    new_documents[doc_key] = doc
+                    
+                    # Update the index mapping
+                    old_to_new_idx[old_idx] = new_idx
+                    new_idx += 1
+            
+            # Create a new index with the remaining embeddings
+            self.index = faiss.IndexFlatL2(self.dimension)
+            if embeddings_to_keep:
+                self.index.add(np.array(embeddings_to_keep))
+            
+            # Update the documents dictionary
+            self.documents = new_documents
+            
+            # Update document counts
+            # This is more complex as we'd need to know the source type, simplifying for now
+            self.document_counts = defaultdict(int)
+            for doc in self.documents.values():
+                source_type = doc.get('metadata', {}).get('source_type', 'unknown')
+                self.document_counts[source_type] += 1
+            
+            # Save the updated index and data
+            self._save()
+            
+            logger.info(f"Successfully removed document {document_id} from vector store")
+            return len(chunks_to_remove)
+            
+        except Exception as e:
+            logger.exception(f"Error removing document from vector store: {str(e)}")
+            return 0
+    
     def _get_embedding(self, text):
         """
         Get embedding for text.

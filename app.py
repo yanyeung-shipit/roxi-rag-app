@@ -1318,23 +1318,29 @@ def delete_document(document_id):
                 'success': False,
                 'message': f'Document with ID {document_id} not found'
             }), 404
-            
-        # Need to update vector store too, but this is complex
-        # For now, just delete from database
-        
-        # Delete all chunks first
-        DocumentChunk.query.filter_by(document_id=document_id).delete()
         
         # Save the filename for reporting
         filename = doc.filename
         
-        # Delete the document
+        # First, remove the document from the vector store
+        try:
+            removed_chunks = vector_store.remove_document(document_id)
+            logger.info(f"Removed {removed_chunks} chunks for document {document_id} from vector store")
+        except Exception as e:
+            logger.error(f"Error removing document from vector store: {e}")
+            # Continue with database deletion even if vector store deletion fails
+        
+        # Delete all chunks from the database
+        chunks_deleted = DocumentChunk.query.filter_by(document_id=document_id).delete()
+        logger.info(f"Deleted {chunks_deleted} database chunks for document {document_id}")
+        
+        # Delete the document from the database
         db.session.delete(doc)
         db.session.commit()
         
         return jsonify({
             'success': True,
-            'message': f'Document "{filename}" (ID: {document_id}) deleted successfully'
+            'message': f'Document "{filename}" (ID: {document_id}) deleted successfully from both database and vector store'
         })
     except Exception as e:
         logger.exception(f"Error deleting document {document_id}")
