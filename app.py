@@ -267,15 +267,24 @@ def add_website():
         logger.info(f"Created document record with ID: {new_document.id}")
         
         # Scrape website and add to vector store
-        chunks = scrape_website(url)
-        
-        if not chunks:
-            logger.warning(f"No content extracted from website: {url}")
-            # Document exists but processing failed
+        try:
+            logger.debug(f"Starting to scrape website: {url}")
+            chunks = scrape_website(url)
+            logger.debug(f"Scraped website with {len(chunks) if chunks else 0} chunks")
+            
+            if not chunks:
+                logger.warning(f"No content extracted from website: {url}")
+                # Document exists but processing failed
+                return jsonify({
+                    'success': False, 
+                    'message': 'Could not extract any content from the provided URL'
+                }), 400
+        except Exception as scrape_error:
+            logger.exception(f"Error scraping website: {str(scrape_error)}")
             return jsonify({
                 'success': False, 
-                'message': 'Could not extract any content from the provided URL'
-            }), 400
+                'message': f'Error scraping website: {str(scrape_error)}'
+            }), 500
             
         # Update document with title if available
         if chunks and 'title' in chunks[0]['metadata']:
@@ -391,6 +400,20 @@ def query():
             
         # Debug log the retrieval results
         logger.debug(f"Retrieved {len(retrieval_results)} documents for query: {query_text[:50]}...")
+        
+        # Log source types for debugging
+        source_types = {}
+        for doc in retrieval_results:
+            source_type = doc.get('metadata', {}).get('source_type', 'unknown')
+            source_types[source_type] = source_types.get(source_type, 0) + 1
+            
+            # Log individual source details
+            if source_type == 'website':
+                url = doc.get('metadata', {}).get('url', 'unknown')
+                title = doc.get('metadata', {}).get('title', 'unknown')
+                logger.debug(f"Website source: {title} - {url}")
+                
+        logger.info(f"Source types for query '{query_text[:30]}...': {source_types}")
         
         # Generate response using LLM
         answer, sources = generate_response(query_text, retrieval_results)

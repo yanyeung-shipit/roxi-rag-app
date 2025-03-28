@@ -184,12 +184,21 @@ class VectorStore:
                 doc_id = list(self.documents.keys())[idx]
                 doc = self.documents[doc_id]
                 
+                # Add to results
                 initial_results.append({
                     'id': doc_id,
                     'text': doc['text'],
                     'metadata': doc['metadata'],
                     'score': float(distances[0][i])
                 })
+            
+            # Log sources before reranking
+            source_types = {}
+            for result in initial_results:
+                source_type = result['metadata'].get('source_type', 'unknown')
+                source_types[source_type] = source_types.get(source_type, 0) + 1
+            
+            logger.debug(f"Initial search results by source type: {source_types}")
             
             # Pre-process query for keyword matching
             query_tokens = set(word.lower() for word in query.split())
@@ -209,7 +218,17 @@ class VectorStore:
             # Sort by adjusted score and limit to top_k
             results = sorted(initial_results, key=lambda x: x['score'])[:top_k]
             
+            # Log final results by source type
+            final_source_types = {}
+            for result in results:
+                source_type = result['metadata'].get('source_type', 'unknown')
+                final_source_types[source_type] = final_source_types.get(source_type, 0) + 1
+                # Log metadata to check if it's complete
+                logger.debug(f"Result metadata: {result['metadata']}")
+            
+            logger.debug(f"Final search results by source type: {final_source_types}")
             logger.debug(f"Search returned {len(results)} results from initial pool of {len(initial_results)}")
+            
             return results
         except Exception as e:
             logger.exception(f"Error searching vector store: {str(e)}")

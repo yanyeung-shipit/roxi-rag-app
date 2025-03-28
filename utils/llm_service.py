@@ -58,26 +58,44 @@ def generate_response(query, context_documents):
         # Limit to top 5 most relevant documents
         context_documents = sorted_docs[:5]
         
+        # Track source types for debugging
+        source_types = {}
+        for doc in context_documents:
+            source_type = doc["metadata"].get("source_type", "unknown")
+            source_types[source_type] = source_types.get(source_type, 0) + 1
+        
+        logger.info(f"Query source types: {source_types}")
+        
         # First pass: Create source info and track PDFs
         for i, doc in enumerate(context_documents):
             # Add document to context with citation marker
             context += f"\nDocument [{i+1}]:\n{doc['text']}\n"
             
+            # Extract metadata for debugging
+            metadata = doc["metadata"]
+            source_type = metadata.get("source_type", "unknown")
+            
+            # Log detailed source info for debugging
+            if source_type == "website":
+                logger.debug(f"Website source {i+1}: URL={metadata.get('url', 'unknown')}, Title={metadata.get('title', 'unknown')}")
+            elif source_type == "pdf":
+                logger.debug(f"PDF source {i+1}: Title={metadata.get('title', 'unknown')}, Page={metadata.get('page', 'unknown')}")
+            
             # Prepare source information for citation
             source_info = {
-                "source_type": doc["metadata"].get("source_type", "unknown"),
+                "source_type": source_type,
                 "content": doc["text"][:200] + ("..." if len(doc["text"]) > 200 else ""),
                 "doc_id": i+1  # Keep track of the document ID in context
             }
             
             # Include citation if available
-            if doc["metadata"].get("citation"):
-                source_info["citation"] = doc["metadata"].get("citation")
+            if metadata.get("citation"):
+                source_info["citation"] = metadata.get("citation")
             
             # Handle different source types
-            if doc["metadata"].get("source_type") == "pdf":
-                title = doc["metadata"].get("title", "Unnamed PDF")
-                page = doc["metadata"].get("page", "unknown")
+            if source_type == "pdf":
+                title = metadata.get("title", "Unnamed PDF")
+                page = metadata.get("page", "unknown")
                 source_info["title"] = title
                 source_info["page"] = page
                 
@@ -95,9 +113,21 @@ def generate_response(query, context_documents):
                         "pages": {str(page)},
                         "doc_ids": [i+1]
                     }
+            elif source_type == "website":
+                title = metadata.get("title", "Unnamed Website")
+                url = metadata.get("url", "#")
+                source_info["title"] = title
+                source_info["url"] = url
+                
+                # Ensure website citations are properly formatted
+                if "citation" not in source_info or not source_info["citation"]:
+                    source_info["citation"] = f"Website: {title} - {url}"
+                
+                logger.debug(f"Added website source {i+1} with citation: {source_info.get('citation', 'No citation')}")
             else:
-                source_info["title"] = doc["metadata"].get("title", "Unnamed Source")
-                source_info["url"] = doc["metadata"].get("url", "#")
+                source_info["title"] = metadata.get("title", "Unnamed Source")
+                if metadata.get("url"):
+                    source_info["url"] = metadata.get("url")
             
             all_sources.append(source_info)
             
@@ -131,8 +161,23 @@ def generate_response(query, context_documents):
             sources.append(pdf_source)
         
         # Then add all non-PDF sources
+        website_sources = {}  # Track website sources by URL to deduplicate
+        
+        # First collect website sources
         for source in all_sources:
-            if source["source_type"] != "pdf":
+            if source["source_type"] == "website":
+                url = source.get("url", "#")
+                if url not in website_sources:
+                    website_sources[url] = source
+                    logger.debug(f"Adding website source: {source.get('title', 'Unnamed')} - {url}")
+        
+        # Add deduplicated website sources to the final sources list
+        for url, source in website_sources.items():
+            sources.append(source)
+            
+        # Add any other non-PDF, non-website sources
+        for source in all_sources:
+            if source["source_type"] != "pdf" and source["source_type"] != "website":
                 sources.append(source)
         
         # Log the query and context for debugging
