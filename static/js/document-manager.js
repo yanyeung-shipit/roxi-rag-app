@@ -1279,30 +1279,27 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Check file count limit
         const fileInput = document.getElementById('bulk-pdf-files');
-        if (fileInput.files.length > 10) {
+        if (fileInput.files.length > 5) {
             elements.bulkPdfResult.innerHTML = `
                 <div class="alert alert-danger">
                     <i class="fas fa-exclamation-circle me-2"></i>
-                    Too many files. Maximum 10 files allowed at once.
+                    Too many files. Maximum 5 files allowed at once for reliable processing.
                 </div>
             `;
             return;
         }
         
-        // Warning for more than 5 files
-        if (fileInput.files.length > 5) {
-            const shouldContinue = confirm(`You've selected ${fileInput.files.length} files. 
-Processing more than 5 files at once may cause timeouts or errors.
-For better reliability, consider uploading in smaller batches.
-
-Do you want to continue anyway?`);
-            
-            if (!shouldContinue) {
-                return;
-            }
+        if (fileInput.files.length === 0) {
+            elements.bulkPdfResult.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    Please select at least one PDF file.
+                </div>
+            `;
+            return;
         }
         
-        // Prepare UI for submission
+        // Prepare UI for submission - Step 1: Uploading
         elements.bulkPdfResult.innerHTML = `
             <div class="alert alert-info">
                 <div class="d-flex align-items-center">
@@ -1310,9 +1307,8 @@ Do you want to continue anyway?`);
                         <span class="visually-hidden">Loading...</span>
                     </div>
                     <div>
-                        Uploading and processing ${fileInput.files.length} PDFs with citation extraction...
-                        <div class="small text-muted mt-1">This may take several minutes. Please wait.</div>
-                        <div class="small text-muted mt-1">Processing large PDFs may take 1-2 minutes per file.</div>
+                        <strong>Step 1/2:</strong> Uploading ${fileInput.files.length} PDF files...
+                        <div class="small text-muted mt-1">Please wait while the files are being uploaded...</div>
                     </div>
                 </div>
             </div>
@@ -1321,104 +1317,83 @@ Do you want to continue anyway?`);
         const submitBtn = elements.bulkPdfForm.querySelector('button[type="submit"]');
         submitBtn.disabled = true;
         
-        // Set a longer timeout for large uploads
-        const timeoutDuration = 120000; // 2 minutes
-        
         try {
             // Get form data
             const formData = new FormData(elements.bulkPdfForm);
             
-            // Create an AbortController to handle timeouts
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), timeoutDuration);
-            
-            // Function to attempt the upload with retry capability
-            const attemptUpload = async (retryCount = 0, maxRetries = 1) => {
-                try {
-                    // Send request with timeout
-                    const response = await fetch('/bulk_upload_pdfs', {
-                        method: 'POST',
-                        body: formData,
-                        signal: controller.signal
-                    });
-                    
-                    // Check if response is valid JSON
-                    const contentType = response.headers.get('content-type');
-                    if (!contentType || !contentType.includes('application/json')) {
-                        throw new Error('Server returned an invalid response format. The server might be overloaded.');
-                    }
-                    
-                    const data = await response.json();
-                    clearTimeout(timeoutId);
-                    
-                    if (data.success) {
-                        // Success message
-                        elements.bulkPdfResult.innerHTML = `
-                            <div class="alert alert-success">
-                                <i class="fas fa-check-circle me-2"></i>
-                                ${data.message}
+            // Step 1: Upload files with a more reliable approach
+            try {
+                const uploadResponse = await fetch('/bulk_upload_pdfs', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                // Check if response is valid
+                if (!uploadResponse.ok) {
+                    throw new Error(`Server returned ${uploadResponse.status}: ${uploadResponse.statusText}`);
+                }
+                
+                const contentType = uploadResponse.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    throw new Error('Server returned an invalid response format. The server might be overloaded.');
+                }
+                
+                const uploadData = await uploadResponse.json();
+                
+                if (!uploadData.success) {
+                    throw new Error(uploadData.message || 'Failed to upload files');
+                }
+                
+                // If we reach here, upload was successful
+                elements.bulkPdfResult.innerHTML = `
+                    <div class="alert alert-info">
+                        <div class="d-flex align-items-center">
+                            <div class="spinner-border spinner-border-sm me-2" role="status">
+                                <span class="visually-hidden">Loading...</span>
                             </div>
-                        `;
-                        // Reset form
-                        elements.bulkPdfForm.reset();
-                        elements.bulkPdfForm.classList.remove('was-validated');
-                        
-                        // Refresh documents list
-                        loadDocuments();
-                    } else {
-                        // Error message
-                        elements.bulkPdfResult.innerHTML = `
-                            <div class="alert alert-danger">
-                                <i class="fas fa-exclamation-circle me-2"></i>
-                                ${data.message}
-                            </div>
-                        `;
-                    }
-                } catch (error) {
-                    clearTimeout(timeoutId);
-                    
-                    // Check if we should retry
-                    if (retryCount < maxRetries) {
-                        console.log(`Retrying upload (attempt ${retryCount + 1}/${maxRetries + 1})...`);
-                        
-                        // Update UI to show retry attempt
-                        elements.bulkPdfResult.innerHTML = `
-                            <div class="alert alert-warning">
-                                <div class="d-flex align-items-center">
-                                    <div class="spinner-border spinner-border-sm me-2" role="status">
-                                        <span class="visually-hidden">Loading...</span>
-                                    </div>
-                                    <div>
-                                        Request timed out. Retrying upload (attempt ${retryCount + 1}/${maxRetries + 1})...
-                                        <div class="small text-muted mt-1">Please continue to wait. Processing large files takes time.</div>
-                                    </div>
+                            <div>
+                                <strong>Step 2/2:</strong> Processing ${fileInput.files.length} PDF files with citation extraction...
+                                <div class="small text-muted mt-1">This may take several minutes. You can continue using the app.</div>
+                                <div class="small text-muted mt-1">Processing large PDFs may take 1-2 minutes per file.</div>
+                                <div class="progress mt-2">
+                                    <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                        role="progressbar" style="width: 0%" 
+                                        aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
                                 </div>
                             </div>
-                        `;
-                        
-                        // Wait a bit before retrying
-                        await new Promise(resolve => setTimeout(resolve, 3000));
-                        
-                        // Retry the upload
-                        return attemptUpload(retryCount + 1, maxRetries);
-                    }
-                    
-                    // If we've exhausted our retries, show the error
-                    const errorMessage = error.name === 'AbortError' 
-                        ? 'Request timed out. The server is taking too long to process your files. Try uploading fewer files at once.'
-                        : `Error: ${error.message}`;
-                    
+                        </div>
+                    </div>
+                `;
+                
+                // Reset form
+                elements.bulkPdfForm.reset();
+                elements.bulkPdfForm.classList.remove('was-validated');
+                
+                // Refresh documents list to show the pending documents
+                loadDocuments();
+                
+                // Show success message and indicate background processing
+                setTimeout(() => {
                     elements.bulkPdfResult.innerHTML = `
-                        <div class="alert alert-danger">
-                            <i class="fas fa-exclamation-circle me-2"></i>
-                            ${errorMessage}
+                        <div class="alert alert-success">
+                            <i class="fas fa-check-circle me-2"></i>
+                            Successfully uploaded ${fileInput.files.length} PDF files. 
+                            They will be processed in the background.
+                            <div class="small text-muted mt-1">You can continue using the app while processing completes.</div>
                         </div>
                     `;
-                }
-            };
-            
-            // Start the upload process
-            await attemptUpload();
+                }, 3000);
+                
+            } catch (uploadError) {
+                // Handle upload errors
+                console.error("Upload error:", uploadError);
+                elements.bulkPdfResult.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-circle me-2"></i>
+                        Upload failed: ${uploadError.message}
+                    </div>
+                `;
+            }
             
         } catch (error) {
             // Final exception fallback
