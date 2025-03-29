@@ -77,7 +77,20 @@ def generate_response(query, context_documents):
             # Log the full document metadata for debugging
             logger.info(f"Document {i+1} full metadata: {json.dumps(metadata, default=str)}")
             
-            source_type = metadata.get("source_type", "unknown")
+            # Get source type or infer it from other metadata
+            source_type = metadata.get("source_type", None)
+            
+            # If source_type is not explicitly set, try to infer it
+            if not source_type:
+                # Get document ID for inference
+                doc_id_str = str(doc.get("id", ""))
+                
+                if metadata.get("file_type") == "pdf" or "pdf" in doc_id_str.lower() or metadata.get("document_title"):
+                    source_type = "pdf"
+                elif metadata.get("url"):
+                    source_type = "website"
+                else:
+                    source_type = "unknown"
             
             # Log detailed source info for debugging
             if source_type == "website":
@@ -97,6 +110,9 @@ def generate_response(query, context_documents):
             # Include citation if available
             if metadata.get("citation"):
                 source_info["citation"] = metadata.get("citation")
+                # Also set formatted_citation for consistency and to ensure it's available
+                if not metadata.get("formatted_citation"):
+                    source_info["formatted_citation"] = metadata.get("citation")
             
             # Handle different source types
             if source_type == "pdf":
@@ -159,7 +175,24 @@ def generate_response(query, context_documents):
                 logger.debug(f"Added website source {i+1} with citation: {source_info.get('citation', 'No citation')}")
             else:
                 # For other source types, ensure we have fallbacks for all properties
-                source_info["title"] = metadata.get("title", "Unnamed Source")
+                
+                # Try to find a meaningful title from various metadata fields
+                title = metadata.get("title", None)
+                
+                if not title and metadata.get("document_title"):
+                    title = metadata.get("document_title")
+                
+                if not title and metadata.get("file_path"):
+                    # Try to extract a better title from the file_path
+                    file_path = metadata.get("file_path", "")
+                    if file_path:
+                        # Get the filename part
+                        import os
+                        filename = os.path.basename(file_path)
+                        # Remove extension and format
+                        title = os.path.splitext(filename)[0].replace("_", " ").replace("-", " ").title()
+                
+                source_info["title"] = title or "Unnamed Source"
                 source_info["url"] = metadata.get("url", "#")
                 
                 # If no citation exists, create one
