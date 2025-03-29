@@ -689,6 +689,67 @@ class VectorStore:
             logger.exception(f"Error processing chunk removal: {str(e)}")
             return 0
     
+    def remove_document_by_filename(self, filename):
+        """
+        Remove all chunks for a document by filename pattern.
+        
+        Args:
+            filename (str): Filename (or part of filename) to match against
+            
+        Returns:
+            int: Number of chunks removed
+        """
+        try:
+            logger.info(f"Removing documents with filename pattern: {filename}")
+            
+            # Find all chunks with matching filename
+            chunks_to_remove = []
+            file_paths_to_remove = set()
+            
+            for i, (doc_key, doc) in enumerate(list(self.documents.items())):
+                metadata = doc.get('metadata', {})
+                
+                # Check for filename in various metadata fields
+                doc_filename = metadata.get('filename', '')
+                file_path = metadata.get('file_path', '')
+                title = metadata.get('title', '')
+                citation = metadata.get('citation', '')
+                
+                # If filename appears in any of these fields, mark for removal
+                if (filename in doc_filename or 
+                    filename in file_path or 
+                    filename in title or 
+                    filename in citation):
+                    logger.info(f"Marking chunk for removal by filename match: {doc_key}")
+                    chunks_to_remove.append((i, doc_key))
+                    
+                    # Remember file path for additional cleanup
+                    if file_path:
+                        file_paths_to_remove.add(file_path)
+            
+            if not chunks_to_remove:
+                logger.warning(f"No chunks found matching filename '{filename}' in vector store")
+                return 0
+                
+            # Process the chunk removal
+            removed_count = self._process_chunk_removal(chunks_to_remove)
+            
+            # Also try to remove any chunks with matching file paths
+            for file_path in file_paths_to_remove:
+                for i, (doc_key, doc) in enumerate(list(self.documents.items())):
+                    metadata = doc.get('metadata', {})
+                    if metadata.get('file_path') == file_path:
+                        logger.info(f"Removing additional chunk with matching file_path: {file_path}")
+                        self.documents.pop(doc_key, None)
+                        removed_count += 1
+            
+            logger.info(f"Removed {removed_count} chunks with filename '{filename}' from vector store")
+            return removed_count
+            
+        except Exception as e:
+            logger.exception(f"Error removing document by filename from vector store: {str(e)}")
+            return 0
+    
     def remove_document(self, document_id):
         """
         Remove all chunks for a specific document from the vector store.
@@ -707,6 +768,8 @@ class VectorStore:
             # Check all document metadata for debugging
             doc_ids_in_store = set()
             url_to_remove = None
+            filename_to_remove = None
+            file_path_to_remove = None
             
             for i, (doc_key, doc) in enumerate(list(self.documents.items())):
                 metadata = doc.get('metadata', {})
@@ -714,10 +777,17 @@ class VectorStore:
                 if doc_id_in_store:
                     doc_ids_in_store.add(doc_id_in_store)
                 
-                # Get document source URL if we find one matching this ID
-                if doc_id_in_store == document_id and 'url' in metadata:
-                    url_to_remove = metadata.get('url', '')
-                    logger.info(f"Found URL for document ID {document_id}: {url_to_remove}")
+                # Get document info if we find one matching this ID
+                if doc_id_in_store == document_id:
+                    if 'url' in metadata:
+                        url_to_remove = metadata.get('url', '')
+                        logger.info(f"Found URL for document ID {document_id}: {url_to_remove}")
+                    if 'filename' in metadata:
+                        filename_to_remove = metadata.get('filename', '')
+                        logger.info(f"Found filename for document ID {document_id}: {filename_to_remove}")
+                    if 'file_path' in metadata:
+                        file_path_to_remove = metadata.get('file_path', '')
+                        logger.info(f"Found file_path for document ID {document_id}: {file_path_to_remove}")
             
             logger.info(f"Vector store contains chunks from {len(doc_ids_in_store)} distinct document IDs")
             
@@ -734,7 +804,10 @@ class VectorStore:
             if not chunks_to_remove:
                 logger.warning(f"No chunks found for document_id {document_id} in vector store")
                 
-                # If it's a website, try to remove by URL pattern as a backup
+                # If we couldn't find by ID, try other methods
+                removed_count = 0
+                
+                # 1. Try URL pattern for websites
                 if url_to_remove and ('rheum.reviews' in url_to_remove):
                     # Extract pattern from the URL (like 'psoriatic-arthritis')
                     url_parts = url_to_remove.split('/')
@@ -742,18 +815,39 @@ class VectorStore:
                         if part and len(part) > 5 and '-' in part:  # Likely a slug/pattern
                             pattern = part
                             logger.info(f"Trying to remove by URL pattern: {pattern}")
-                            removed = self.remove_document_by_url(pattern)
-                            if removed > 0:
-                                logger.info(f"Successfully removed {removed} chunks by URL pattern")
-                                return removed
+                            url_removed = self.remove_document_by_url(pattern)
+                            if url_removed > 0:
+                                logger.info(f"Successfully removed {url_removed} chunks by URL pattern")
+                                removed_count += url_removed
                 
-                return 0
+                # 2. Try filename matching for PDFs
+                if filename_to_remove:
+                    logger.info(f"Trying to remove by filename: {filename_to_remove}")
+                    filename_removed = self.remove_document_by_filename(filename_to_remove)
+                    if filename_removed > 0:
+                        logger.info(f"Successfully removed {filename_removed} chunks by filename")
+                        removed_count += filename_removed
                 
-            # Process the chunk removal
+                # 3. Try filepath matching for PDFs
+                if file_path_to_remove:
+                    logger.info(f"Trying to remove by file path: {file_path_to_remove}")
+                    # Extract just the filename from the path
+                    import os
+                    path_filename = os.path.basename(file_path_to_remove)
+                    path_removed = self.remove_document_by_filename(path_filename)
+                    if path_removed > 0:
+                        logger.info(f"Successfully removed {path_removed} chunks by file path")
+                        removed_count += path_removed
+                
+                return removed_count
+                
+            # Process the chunk removal by document ID
             removed_count = self._process_chunk_removal(chunks_to_remove)
             
-            # If it's a website, also try removing by URL pattern as a backup
-            # This handles cases where the document ID might not match but URL does
+            # Try additional removal methods to be thorough
+            additional_removed = 0
+            
+            # 1. Try URL pattern for websites
             if url_to_remove and ('rheum.reviews' in url_to_remove):
                 # Extract pattern from the URL (like 'psoriatic-arthritis')
                 url_parts = url_to_remove.split('/')
@@ -761,10 +855,29 @@ class VectorStore:
                     if part and len(part) > 5 and '-' in part:  # Likely a slug/pattern
                         pattern = part
                         logger.info(f"Also removing any matching URL pattern: {pattern}")
-                        more_removed = self.remove_document_by_url(pattern)
-                        if more_removed > 0:
-                            logger.info(f"Successfully removed {more_removed} additional chunks by URL pattern")
-                            removed_count += more_removed
+                        url_removed = self.remove_document_by_url(pattern)
+                        if url_removed > 0:
+                            logger.info(f"Successfully removed {url_removed} additional chunks by URL pattern")
+                            additional_removed += url_removed
+            
+            # 2. Try filename matching for PDFs
+            if filename_to_remove:
+                logger.info(f"Also removing any matching filename: {filename_to_remove}")
+                filename_removed = self.remove_document_by_filename(filename_to_remove)
+                if filename_removed > 0:
+                    logger.info(f"Successfully removed {filename_removed} additional chunks by filename")
+                    additional_removed += filename_removed
+            
+            # 3. Try filepath matching for PDFs
+            if file_path_to_remove:
+                logger.info(f"Also removing any matching file path: {file_path_to_remove}")
+                # Extract just the filename from the path
+                import os
+                path_filename = os.path.basename(file_path_to_remove)
+                path_removed = self.remove_document_by_filename(path_filename)
+                if path_removed > 0:
+                    logger.info(f"Successfully removed {path_removed} additional chunks by file path")
+                    additional_removed += path_removed
             
             # Now check to ensure document is really gone
             remaining_chunks = 0
@@ -776,13 +889,21 @@ class VectorStore:
                 elif url_to_remove and 'url' in metadata and url_to_remove in metadata['url']:
                     remaining_chunks += 1
                     logger.warning(f"Document still has chunk in vector store by URL: {doc_key}")
-            
+                elif filename_to_remove and 'filename' in metadata and filename_to_remove in metadata['filename']:
+                    remaining_chunks += 1
+                    logger.warning(f"Document still has chunk in vector store by filename: {doc_key}")
+                elif file_path_to_remove and 'file_path' in metadata and file_path_to_remove in metadata['file_path']:
+                    remaining_chunks += 1
+                    logger.warning(f"Document still has chunk in vector store by file_path: {doc_key}")
+                
             if remaining_chunks > 0:
                 logger.warning(f"Document {document_id} still has {remaining_chunks} chunks in vector store after removal!")
             else:
                 logger.info(f"Document {document_id} completely removed from vector store")
                 
-            return removed_count
+            total_removed = removed_count + additional_removed
+            logger.info(f"Removed total of {total_removed} chunks (initial: {removed_count}, additional: {additional_removed})")
+            return total_removed
             
         except Exception as e:
             logger.exception(f"Error removing document from vector store: {str(e)}")

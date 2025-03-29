@@ -722,7 +722,7 @@ def generate_response(query, context_documents):
                                 logger.info(f"Using basic DOI-based citation after error: {citation}")
                         else:
                             # Try to extract DOI from the text
-                            from utils.citation_manager import extract_doi_from_text, get_citation_from_doi
+                            # Get text from the original document and try extracting DOI
                             
                             # Get text from the original document if available
                             text = orig_doc.get("text", "")
@@ -797,12 +797,31 @@ def generate_response(query, context_documents):
             sources_pattern = r'\*\*Sources:\*\*.*?\d+\.\s.*?(?=\n\n|$)'
             answer = re.sub(sources_pattern, '', answer, flags=re.DOTALL)
             
-            # Also try to match other variations
-            sources_pattern2 = r'Sources:.*?\d+\.\s.*?(?=\n\n|$)'
+            # Also try to match other variations - including the "Sources:" at the end
+            sources_pattern2 = r'Sources:.*?(\d+\.\s.*?)?(?=\n\n|$)'
             answer = re.sub(sources_pattern2, '', answer, flags=re.DOTALL)
+            
+            # Also catch any remaining trailing "Sources:" text
+            answer = re.sub(r'\s*Sources:\s*$', '', answer, flags=re.DOTALL)
             
             # Clean up any double newlines that might result
             answer = re.sub(r'\n{3,}', '\n\n', answer)
+            
+            # Fix duplicate citations like [1][1] - replace with [1]
+            duplicate_citation_pattern = r'\[(\d+)\]\[(\d+)\]'
+            
+            # Keep searching until no more duplicates are found
+            while re.search(duplicate_citation_pattern, answer):
+                match = re.search(duplicate_citation_pattern, answer)
+                if match:
+                    # If the citation numbers are the same, replace with just one citation
+                    if match.group(1) == match.group(2):
+                        answer = re.sub(r'\[' + match.group(1) + r'\]\[' + match.group(2) + r'\]', 
+                                        f'[{match.group(1)}]', answer, 1)
+                    else:
+                        # If they're different, keep both but separate them with a space
+                        answer = re.sub(r'\[' + match.group(1) + r'\]\[' + match.group(2) + r'\]', 
+                                        f'[{match.group(1)}] [{match.group(2)}]', answer, 1)
             
             # Return only the sources that were actually referenced
             return answer, final_sources
