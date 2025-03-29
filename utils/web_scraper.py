@@ -908,6 +908,45 @@ def create_minimal_content_for_topic(url):
     Returns:
         list: List of dictionaries containing text chunks and metadata or empty list if failed
     """
+    # Check if this is a topic/disease page
+    if '/topic/' in url or '/disease/' in url:
+        logger.info(f"Processing topic {url.split('/')[-2]} with no chunk limit")
+        
+        try:
+            # Get content with our direct extraction method 
+            # This ensures we get the most content possible
+            results = extract_website_direct(url)
+            
+            if results and len(results) > 0:
+                # Create memory-optimized chunks
+                optimized_results = []
+                for chunk in results:
+                    # Simplify metadata to save memory
+                    simple_metadata = {
+                        'title': chunk['metadata']['title'],
+                        'url': chunk['metadata']['url'],
+                        'source_type': 'website',
+                        'citation': chunk['metadata']['citation'],
+                        'chunk_index': chunk['metadata']['chunk_index'],
+                        'date_scraped': datetime.now().isoformat()
+                    }
+                    
+                    # Add optimized chunk
+                    optimized_results.append({
+                        'text': chunk['text'],
+                        'metadata': simple_metadata
+                    })
+                
+                logger.info(f"Created {len(optimized_results)} memory-optimized chunks for topic page")
+                return optimized_results
+            else:
+                logger.warning(f"Direct extraction returned no chunks, trying fallback for topic page: {url}")
+                # Proceed to fallback extraction
+        except Exception as e:
+            logger.exception(f"Error in direct extraction for topic, trying fallback: {str(e)}")
+            # Continue to fallback approach
+    
+    # Fallback extraction or non-topic page
     logger.info(f"Creating memory-optimized minimal content for topic page: {url}")
     
     # Parse URL
@@ -924,7 +963,7 @@ def create_minimal_content_for_topic(url):
         
         # Use a session to minimize memory usage and add timeout
         with requests.Session() as session:
-            response = session.get(url, headers=headers, timeout=5, stream=True)
+            response = session.get(url, headers=headers, timeout=10, stream=True)
             
             # Default title
             title = f"Rheumatology Topic: {topic_name}"
@@ -942,16 +981,14 @@ def create_minimal_content_for_topic(url):
                             break
                 
                 # Process with BeautifulSoup using lxml parser (faster and more memory-efficient)
-                soup = BeautifulSoup(html_content, 'lxml')
+                soup = BeautifulSoup(html_content, 'html.parser')
                 
                 # Clear html_content to free memory
                 html_content = None
                 
-                # Extract title
-                title_element = soup.find('title')
-                if title_element and title_element.text:
-                    title = title_element.text.strip()
-                    logger.info(f"Extracted title: {title}")
+                # Extract title using our improved function
+                title = extract_title(str(soup), url)
+                logger.info(f"Extracted title: {title}")
                 
                 # Extract content from article element - only look for main content
                 article = soup.find('article')
@@ -1005,21 +1042,13 @@ The page appears to contain information about this specific condition or topic."
         chunks = []
         
         # Use our standard chunking function with better parameters
-        text_chunks = chunk_text(text, max_length=1000, overlap=150)
+        text_chunks = chunk_text(text, max_length=800, overlap=200)
         
         # No chunk limit - process all content
         # All topics are equally important and should have maximum chunks
         
         # Extremely high maximum to effectively disable the limit
         max_chunks = 1000
-        
-        parsed_url = urllib.parse.urlparse(url)
-        path_parts = parsed_url.path.strip('/').split('/')
-        
-        # Extract topic from URL
-        current_topic = path_parts[-1] if path_parts else ""
-        
-        logger.info(f"Processing topic {current_topic} with no chunk limit")
         
         # Apply chunk limit if needed
         if len(text_chunks) > max_chunks:
@@ -1037,8 +1066,7 @@ The page appears to contain information about this specific condition or topic."
                     "chunk_index": i,
                     "page_number": 1,
                     "citation": citation,
-                    "date_scraped": datetime.now().isoformat(),
-                    "is_minimal_content": True
+                    "date_scraped": datetime.now().isoformat()
                 }
             })
         
@@ -1067,7 +1095,6 @@ This is a page about {topic_name} in rheumatology."""
                     "page_number": 1,
                     "citation": citation,
                     "date_scraped": datetime.now().isoformat(),
-                    "is_minimal_content": True,
                     "is_fallback": True
                 }
             }]
@@ -1234,35 +1261,56 @@ def extract_title(html, url):
         str: Title of the webpage
     """
     try:
-        # Try to extract using trafilatura
-        metadata = trafilatura.extract_metadata(html, url=url)
-        logger.debug(f"Extracted metadata: {metadata}")
+        # Try to extract directly from HTML using BeautifulSoup
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            title_tag = soup.find('title')
+            if title_tag and title_tag.string:
+                title = title_tag.string.strip()
+                logger.debug(f"Found title with BeautifulSoup: {title}")
+                return title
+        except Exception as bs_error:
+            logger.debug(f"BeautifulSoup title extraction failed: {str(bs_error)}")
         
-        title = metadata.get('title', '')
-        
-        if not title:
-            # Try to extract from HTML directly using regex
-            logger.debug("Title not found in metadata, trying regex extraction")
+        # Try to extract using regex as fallback
+        try:
             import re
             title_match = re.search('<title>(.*?)</title>', html, re.IGNORECASE | re.DOTALL)
             if title_match:
                 title = title_match.group(1).strip()
                 logger.debug(f"Found title with regex: {title}")
+                return title
+        except Exception as regex_error:
+            logger.debug(f"Regex title extraction failed: {str(regex_error)}")
             
-        if not title:
-            # Use domain name as fallback
-            parsed_url = urllib.parse.urlparse(url)
-            title = parsed_url.netloc
-            logger.debug(f"Using domain as fallback title: {title}")
+        # If all else fails, use domain or path from URL
+        parsed_url = urllib.parse.urlparse(url)
         
-        return title
+        # Use path as title if it exists and looks meaningful
+        if parsed_url.path and parsed_url.path not in ['/', '']:
+            path = parsed_url.path.strip('/')
+            parts = path.split('/')
+            if len(parts) > 0:
+                # Use the last part of the path and make it readable
+                title = parts[-1].replace('-', ' ').replace('_', ' ').title()
+                logger.debug(f"Using path as fallback title: {title}")
+                return title
+        
+        # Use domain as last resort
+        domain = parsed_url.netloc
+        logger.debug(f"Using domain as fallback title: {domain}")
+        return domain
+        
     except Exception as e:
         logger.exception(f"Error extracting title: {str(e)}")
-        # Use domain name as fallback
-        parsed_url = urllib.parse.urlparse(url)
-        domain = parsed_url.netloc
-        logger.debug(f"Using domain as exception fallback title: {domain}")
-        return domain
+        # Use domain name as absolute last resort
+        try:
+            parsed_url = urllib.parse.urlparse(url)
+            domain = parsed_url.netloc
+            logger.debug(f"Using domain as exception fallback title: {domain}")
+            return domain
+        except:
+            return "Website Document"
         
 def generate_website_citation(title, url):
     """
@@ -1333,8 +1381,9 @@ def extract_website_direct(url):
         # ----- Try all extraction methods in parallel and use the one with most content -----
         all_extracted_texts = []
         
-        # Method 1: Trafilatura with maximum parameters
+        # Method 1: Trafilatura with compatible parameters
         try:
+            # Use only parameters actually supported by trafilatura
             text1 = trafilatura.extract(
                 html_content, 
                 include_links=True,        # Include links to capture references
@@ -1344,21 +1393,20 @@ def extract_website_direct(url):
                 no_fallback=False,         # Always use fallback methods if needed
                 favor_recall=True,         # Prioritize getting more content over precision
                 include_comments=True,     # Include comments which may have useful info
-                include_formatting=True,   # Preserve formatting which can provide structure
-                target_language="en",      # Ensure English content
-                include_anchors=True,      # Include anchor texts which are often navigation items
-                include_headings=True,     # Ensure headers are captured as they organize content
-                include_footnotes=True     # Footnotes may contain valuable references
+                include_formatting=True    # Preserve formatting which can provide structure
+                # Removed incompatible parameters:
+                # include_anchors, include_headings, include_footnotes
             )
             if text1:
-                logger.info(f"Method 1 - Trafilatura (full params): {len(text1)} chars")
-                all_extracted_texts.append((text1, "Trafilatura (full params)"))
+                logger.info(f"Method 1 - Trafilatura (compatible params): {len(text1)} chars")
+                all_extracted_texts.append((text1, "Trafilatura (compatible params)"))
         except Exception as e:
             logger.warning(f"Method 1 failed: {str(e)}")
         
         # Method 2: Simple Trafilatura
         try:
-            text2 = trafilatura.extract(html_content, favor_recall=True, include_comments=False)
+            # Simplest parameters for maximum compatibility
+            text2 = trafilatura.extract(html_content, favor_recall=True)
             if text2:
                 logger.info(f"Method 2 - Trafilatura (simple): {len(text2)} chars")
                 all_extracted_texts.append((text2, "Trafilatura (simple)"))
