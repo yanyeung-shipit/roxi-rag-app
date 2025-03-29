@@ -56,17 +56,73 @@ class VectorStore:
             logger.exception(f"Error loading vector store: {str(e)}")
     
     def _save(self):
-        """Save the current index and data to disk."""
+        """Save the current index and data to disk with improved error handling."""
+        # Use temporary files to avoid corruption if the process is interrupted
+        temp_index_path = f"{self.index_path}.temp"
+        temp_data_path = f"{self.data_path}.temp"
+        
         try:
-            faiss.write_index(self.index, self.index_path)
-            with open(self.data_path, 'wb') as f:
-                pickle.dump({
-                    'documents': self.documents,
-                    'document_counts': self.document_counts
-                }, f)
-            logger.debug("Vector store saved to disk")
+            # First, write to temporary files
+            logger.debug("Writing vector index to temporary file")
+            try:
+                faiss.write_index(self.index, temp_index_path)
+            except Exception as index_error:
+                logger.error(f"Failed to write index file: {str(index_error)}")
+                # Clean up temp file if it exists
+                if os.path.exists(temp_index_path):
+                    os.remove(temp_index_path)
+                # Don't raise, continue with data file
+            
+            logger.debug("Writing document data to temporary file")
+            try:
+                with open(temp_data_path, 'wb') as f:
+                    pickle.dump({
+                        'documents': self.documents,
+                        'document_counts': self.document_counts
+                    }, f)
+            except Exception as data_error:
+                logger.error(f"Failed to write data file: {str(data_error)}")
+                # Clean up temp files
+                if os.path.exists(temp_data_path):
+                    os.remove(temp_data_path)
+                if os.path.exists(temp_index_path):
+                    os.remove(temp_index_path)
+                # Don't raise, at least we tried
+            
+            # Now rename temporary files to final names
+            logger.debug("Renaming temporary files to final names")
+            if os.path.exists(temp_index_path):
+                # Backup existing file if it exists
+                if os.path.exists(self.index_path):
+                    backup_index = f"{self.index_path}.bak"
+                    if os.path.exists(backup_index):
+                        os.remove(backup_index)  # Remove old backup if it exists
+                    os.rename(self.index_path, backup_index)
+                # Move temp file to final name
+                os.rename(temp_index_path, self.index_path)
+            
+            if os.path.exists(temp_data_path):
+                # Backup existing file if it exists
+                if os.path.exists(self.data_path):
+                    backup_data = f"{self.data_path}.bak"
+                    if os.path.exists(backup_data):
+                        os.remove(backup_data)  # Remove old backup if it exists
+                    os.rename(self.data_path, backup_data)
+                # Move temp file to final name
+                os.rename(temp_data_path, self.data_path)
+            
+            logger.debug("Vector store saved to disk successfully")
+            
         except Exception as e:
-            logger.exception(f"Error saving vector store: {str(e)}")
+            logger.exception(f"Error in vector store save process: {str(e)}")
+            # Try to clean up any temporary files
+            for path in [temp_index_path, temp_data_path]:
+                if os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except:
+                        pass
+            # Note: we deliberately don't raise the exception to avoid crashing the server
     
     def add_text(self, text, metadata=None):
         """
@@ -113,11 +169,15 @@ class VectorStore:
             source_type = metadata.get('source_type', 'unknown') if metadata else 'unknown'
             self.document_counts[source_type] += 1
             
-            # Save updated index and data - don't save every time to improve performance
-            # Only save every 10 documents or if we have key metadata document types
-            if len(self.documents) % 10 == 0 or source_type in ['website', 'pdf']:
+            # Save updated index and data with less frequency to avoid IO errors during bulk operations
+            # Only save every 25 documents or after processing small batches of pdfs/websites
+            if len(self.documents) % 25 == 0:
+                logger.debug(f"Saving vector store after {len(self.documents)} documents")
                 self._save()
-                logger.debug("Vector store saved to disk")
+            elif source_type in ['website', 'pdf'] and len(self.documents) % 5 == 0:
+                # For important document types, save more frequently but still batch them
+                logger.debug(f"Saving vector store after adding {source_type} document")
+                self._save()
             
             logger.debug(f"Added document {doc_id} to vector store")
             return doc_id

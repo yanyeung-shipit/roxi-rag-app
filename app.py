@@ -225,10 +225,12 @@ def upload_pdf():
                                 logger.warning(f"Error adding chunk to vector store: {str(chunk_error)}")
                                 # Continue with next chunk
                         
-                        # Save vector store after each batch
+                        # Only save vector store periodically to reduce file I/O operations
                         try:
-                            vector_store._save()
-                            logger.debug(f"Saved vector store after batch {(i // batch_size) + 1}")
+                            # Save after every few batches instead of each one
+                            if (i // batch_size) % 3 == 0:  # Every 3rd batch
+                                vector_store._save()
+                                logger.debug(f"Saved vector store after batch {(i // batch_size) + 1}")
                             
                             # Commit chunk records to database in batches
                             if chunk_records:
@@ -530,7 +532,8 @@ def add_website():
                     'url': url
                 }
                 vector_store.add_text(page_data['text'], metadata)
-                vector_store._save()
+                # Only save vector store for this initial chunk for immediate searching
+                # Rest will be handled with proper batching by the background processor
                 
                 db.session.commit()
                 logger.info(f"Added initial chunk for document {new_document.id}")
@@ -947,8 +950,10 @@ def add_topic_pages():
                         
                         success_count += len(current_batch)
                         
-                        # Save vector store after each batch to prevent memory buildup
-                        vector_store._save()
+                        # Only save vector store periodically to reduce file system operations
+                        if (i // batch_size) % 3 == 0:  # Every 3rd batch
+                            logger.info(f"Saving vector store for topic {topic} after batch {i // batch_size}")
+                            vector_store._save()
                         
                         # Log progress for large documents
                         if len(chunks) > 100 and i % 100 == 0:
@@ -1213,8 +1218,10 @@ def process_document(document_id):
                                     db.session.commit()
                                     total_added += len(chunk_records)
                                     
-                                    # Save vector store periodically
-                                    vector_store._save()
+                                    # Only save vector store periodically to reduce file I/O operations
+                                    if total_added % 30 == 0:
+                                        logger.info(f"Saving vector store after {total_added} chunks for document {doc.id}")
+                                        vector_store._save()
                                 
                                 # Log progress for large documents
                                 if len(process_chunks) > 100 and i % 100 == 0:
@@ -1235,6 +1242,9 @@ def process_document(document_id):
                     
                     # Save changes
                     db.session.commit()
+                    
+                    # Final vector store save at the end of processing
+                    logger.info(f"Final vector store save after processing document {doc.id}")
                     vector_store._save()
                     
                     # Success response
@@ -1376,8 +1386,10 @@ def load_more_document_content(document_id):
                         db.session.commit()
                         added_count += len(batch_records)
                         
-                        # Save vector store after each batch
-                        vector_store._save()
+                        # Only save vector store periodically to reduce file I/O operations
+                        if added_count % 10 == 0:
+                            logger.info(f"Saving vector store after adding {added_count} more chunks")
+                            vector_store._save()
                     
                     # Force garbage collection to free memory
                     import gc
