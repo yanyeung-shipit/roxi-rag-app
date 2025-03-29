@@ -1,5 +1,5 @@
 {
-  "timestamp": "2025-03-29T20:23:58.855616",
+  "timestamp": "2025-03-29T20:42:08.544705",
   "db_stats": {
     "total_docs": 23,
     "processed_docs": 23,
@@ -134,16 +134,16 @@
     ]
   },
   "vector_stats": {
-    "total_documents": 289,
-    "chunks": 289,
+    "total_documents": 341,
+    "chunks": 341,
     "websites": 0,
     "pdfs": 5
   },
   "progress": {
-    "progress_percent": 22.918318794607455,
-    "vector_chunks": 289,
+    "progress_percent": 27.04203013481364,
+    "vector_chunks": 341,
     "db_chunks": 1261,
-    "chunks_remaining": 972,
+    "chunks_remaining": 920,
     "processing_rate": 0,
     "estimated_seconds_remaining": 0,
     "estimated_completion_time": null
@@ -152,7 +152,7 @@
   "errors_count": 0,
   "monitoring_info": {
     "total_checks": 1,
-    "start_time": "2025-03-29T20:23:57.650443",
-    "running_time": 1.20518
+    "start_time": "2025-03-29T20:42:07.411696",
+    "running_time": 1.13302
   }
 }
