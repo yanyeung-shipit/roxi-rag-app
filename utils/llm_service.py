@@ -107,9 +107,18 @@ def generate_response(query, context_documents):
                 else:
                     # Create a new PDF entry with a fallback citation if none exists
                     citation = source_info.get("citation", "") 
+                    
+                    # Check for a citation in the metadata as well
                     if not citation or citation.strip() == "":
-                        # Create a better fallback citation based on the title
-                        citation = f"{title}. (PDF Document)"
+                        # Check metadata for formatted_citation
+                        if metadata.get("formatted_citation"):
+                            citation = metadata.get("formatted_citation")
+                        # Check for a DOI to use in the citation
+                        elif metadata.get("doi"):
+                            citation = f"{title}. https://doi.org/{metadata.get('doi')}"
+                        else:
+                            # Create a better fallback citation based on the title
+                            citation = f"{title}. (Rheumatology Document)"
                     
                     pdf_sources[title] = {
                         "title": title,
@@ -160,7 +169,14 @@ def generate_response(query, context_documents):
                         source_info["citation"] = f"{title}. Retrieved from {url}"
                     else:
                         # More descriptive citation when URL is not available
-                        source_info["citation"] = f"{title}. (Document from Knowledge Base)"
+                        # Check for formatted_citation in metadata
+                        if metadata.get("formatted_citation"):
+                            source_info["citation"] = metadata.get("formatted_citation")
+                        # Check for DOI to create a citation with DOI link
+                        elif metadata.get("doi"):
+                            source_info["citation"] = f"{title}. https://doi.org/{metadata.get('doi')}"
+                        else:
+                            source_info["citation"] = f"{title}. (Document from Rheumatology Knowledge Base)"
             
             all_sources.append(source_info)
             
@@ -248,8 +264,14 @@ def generate_response(query, context_documents):
                     
                     if url:
                         source["citation"] = f"{title}. Retrieved from {url}"
+                    elif source.get("doi"):
+                        source["citation"] = f"{title}. https://doi.org/{source.get('doi')}"
                     else:
-                        source["citation"] = f"{title}. (Document from Rheumatology Knowledge Base)"
+                        # Look for a properly formatted citation from our metadata before falling back
+                        if "metadata" in source and source["metadata"] and "formatted_citation" in source["metadata"]:
+                            source["citation"] = source["metadata"]["formatted_citation"]
+                        else:
+                            source["citation"] = f"{title}. (Document from Rheumatology Knowledge Base)"
                 
                 # Make sure we have required fields
                 if "title" not in source or not source["title"]:
