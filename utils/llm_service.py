@@ -470,7 +470,7 @@ def generate_response(query, context_documents):
             "3. Be EXTREMELY generous in extracting relevant information - if website menus, navigation elements, or section titles contain relevant terms, use them as a basis for your answer.\n"
             "4. Many website sources may only contain brief references or category names - treat these as valuable and interpret them as indications that the website covers those topics.\n"
             "5. Provide citations for your answer using the format [n] where n is the document number.\n"
-            "6. Cite multiple sources if the information comes from multiple documents.\n"
+            "6. IMPORTANT: Cite multiple sources when the same information appears in multiple documents. Always include ALL relevant sources, not just the first one you find.\n"
             "7. IMPORTANT: Always make sure that every citation number [n] in your answer is included in the sources list.\n"
             "8. CRITICAL: When you use a citation like [3] or [4] in your answer, ensure that source #3 or #4 appears in your final sources list.\n"
             "9. DO NOT include a 'Sources:' section at the end of your answer - citations will be displayed separately in the interface.\n"
@@ -763,6 +763,35 @@ def generate_response(query, context_documents):
                                     citation = f"{title}. (Rheumatology Document)"
                                     logger.info(f"Using basic citation for document {doc_id}: {citation}")
                         
+                        # Try to find this document in the database by file path if PDF
+                        db_document = None
+                        if metadata.get("source_type") == "pdf" and metadata.get("file_path"):
+                            # Import models here to avoid circular imports
+                            from app import app
+                            from models import Document
+                            
+                            # Get the filename without timestamp prefix
+                            import os
+                            filename = os.path.basename(metadata.get("file_path", ""))
+                            if filename:
+                                # Remove timestamp prefix if present
+                                if len(filename) > 15 and filename[:8].isdigit() and filename[8:15].isdigit() and filename[15] == '_':
+                                    filename = filename[16:]
+                                    
+                                # Clean filename matches in database
+                                try:
+                                    with app.app_context():
+                                        db_document = Document.query.filter(Document.filename.like(f'%{filename}')).first()
+                                        if db_document:
+                                            # Use the database document information for better citation
+                                            logger.info(f"Found document in database: {db_document.title}")
+                                            title = db_document.title or title
+                                            if db_document.formatted_citation:
+                                                citation = db_document.formatted_citation
+                                                logger.info(f"Using database citation: {citation}")
+                                except Exception as e:
+                                    logger.error(f"Error looking up document in database: {str(e)}")
+                            
                         # Create source with all available information
                         basic_source = {
                             "source_type": metadata.get("source_type", "unknown"),
@@ -774,7 +803,8 @@ def generate_response(query, context_documents):
                         # Add page information if available
                         if metadata.get("page"):
                             basic_source["pages"] = [str(metadata.get("page"))]
-                            basic_source["citation"] += f" (page {metadata.get('page')})"
+                            if "page" not in citation.lower():
+                                basic_source["citation"] += f" (page {metadata.get('page')})"
                         
                         final_sources.append(basic_source)
                         # Track this source's position
