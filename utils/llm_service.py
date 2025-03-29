@@ -60,6 +60,9 @@ def generate_response(query, context_documents):
         # Limit to top 5 most relevant documents
         context_documents = sorted_docs[:5]
         
+        # Create a document ID mapping to ensure consistency
+        doc_id_mapping = {i+1: doc for i, doc in enumerate(context_documents)}
+        
         # Track source types for debugging
         source_types = {}
         for doc in context_documents:
@@ -309,6 +312,9 @@ def generate_response(query, context_documents):
         # Second pass: Create deduplicated sources for display
         sources = []
         
+        # Create a mapping of document IDs to ensure all cited IDs have sources
+        doc_id_to_source = {}
+        
         # First add all deduplicated PDF sources
         for title, pdf_info in pdf_sources.items():
             # Create a combined citation with page numbers
@@ -318,6 +324,10 @@ def generate_response(query, context_documents):
                 "pages": sorted(pdf_info["pages"], key=lambda x: int(x) if x.isdigit() else 0),
                 "doc_ids": pdf_info["doc_ids"]
             }
+            
+            # Register this source with all its document IDs
+            for doc_id in pdf_info["doc_ids"]:
+                doc_id_to_source[doc_id] = pdf_source
             
             # Include the citation if available
             if pdf_info["citation"]:
@@ -586,6 +596,60 @@ def generate_response(query, context_documents):
             if "I don't have enough information" in answer:
                 return answer, []
         
+        # Register website and other sources in the doc_id_mapping as well
+        for source in all_sources:
+            doc_id = source.get("doc_id")
+            if doc_id and doc_id not in doc_id_to_source:
+                # Deep copy to avoid modifying the original source
+                source_copy = {k: v for k, v in source.items()}
+                doc_id_to_source[doc_id] = source_copy
+        
+        # Analyze the answer to find all citation references like [1], [2], etc.
+        import re
+        citation_refs = re.findall(r'\[(\d+)\]', answer)
+        if citation_refs:
+            citation_ids = set([int(ref) for ref in citation_refs])
+            logger.info(f"Found citation references in answer: {citation_ids}")
+            
+            # Make sure all referenced documents appear in the final sources list
+            final_sources = []
+            referenced_ids = set()
+            
+            # First, add sources for all referenced IDs
+            for doc_id in citation_ids:
+                if doc_id in doc_id_to_source:
+                    source = doc_id_to_source[doc_id]
+                    if "doc_id" in source:
+                        # For single document sources
+                        referenced_ids.add(source["doc_id"])
+                    elif "doc_ids" in source:
+                        # For PDF sources that may have multiple doc_ids
+                        referenced_ids.update(source["doc_ids"])
+                    
+                    # Add to final sources if not already included
+                    if source not in final_sources:
+                        final_sources.append(source)
+                        logger.info(f"Added source for citation [{doc_id}]: {source.get('title', 'Unknown')}")
+                else:
+                    logger.warning(f"Citation reference [{doc_id}] has no corresponding source!")
+                    
+                    # Try to find the original document and create a basic source
+                    if doc_id in doc_id_mapping:
+                        orig_doc = doc_id_mapping[doc_id]
+                        metadata = orig_doc.get("metadata", {})
+                        basic_source = {
+                            "source_type": metadata.get("source_type", "unknown"),
+                            "doc_id": doc_id,
+                            "title": metadata.get("title", "Rheumatology Document"),
+                            "citation": metadata.get("formatted_citation", "Rheumatology Document") 
+                        }
+                        final_sources.append(basic_source)
+                        logger.info(f"Created basic source for citation [{doc_id}]: {basic_source.get('title', 'Unknown')}")
+            
+            # Return only the sources that were actually referenced
+            return answer, final_sources
+            
+        # If no citations were found or something went wrong, return all sources
         return answer, sources
     except Exception as e:
         logger.exception(f"Error generating response: {str(e)}")
