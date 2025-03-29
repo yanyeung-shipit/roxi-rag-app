@@ -417,4 +417,182 @@
         </div>
     </div>
 </div>
+<!-- Background Processing Status Card -->
+<div class="row mb-4" id="background-status-section">
+    <div class="col-12">
+        <div class="card bg-dark border-secondary">
+            <div class="card-header bg-dark text-light d-flex justify-content-between align-items-center">
+                <h4><i class="fas fa-tasks me-2"></i>Background Processing Status</h4>
+                <button class="btn btn-sm btn-outline-secondary" onclick="refreshBackgroundStatus()">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+            </div>
+            <div class="card-body">
+                <div id="background-status-content">
+                    <div class="d-flex justify-content-center my-4">
+                        <div class="spinner-border text-secondary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                    <p class="text-center text-muted">Loading background processing status...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- JavaScript for background status -->
+<script>
+    // Load background status when the page loads
+    document.addEventListener('DOMContentLoaded', function() {
+        refreshBackgroundStatus();
+        // Auto-refresh every 30 seconds
+        setInterval(refreshBackgroundStatus, 30000);
+    });
+    
+    function refreshBackgroundStatus() {
+        console.log("Loading background processing status...");
+        const statusContent = document.getElementById('background-status-content');
+        
+        if (!statusContent) {
+            console.error("Cannot load background status: background-status-content element not found");
+            return;
+        }
+        
+        // Show loading spinner
+        statusContent.innerHTML = `
+            <div class="d-flex justify-content-center my-4">
+                <div class="spinner-border text-secondary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+            </div>
+            <p class="text-center text-muted">Loading background processing status...</p>
+        `;
+        
+        // Fetch background status
+        fetch('/background_status')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Status error: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    // If there are unprocessed documents, show details
+                    if (data.unprocessed_documents && data.unprocessed_documents.length > 0) {
+                        let html = `
+                            <div class="alert alert-info">
+                                <h5><i class="fas fa-info-circle me-2"></i>Background Processing Active</h5>
+                                <p>${data.total_unprocessed_count} documents in processing queue.</p>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="table table-dark table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th>Document</th>
+                                            <th>Type</th>
+                                            <th>Status</th>
+                                            <th>Progress</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                        `;
+                        
+                        // Add rows for each unprocessed document
+                        data.unprocessed_documents.forEach(doc => {
+                            let progressHtml = '';
+                            let statusText = '';
+                            
+                            // Format progress based on status
+                            if (doc.status === 'processing' && doc.total_chunks > 0) {
+                                const percent = Math.min(100, Math.max(0, doc.percent_complete));
+                                progressHtml = `
+                                    <div class="progress" style="height: 20px;">
+                                        <div class="progress-bar bg-info" role="progressbar" 
+                                             style="width: ${percent}%;" 
+                                             aria-valuenow="${percent}" aria-valuemin="0" aria-valuemax="100">
+                                            ${percent}%
+                                        </div>
+                                    </div>
+                                    <small class="text-muted">${doc.processed_chunks} / ${doc.total_chunks} chunks</small>
+                                `;
+                                statusText = `<span class="badge bg-info">Processing</span>`;
+                            } else if (doc.status === 'queued') {
+                                progressHtml = `<span class="text-muted">Queued for processing</span>`;
+                                statusText = `<span class="badge bg-secondary">Queued</span>`;
+                            } else {
+                                progressHtml = `<span class="text-muted">Status: ${doc.status || 'Unknown'}</span>`;
+                                statusText = `<span class="badge bg-warning text-dark">Pending</span>`;
+                            }
+                            
+                            html += `
+                                <tr>
+                                    <td>${doc.title || 'Untitled Document'}</td>
+                                    <td>${doc.file_type || 'Unknown'}</td>
+                                    <td>${statusText}</td>
+                                    <td>${progressHtml}</td>
+                                </tr>
+                            `;
+                        });
+                        
+                        html += `
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="text-muted small mt-2">
+                                <p>
+                                    <i class="fas fa-info-circle me-1"></i> 
+                                    Background processing continues even when this page is closed. 
+                                    Documents will be fully processed in the background.
+                                </p>
+                                <p>
+                                    <i class="fas fa-clock me-1"></i>
+                                    Last updated: ${new Date().toLocaleTimeString()}
+                                </p>
+                            </div>
+                        `;
+                        
+                        statusContent.innerHTML = html;
+                    } else {
+                        // No documents being processed
+                        statusContent.innerHTML = `
+                            <div class="alert alert-success">
+                                <h5><i class="fas fa-check-circle me-2"></i>All Documents Processed</h5>
+                                <p>No documents are currently being processed in the background.</p>
+                            </div>
+                            <div class="text-muted small mt-2">
+                                <p>
+                                    <i class="fas fa-info-circle me-1"></i>
+                                    Background processor status: ${data.processor_status.running ? 'Running' : 'Idle'}
+                                </p>
+                                <p>
+                                    <i class="fas fa-clock me-1"></i>
+                                    Last updated: ${new Date().toLocaleTimeString()}
+                                </p>
+                            </div>
+                        `;
+                    }
+                } else {
+                    // Error fetching status
+                    statusContent.innerHTML = `
+                        <div class="alert alert-danger">
+                            <h5><i class="fas fa-exclamation-triangle me-2"></i>Error</h5>
+                            <p>${data.message || 'Failed to load background processing status'}</p>
+                        </div>
+                    `;
+                }
+            })
+            .catch(error => {
+                console.error("Cannot load background status:", error);
+                statusContent.innerHTML = `
+                    <div class="alert alert-danger">
+                        <h5><i class="fas fa-exclamation-triangle me-2"></i>Error</h5>
+                        <p>Failed to load background processing status: ${error.message}</p>
+                    </div>
+                `;
+            });
+    }
+</script>
+
 {% endblock %}

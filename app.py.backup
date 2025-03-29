@@ -1,0 +1,1856 @@
+import os
+import logging
+import tempfile
+import datetime
+import urllib.parse
+import json
+import threading
+from flask import Flask, render_template, request, jsonify, flash, redirect, url_for, abort, send_file
+from werkzeug.utils import secure_filename
+from werkzeug.security import safe_join
+from utils.document_processor import process_pdf, bulk_process_pdfs
+from utils.web_scraper import scrape_website, create_minimal_content_for_topic
+from utils.vector_store import VectorStore
+from utils.llm_service import generate_response
+from utils.background_processor import background_processor
+from models import db, Document, DocumentChunk, Collection
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+# Initialize Flask app
+app = Flask(__name__)
+app.secret_key = os.environ.get("SESSION_SECRET")
+
+# Configure database
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+# Improve connection pool settings to handle connection timeouts
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_pre_ping": True,  # Test connections before use to avoid stale connections
+    "pool_recycle": 280,    # Recycle connections after 280 seconds (before default 5-min timeout)
+    "pool_timeout": 30,     # Maximum time to wait for connection from pool
+    "pool_size": 10,        # Maximum number of connections to keep persistently
+    "max_overflow": 20      # Maximum number of connections to create above pool_size
+}
+db.init_app(app)
+
+# Create uploads directory if it doesn't exist
+UPLOAD_FOLDER = os.path.join(app.root_path, 'uploads')
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# Increase maximum upload size for handling bulk PDF uploads (was 20MB)
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500 MB max upload size
+
+# Initialize vector store
+vector_store = VectorStore()
+
+# Start background processing services
+background_processor.start()
+logger.info("Background document processor started")
+
+# Configure upload settings
+ALLOWED_EXTENSIONS = {'pdf'}
+TEMP_FOLDER = tempfile.gettempdir()
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/manage')
+def manage():
+    """Document management interface."""
+    return render_template('manage.html')
+
+@app.route('/upload_pdf', methods=['POST'])
+def upload_pdf():
+    """Process and store PDF data. This version is optimized and saves to database."""
+    try:
+        # Check if file part exists
+        if 'pdf_file' not in request.files:
+            logger.warning("No file part in the request")
+            return jsonify({
+                'success': False, 
+                'message': 'No file part in the request'
+            }), 400
+        
+        file = request.files['pdf_file']
+        
+        # Check if file was selected
+        if file.filename == '':
+            logger.warning("No file selected")
+            return jsonify({
+                'success': False, 
+                'message': 'No file selected'
+            }), 400
+        
+        # Process valid file
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            logger.info(f"Processing PDF: {filename}")
+            
+            # Check file size before saving - limit to 50MB per file
+            file.seek(0, os.SEEK_END)
+            file_size = file.tell()
+            file.seek(0)  # Reset file pointer
+            
+            if file_size > 50 * 1024 * 1024:  # 50MB limit
+                logger.warning(f"PDF file too large: {file_size / (1024*1024):.2f} MB")
+                return jsonify({
+                    'success': False, 
+                    'message': f'PDF file too large ({file_size / (1024*1024):.2f} MB). Maximum size is 50 MB.'
+                }), 400
+            
+            # Save file to permanent storage in uploads folder
+            # Create a unique filename to avoid overwriting
+            # Use timestamp and original filename
+            timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+            unique_filename = f"{timestamp}_{filename}"
+            file_path = safe_join(app.config['UPLOAD_FOLDER'], unique_filename)
+            file.save(file_path)
+            logger.debug(f"Saved file to {file_path}")
+            
+            # Create a new document record in the database
+            new_document = Document(
+                filename=filename,
+                title=filename,  # We can update this later with better metadata
+                file_type="pdf",
+                file_path=file_path,
+                file_size=file_size,
+                processed=False  # Mark as unprocessed initially
+            )
+            
+            db.session.add(new_document)
+            db.session.commit()
+            logger.info(f"Created document record with ID: {new_document.id}")
+            
+            # Check if a collection was specified
+            collection_id = request.form.get('collection_id')
+            if collection_id and collection_id.strip():
+                try:
+                    # Find the collection
+                    collection = db.session.get(Collection, int(collection_id))
+                    if collection:
+                        # Add document to collection
+                        collection.documents.append(new_document)
+                        db.session.commit()
+                        logger.info(f"Added document {new_document.id} to collection {collection_id}")
+                    else:
+                        logger.warning(f"Collection with ID {collection_id} not found")
+                except Exception as e:
+                    logger.error(f"Error adding document to collection: {e}")
+                    # Continue processing, don't fail the upload
+            
+            try:
+                # Process PDF and add to vector store
+                chunks, metadata = process_pdf(file_path, filename)
+                
+                if not chunks:
+                    logger.warning("No chunks extracted from PDF")
+                    return jsonify({
+                        'success': False, 
+                        'message': 'Could not extract any text from the PDF. The file may be scanned images or protected.'
+                    }), 400
+                    
+                logger.info(f"Successfully processed PDF with {len(chunks)} chunks")
+                
+                # Update document with metadata from processing
+                if metadata:
+                    # Update page count
+                    if 'page_count' in metadata:
+                        new_document.page_count = metadata['page_count']
+                    
+                    # Update citation information
+                    if 'doi' in metadata and metadata['doi']:
+                        new_document.doi = metadata['doi']
+                    if 'authors' in metadata and metadata['authors']:
+                        new_document.authors = metadata['authors']
+                    if 'journal' in metadata and metadata['journal']:
+                        new_document.journal = metadata['journal']
+                    if 'publication_year' in metadata and metadata['publication_year']:
+                        new_document.publication_year = metadata['publication_year']
+                    if 'volume' in metadata and metadata['volume']:
+                        new_document.volume = metadata['volume']
+                    if 'issue' in metadata and metadata['issue']:
+                        new_document.issue = metadata['issue']
+                    if 'pages' in metadata and metadata['pages']:
+                        new_document.pages = metadata['pages']
+                    if 'formatted_citation' in metadata and metadata['formatted_citation']:
+                        new_document.formatted_citation = metadata['formatted_citation']
+                    
+                    # Commit metadata updates
+                    db.session.commit()
+                    logger.debug(f"Updated document with metadata including citation: {new_document.formatted_citation}")
+                
+                # Further limit chunks to prevent memory issues
+                max_chunks = 50
+                if len(chunks) > max_chunks:
+                    logger.warning(f"Limiting {len(chunks)} chunks to first {max_chunks}")
+                    chunks = chunks[:max_chunks]
+                
+                # Save chunks in smaller batches to prevent timeouts
+                batch_size = 10
+                total_batches = (len(chunks) + batch_size - 1) // batch_size
+                
+                success_count = 0
+                chunk_records = []
+                
+                try:
+                    for i in range(0, len(chunks), batch_size):
+                        batch = chunks[i:i + batch_size]
+                        logger.debug(f"Processing batch {(i // batch_size) + 1}/{total_batches} with {len(batch)} chunks")
+                        
+                        # Process each chunk with error handling
+                        for chunk_index, chunk in enumerate(batch):
+                            try:
+                                # Add to vector store
+                                vector_store.add_text(chunk['text'], chunk['metadata'])
+                                
+                                # Create database record for this chunk
+                                chunk_record = DocumentChunk(
+                                    document_id=new_document.id,
+                                    chunk_index=i + chunk_index,
+                                    page_number=chunk['metadata'].get('page', None),
+                                    text_content=chunk['text']
+                                )
+                                chunk_records.append(chunk_record)
+                                success_count += 1
+                            except Exception as chunk_error:
+                                logger.warning(f"Error adding chunk to vector store: {str(chunk_error)}")
+                                # Continue with next chunk
+                        
+                        # Only save vector store periodically to reduce file I/O operations
+                        try:
+                            # Save after every few batches instead of each one
+                            if (i // batch_size) % 3 == 0:  # Every 3rd batch
+                                vector_store._save()
+                                logger.debug(f"Saved vector store after batch {(i // batch_size) + 1}")
+                            
+                            # Commit chunk records to database in batches
+                            if chunk_records:
+                                db.session.add_all(chunk_records)
+                                db.session.commit()
+                                logger.debug(f"Saved {len(chunk_records)} chunk records to database")
+                                chunk_records = []  # Clear for next batch
+                                
+                        except Exception as save_error:
+                            logger.warning(f"Error saving batch: {str(save_error)}")
+                            # Continue processing
+                            
+                except Exception as batch_error:
+                    logger.exception(f"Error processing batch: {str(batch_error)}")
+                    # Continue to mark document as processed and return partial success
+                finally:
+                    # Mark document as processed if any chunks were successful
+                    if success_count > 0:
+                        new_document.processed = True
+                        db.session.commit()
+                        logger.debug("Document marked as processed")
+                
+                # Return success even if only some chunks were processed
+                if success_count > 0:
+                    return jsonify({
+                        'success': True, 
+                        'message': f'Successfully processed {filename} ({success_count} of {len(chunks)} chunks)',
+                        'document_id': new_document.id,
+                        'chunks': success_count
+                    })
+                else:
+                    # Document processing failed, but file was saved
+                    return jsonify({
+                        'success': False, 
+                        'message': 'File was saved but could not add any content to the knowledge base.'
+                    }), 500
+                    
+            except Exception as processing_error:
+                logger.exception(f"Error processing PDF: {str(processing_error)}")
+                # Keep the file but mark processing as failed
+                return jsonify({
+                    'success': False, 
+                    'message': f'Error processing PDF: {str(processing_error)}'
+                }), 500
+        else:
+            logger.warning(f"Invalid file type: {file.filename}")
+            return jsonify({
+                'success': False, 
+                'message': 'Invalid file type. Only PDF files are allowed.'
+            }), 400
+    except Exception as e:
+        logger.exception(f"Error processing PDF: {str(e)}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error processing PDF: {str(e)}'
+        }), 500
+
+@app.route('/bulk_upload_pdfs', methods=['POST']) 
+def bulk_upload_pdfs():
+    """Save multiple PDF files but defer processing to background jobs."""
+    try:
+        # Check if files were included
+        if 'pdf_files[]' not in request.files:
+            logger.warning("No files part in the request")
+            return jsonify({
+                'success': False,
+                'message': 'No files part in the request'
+            }), 400
+        
+        # Get all files
+        files = request.files.getlist('pdf_files[]')
+        
+        # Check if files were selected
+        if not files or files[0].filename == '':
+            logger.warning("No files selected")
+            return jsonify({
+                'success': False,
+                'message': 'No files selected'
+            }), 400
+        
+        # Filter valid files
+        valid_files = [f for f in files if f and allowed_file(f.filename)]
+        
+        if not valid_files:
+            logger.warning("No valid PDF files provided")
+            return jsonify({
+                'success': False,
+                'message': 'No valid PDF files provided. Only PDF files are allowed.'
+            }), 400
+        
+        # Maximum number of files to queue at once
+        max_files = 50  # Increased limit to 50 files
+        if len(valid_files) > max_files:
+            logger.warning(f"Too many files: {len(valid_files)}. Maximum allowed is {max_files}")
+            return jsonify({
+                'success': False,
+                'message': f'Too many files: {len(valid_files)}. Maximum allowed is {max_files}. Please upload fewer files at a time.'
+            }), 400
+        
+        # Save files and create document records only - no processing yet
+        pdf_paths = []
+        documents = []
+        document_ids = []
+        
+        # Check if a collection was specified
+        collection_id = request.form.get('collection_id')
+        collection = None
+        if collection_id and collection_id.strip():
+            try:
+                # Find the collection
+                collection = db.session.get(Collection, int(collection_id))
+                if not collection:
+                    logger.warning(f"Collection with ID {collection_id} not found")
+            except Exception as e:
+                logger.error(f"Error finding collection: {e}")
+        
+        for file in valid_files:
+            try:
+                filename = secure_filename(file.filename)
+                
+                # Check file size - limit to 50MB per file
+                file.seek(0, os.SEEK_END)
+                file_size = file.tell()
+                file.seek(0)  # Reset file pointer
+                
+                if file_size > 50 * 1024 * 1024:  # 50MB limit
+                    logger.warning(f"PDF file too large: {filename} ({file_size / (1024*1024):.2f} MB)")
+                    continue  # Skip this file but continue processing others
+                
+                # Create unique filename with timestamp
+                timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+                unique_filename = f"{timestamp}_{filename}"
+                file_path = safe_join(app.config['UPLOAD_FOLDER'], unique_filename)
+                file.save(file_path)
+                
+                # Create document record
+                new_document = Document(
+                    filename=filename,
+                    title=filename,
+                    file_type="pdf",
+                    file_path=file_path,
+                    file_size=file_size,
+                    processed=False
+                )
+                
+                db.session.add(new_document)
+                db.session.commit()
+                
+                # Add to collection if specified
+                if collection:
+                    try:
+                        collection.documents.append(new_document)
+                        db.session.commit()
+                        logger.info(f"Added document {new_document.id} to collection {collection_id}")
+                    except Exception as collection_error:
+                        logger.error(f"Error adding document to collection: {collection_error}")
+                
+                # Save information for response
+                pdf_paths.append(file_path)
+                documents.append(new_document)
+                document_ids.append(new_document.id)
+                
+                logger.debug(f"Saved file: {filename} as {file_path}")
+                
+            except Exception as file_error:
+                logger.warning(f"Error saving file {file.filename}: {str(file_error)}")
+                # Continue with other files
+        
+        # If no files were saved successfully
+        if not pdf_paths:
+            logger.warning("Failed to save any files")
+            return jsonify({
+                'success': False,
+                'message': 'Failed to save any of the provided files.'
+            }), 500
+        
+        # Queue all documents for background processing
+        try:
+            if document_ids:
+                logger.info(f"Queued {len(document_ids)} documents for background processing")
+                
+                # Return success
+                return jsonify({
+                    'success': True,
+                    'message': f'Successfully uploaded {len(pdf_paths)} PDF files. All files have been queued for background processing.',
+                    'document_ids': document_ids,
+                    'queued_count': len(document_ids),
+                    'pending_processing': True
+                })
+            
+        except Exception as processing_error:
+            logger.exception(f"Error in processing: {str(processing_error)}")
+            # Still return success since we saved the files
+            return jsonify({
+                'success': True,
+                'message': f'Files uploaded but there was an error during processing setup: {str(processing_error)}',
+                'document_ids': document_ids,
+                'pending_processing': True
+            })
+            
+    except Exception as e:
+        logger.exception(f"Error uploading PDF batch: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'Error uploading PDF batch: {str(e)}'
+        }), 500
+
+@app.route('/add_website', methods=['POST'])
+def add_website():
+    """Process and store website data with multi-page crawling."""
+    try:
+        data = request.form
+        url = data.get('website_url', '')
+        
+        if not url:
+            logger.warning("No URL provided")
+            return jsonify({
+                'success': False, 
+                'message': 'URL is required'
+            }), 400
+        
+        logger.info(f"Processing website with multi-page crawling: {url}")
+        
+        # Special handling for rheum.reviews domain - check if we should add multiple topics
+        if 'rheum.reviews' in url and not any(pattern in url for pattern in ['/topic/', '/disease/', '/condition/']):
+            # If it's the homepage or a non-topic page, we might want to suggest specific topic pages instead
+            return jsonify({
+                'success': False,
+                'message': 'For rheum.reviews, it\'s better to add specific topic pages directly. For example: https://rheum.reviews/topic/myositis/, https://rheum.reviews/topic/scleroderma/, etc.'
+            }), 400
+            
+        # Create a new document record in the database
+        new_document = Document(
+            filename=url,  # Use URL as filename
+            title=url,     # Will update with proper title after scraping
+            file_type="website",
+            source_url=url,
+            processed=False  # Mark as unprocessed initially
+        )
+        
+        db.session.add(new_document)
+        db.session.commit()
+        logger.info(f"Created document record with ID: {new_document.id}")
+        
+        # Check if a collection was specified
+        collection_id = request.form.get('collection_id')
+        if collection_id and collection_id.strip():
+            try:
+                # Find the collection
+                collection = db.session.get(Collection, int(collection_id))
+                if collection:
+                    # Add document to collection
+                    collection.documents.append(new_document)
+                    db.session.commit()
+                    logger.info(f"Added document {new_document.id} to collection {collection_id}")
+                else:
+                    logger.warning(f"Collection with ID {collection_id} not found")
+            except Exception as e:
+                logger.error(f"Error adding document to collection: {e}")
+                # Continue processing, don't fail the upload
+        
+        # Check if URL appears to be a specific topic/disease page
+        is_topic_page = False
+        topic_patterns = ['/topic/', '/disease/', '/diseases/', '/condition/', '/conditions/']
+        parsed_url = urllib.parse.urlparse(url)
+        if any(pattern in parsed_url.path for pattern in topic_patterns):
+            is_topic_page = True
+            logger.info(f"Detected specific topic URL: {url} - this will be given special priority")
+            
+        # Scrape just the first page to get basic metadata
+        try:
+            # Use a special single-page scraper to just get metadata
+            from utils.web_scraper import _scrape_single_page
+            page_data = _scrape_single_page(url)
+            
+            if page_data and 'title' in page_data['metadata']:
+                # Update the document with the page title
+                new_document.title = page_data['metadata']['title']
+                db.session.commit()
+                logger.debug(f"Updated document with title: {new_document.title}")
+                
+                # Create an initial chunk record for immediate searching
+                # This provides instant value while the full crawl happens in background
+                chunk_record = DocumentChunk(
+                    document_id=new_document.id,
+                    chunk_index=0,
+                    page_number=0,  # First page
+                    text_content=page_data['text']
+                )
+                db.session.add(chunk_record)
+                
+                # Add to vector store
+                metadata = {
+                    'document_id': new_document.id,
+                    'chunk_index': 0,
+                    'page_number': 0,
+                    'document_title': new_document.title,
+                    'file_type': 'website',
+                    'url': url
+                }
+                vector_store.add_text(page_data['text'], metadata)
+                # Only save vector store for this initial chunk for immediate searching
+                # Rest will be handled with proper batching by the background processor
+                
+                db.session.commit()
+                logger.info(f"Added initial chunk for document {new_document.id}")
+            else:
+                logger.warning(f"Could not extract title from first page: {url}")
+        except Exception as e:
+            logger.warning(f"Error extracting initial data from website: {str(e)}")
+            # Continue processing as the background processor will attempt full extraction
+        
+        # Return success immediately, with processing to continue in the background
+        return jsonify({
+            'success': True, 
+            'message': f'Website {url} has been queued for processing in the background. Initial metadata and content has been extracted for immediate searching.',
+            'document_id': new_document.id,
+            'note': 'The document will be fully processed in the background, adding more content gradually.'
+        })
+            
+    except Exception as e:
+        logger.exception(f"Error processing website: {str(e)}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error processing website: {str(e)}'
+        }), 500
+
+@app.route('/query', methods=['POST'])
+def query():
+    try:
+        data = request.form
+        query_text = data.get('query', '')
+        
+        if not query_text:
+            return jsonify({
+                'success': False, 
+                'message': 'Query is required'
+            }), 400
+        
+        # Get similar documents from vector store
+        retrieval_results = vector_store.search(query_text, top_k=5)
+        
+        if not retrieval_results:
+            return jsonify({
+                'success': True,
+                'answer': "ROXI doesn't have enough information in the rheumatology knowledge base to answer this question based on the documents you've provided.",
+                'sources': []
+            })
+            
+        # Debug log the retrieval results
+        logger.debug(f"Retrieved {len(retrieval_results)} documents for query: {query_text[:50]}...")
+        
+        # Log source types for debugging
+        source_types = {}
+        for doc in retrieval_results:
+            source_type = doc.get('metadata', {}).get('source_type', 'unknown')
+            source_types[source_type] = source_types.get(source_type, 0) + 1
+            
+            # Log individual source details
+            if source_type == 'website':
+                url = doc.get('metadata', {}).get('url', 'unknown')
+                title = doc.get('metadata', {}).get('title', 'unknown')
+                logger.debug(f"Website source: {title} - {url}")
+                
+        logger.info(f"Source types for query '{query_text[:30]}...': {source_types}")
+        
+        # Generate response using LLM
+        answer, sources = generate_response(query_text, retrieval_results)
+        
+        return jsonify({
+            'success': True,
+            'answer': answer,
+            'sources': sources
+        })
+    except Exception as e:
+        logger.exception("Error processing query")
+        return jsonify({
+            'success': False, 
+            'message': f'Error processing query: {str(e)}'
+        }), 500
+
+@app.route('/stats', methods=['GET'])
+def stats():
+    try:
+        # Get vector store stats
+        vector_stats = vector_store.get_stats()
+        
+        # Get database stats
+        db_stats = {
+            'total_documents': Document.query.count(),
+            'pdfs': Document.query.filter_by(file_type='pdf').count(),
+            'websites': Document.query.filter_by(file_type='website').count(),
+            'chunks': DocumentChunk.query.count(),
+            'collections': Collection.query.count()
+        }
+        
+        # Combine stats with precedence to database (more accurate)
+        combined_stats = {
+            'total_documents': db_stats['total_documents'] or vector_stats['total_documents'],
+            'pdfs': db_stats['pdfs'] or vector_stats['pdfs'],
+            'websites': db_stats['websites'] or vector_stats['websites'],
+            'chunks': db_stats['chunks'] or vector_stats['chunks'],
+            'collections': db_stats['collections']
+        }
+        
+        return jsonify({
+            'success': True,
+            'stats': combined_stats
+        })
+    except Exception as e:
+        logger.exception("Error retrieving stats")
+        return jsonify({
+            'success': False, 
+            'message': f'Error retrieving stats: {str(e)}'
+        }), 500
+
+@app.route('/clear', methods=['POST'])
+def clear():
+    try:
+        vector_store.clear()
+        
+        # Optionally also clear database tables
+        if request.form.get('clear_database', 'false').lower() == 'true':
+            # Delete all document chunks first (due to foreign key constraint)
+            DocumentChunk.query.delete()
+            # Delete all documents
+            Document.query.delete()
+            # Delete all collections
+            Collection.query.delete()
+            db.session.commit()
+            logger.info("Cleared all database records")
+            
+        return jsonify({
+            'success': True,
+            'message': 'Knowledge base cleared successfully'
+        })
+    except Exception as e:
+        logger.exception("Error clearing knowledge base")
+        return jsonify({
+            'success': False, 
+            'message': f'Error clearing knowledge base: {str(e)}'
+        }), 500
+
+@app.route('/remove_by_url', methods=['POST'])
+def remove_documents_by_url():
+    """Administrative endpoint to remove all documents with a specific URL pattern from the vector store."""
+    try:
+        url_pattern = request.form.get('url_pattern', '')
+        
+        if not url_pattern or len(url_pattern) < 5:
+            return jsonify({
+                'success': False,
+                'message': 'URL pattern is required and must be at least 5 characters'
+            }), 400
+            
+        # For safety, verify this is an administrative action
+        confirmation = request.form.get('confirmation', '')
+        if confirmation != 'yes_delete_all_matching_documents':
+            return jsonify({
+                'success': False,
+                'message': 'Confirmation required for this operation'
+            }), 400
+            
+        logger.info(f"Removing all documents with URL pattern: {url_pattern}")
+        
+        # Remove from vector store
+        try:
+            removed_count = vector_store.remove_document_by_url(url_pattern)
+            logger.info(f"Removed {removed_count} chunks from vector store")
+        except Exception as e:
+            logger.error(f"Error removing from vector store: {e}")
+            # Continue with database deletion even if vector store fails
+            removed_count = 0
+            
+        # Also delete from database
+        try:
+            # Find all document IDs with matching URL pattern
+            documents = Document.query.filter(Document.source_url.like(f'%{url_pattern}%')).all()
+            doc_ids = [doc.id for doc in documents]
+            
+            if doc_ids:
+                # Delete chunks first
+                chunks_deleted = DocumentChunk.query.filter(DocumentChunk.document_id.in_(doc_ids)).delete()
+                logger.info(f"Deleted {chunks_deleted} database chunks for {len(doc_ids)} documents")
+                
+                # Delete documents
+                for doc_id in doc_ids:
+                    doc = Document.query.get(doc_id)
+                    if doc:
+                        db.session.delete(doc)
+                        
+                db.session.commit()
+                logger.info(f"Deleted {len(doc_ids)} documents from database")
+                
+        except Exception as e:
+            logger.error(f"Error deleting from database: {e}")
+            # Continue with response even if database fails
+        
+        return jsonify({
+            'success': True,
+            'message': f'Removed {removed_count} chunks with URL pattern "{url_pattern}" from vector store'
+        })
+        
+    except Exception as e:
+        logger.exception(f"Error removing documents by URL: {str(e)}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error removing documents: {str(e)}'
+        }), 500
+        
+# New endpoint specifically for adding multiple rheum.reviews topic pages at once
+@app.route('/add_topic_pages', methods=['POST'])
+def add_topic_pages():
+    """Add multiple rheum.reviews topic pages at once. Memory-optimized version with incremental processing."""
+    try:
+        # Try to get data from JSON or form data
+        topics = None
+        
+        # Check if we have JSON data
+        if request.is_json:
+            data = request.get_json()
+            if data and 'topics' in data:
+                topics = data['topics']
+        
+        # If not JSON, try form data with topic_list
+        if topics is None and request.form:
+            topic_list = request.form.get('topic_list', '')
+            if topic_list:
+                # Split by newlines and filter empty lines
+                topics = [t.strip() for t in topic_list.split('\n') if t.strip()]
+        
+        # If still no topics, check direct form data
+        if topics is None and request.form and 'topics' in request.form:
+            topics_str = request.form.get('topics')
+            if topics_str:
+                # Try to parse as JSON string
+                try:
+                    topics = json.loads(topics_str)
+                except json.JSONDecodeError:
+                    # If not JSON, treat as comma-separated or newline-separated list
+                    if ',' in topics_str:
+                        topics = [t.strip() for t in topics_str.split(',') if t.strip()]
+                    else:
+                        topics = [t.strip() for t in topics_str.split('\n') if t.strip()]
+        
+        # Final validation
+        if not topics:
+            return jsonify({
+                'success': False,
+                'message': 'No topics provided. Please include a list of topic names.'
+            }), 400
+        
+        # Ensure topics is a list
+        if not isinstance(topics, list):
+            topics = [topics]
+        if not isinstance(topics, list) or len(topics) == 0:
+            return jsonify({
+                'success': False,
+                'message': 'Topics must be provided as a non-empty list.'
+            }), 400
+            
+        # Check if a collection was specified
+        collection_id = request.form.get('collection_id')
+        collection = None
+        if collection_id and collection_id.strip():
+            try:
+                # Find the collection
+                collection = db.session.get(Collection, int(collection_id))
+                if not collection:
+                    logger.warning(f"Collection with ID {collection_id} not found")
+            except Exception as e:
+                logger.error(f"Error finding collection: {e}")
+        
+        # MEMORY OPTIMIZATION: Reduce maximum number of topics to 2
+        max_topics = 2
+        if len(topics) > max_topics:
+            topics = topics[:max_topics]  # Silently truncate to reduce memory issues
+            logger.warning(f"Limiting to first {max_topics} topics to prevent memory issues")
+        
+        # Format topic URLs
+        base_url = "https://rheum.reviews/topic/"
+        processed_topics = []
+        failed_topics = []
+        
+        # IMPROVED APPROACH: Process just the first topic immediately with initial batch
+        # Additional topics and remaining chunks will be processed in the background
+        first_topic = topics[0]
+        remaining_topics = topics[1:] if len(topics) > 1 else []
+        
+        # Clean the topic name for URL
+        topic_slug = first_topic.strip().lower().replace(' ', '-')
+        if not topic_slug:
+            return jsonify({
+                'success': False, 
+                'message': f'Invalid topic name: "{first_topic}"'
+            }), 400
+                
+        url = f"{base_url}{topic_slug}/"
+        
+        try:
+            # Create a new document record in the database
+            new_document = Document(
+                filename=url,
+                title=f"Topic: {first_topic}",  # Will update with proper title after scraping
+                file_type="website",
+                source_url=url,
+                processed=False
+            )
+                
+                db.session.add(new_document)
+                db.session.commit()
+                
+                # Add to collection if specified
+                if collection:
+                    try:
+                        collection.documents.append(new_document)
+                        db.session.commit()
+                        logger.info(f"Added document {new_document.id} to collection {collection_id}")
+                    except Exception as collection_error:
+                        logger.error(f"Error adding document to collection: {collection_error}")
+                
+                # Process the topic page with strict limits to avoid memory issues
+                logger.info(f"Processing topic page with memory optimization: {url}")
+                try:
+                    # Use memory-optimized content fetching for topic pages 
+                    chunks = create_minimal_content_for_topic(url)
+                    
+                    # Don't even try crawling to avoid memory issues
+                    if not chunks:
+                        logger.warning(f"Memory-optimized content extraction failed for {url}")
+                        raise Exception("Could not extract content from topic page")
+                    
+                except Exception as e:
+                    logger.error(f"Error processing topic {topic}: {str(e)}")
+                    failed_topics.append({"topic": topic, "reason": f"Error: {str(e)}"})
+                    
+                    # Clean up any partial document
+                    try:
+                        db.session.delete(new_document)
+                        db.session.commit()
+                    except Exception:
+                        pass
+                    
+                    continue
+                
+                if not chunks or len(chunks) == 0:
+                    failed_topics.append({"topic": topic, "reason": "No content extracted"})
+                    
+                    # Clean up any partial document
+                    try:
+                        db.session.delete(new_document)
+                        db.session.commit()
+                    except Exception:
+                        pass
+                    
+                    continue
+                
+                # Update document with title
+                if 'title' in chunks[0]['metadata']:
+                    new_document.title = chunks[0]['metadata']['title']
+                    db.session.commit()
+                
+                # MEMORY OPTIMIZATION: Set chunk limits based on request size
+                # NOTE: All topics are now treated equally with no priority distinction
+                
+                # Set chunk limit based on whether this is a single topic request
+                if len(topics) == 1:
+                    # For single topics, allow maximum chunks
+                    max_chunks = 500
+                    logger.info(f"Single topic requested: {topic}, allowing {max_chunks} chunks")
+                else:
+                    # For multiple topics, reduce chunks to avoid memory issues
+                    max_chunks = 100
+                    logger.info(f"Topic in batch: {topic}, allowing {max_chunks} chunks")
+                
+                # Store the original number of chunks for later use
+                original_chunk_count = len(chunks)
+                
+                # Apply the limit
+                if len(chunks) > max_chunks:
+                    logger.warning(f"Limiting chunks from {original_chunk_count} to {max_chunks} for memory optimization")
+                    
+                    # Store metadata about remaining chunks for later loading
+                    if original_chunk_count > max_chunks:
+                        # Add a special flag to the database record to indicate more content is available
+                        new_document.file_size = original_chunk_count  # Repurpose file_size to store total chunk count
+                        db.session.commit()
+                    
+                    chunks = chunks[:max_chunks]
+                
+                success_count = 0
+                
+                # Process chunks in smaller batches with explicit database commits
+                batch_size = 10  # Process 10 chunks at a time
+                for i in range(0, len(chunks), batch_size):
+                    try:
+                        # Get current batch
+                        current_batch = chunks[i:i+batch_size]
+                        batch_records = []
+                        
+                        for j, chunk in enumerate(current_batch):
+                            chunk_index = i + j
+                            # Add to vector store
+                            vector_store.add_text(chunk['text'], chunk['metadata'])
+                            
+                            # Create database record
+                            chunk_record = DocumentChunk(
+                                document_id=new_document.id,
+                                chunk_index=chunk_index,
+                                page_number=chunk['metadata'].get('page_number', 1),
+                                text_content=chunk['text']
+                            )
+                            batch_records.append(chunk_record)
+                        
+                        # Add and commit all records in this batch
+                        db.session.add_all(batch_records)
+                        db.session.commit()
+                        
+                        success_count += len(current_batch)
+                        
+                        # Only save vector store periodically to reduce file system operations
+                        if (i // batch_size) % 3 == 0:  # Every 3rd batch
+                            logger.info(f"Saving vector store for topic {topic} after batch {i // batch_size}")
+                            vector_store._save()
+                        
+                        # Log progress for large documents
+                        if len(chunks) > 100 and i % 100 == 0:
+                            logger.info(f"Processing topic {topic}: {i}/{len(chunks)} chunks processed")
+                            
+                        # Force garbage collection after each batch to free memory
+                        import gc
+                        gc.collect()
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing chunk batch {i}-{i+batch_size} for topic {topic}: {str(e)}")
+                        # Continue processing next batch
+                
+                # Mark document as processed if any chunks were successful
+                if success_count > 0:
+                    new_document.processed = True
+                    db.session.commit()
+                    
+                    # Re-query document to get the most up-to-date chunk count
+                    # This ensures we report the accurate number of chunks
+                    db.session.refresh(new_document)
+                    actual_chunk_count = len(new_document.chunks)
+                    
+                    processed_topics.append({
+                        "topic": topic,
+                        "url": url,
+                        "chunks": actual_chunk_count,
+                        "chunks_processed": success_count,  # Include initial processing count for debugging
+                        "document_id": new_document.id
+                    })
+                else:
+                    failed_topics.append({"topic": topic, "reason": "Failed to add chunks to database"})
+                    
+                    # Clean up any partial document
+                    try:
+                        db.session.delete(new_document)
+                        db.session.commit()
+                    except Exception:
+                        pass
+                
+                # Explicitly clean up memory
+                chunks = None
+                chunk_records = []
+                
+            except Exception as e:
+                logger.exception(f"Error processing topic {topic}: {str(e)}")
+                failed_topics.append({"topic": topic, "reason": str(e)})
+            
+            # Force Python garbage collection to free memory
+            import gc
+            gc.collect()
+        
+        if processed_topics:
+            # Create more descriptive success message showing exact chunk counts
+            topic_chunks_info = []
+            for topic in processed_topics:
+                chunk_info = f"{topic['topic']} - {topic['chunks']} chunks"
+                topic_chunks_info.append(chunk_info)
+            
+            topic_details = ", ".join(topic_chunks_info)
+            success_message = f"Successfully processed topics: {topic_details}"
+            
+            return jsonify({
+                'success': True,
+                'message': success_message,
+                'processed': processed_topics,
+                'failed': failed_topics
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Failed to process any topic pages. Try with fewer topics (1-2 max).',
+                'failed': failed_topics
+            }), 500
+            
+    except Exception as e:
+        logger.exception(f"Error processing topic pages: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'Error processing topic pages: {str(e)}'
+        }), 500
+
+# New endpoints for database operations
+
+@app.route('/documents', methods=['GET'])
+def get_documents():
+    """Get a list of all documents, sorted by most recent first."""
+    try:
+        documents = Document.query.order_by(Document.created_at.desc()).all()
+        results = []
+        
+        for doc in documents:
+            results.append({
+                'id': doc.id,
+                'title': doc.title,
+                'filename': doc.filename,
+                'file_type': doc.file_type,
+                'source_url': doc.source_url,
+                'file_path': doc.file_path,
+                'file_size': doc.file_size,
+                'page_count': doc.page_count,
+                'created_at': doc.created_at.isoformat() if doc.created_at else None,
+                'processed': doc.processed,
+                'chunk_count': len(doc.chunks)
+            })
+            
+        return jsonify({
+            'success': True,
+            'documents': results
+        })
+    except Exception as e:
+        logger.exception("Error retrieving documents")
+        return jsonify({
+            'success': False, 
+            'message': f'Error retrieving documents: {str(e)}'
+        }), 500
+
+@app.route('/documents/<int:document_id>', methods=['GET'])
+def get_document(document_id):
+    """Get details of a specific document."""
+    try:
+        doc = Document.query.get(document_id)
+        
+        if not doc:
+            return jsonify({
+                'success': False,
+                'message': f'Document with ID {document_id} not found'
+            }), 404
+            
+        chunks = []
+        for chunk in doc.chunks:
+            chunks.append({
+                'id': chunk.id,
+                'chunk_index': chunk.chunk_index,
+                'page_number': chunk.page_number,
+                'text_content': chunk.text_content[:100] + '...' if len(chunk.text_content) > 100 else chunk.text_content
+            })
+            
+        # Get collections for the document
+        collections = []
+        for collection in doc.collections:
+            collections.append({
+                'id': collection.id,
+                'name': collection.name
+            })
+            
+        result = {
+            'id': doc.id,
+            'title': doc.title,
+            'filename': doc.filename,
+            'file_type': doc.file_type,
+            'source_url': doc.source_url,
+            'file_path': doc.file_path,
+            'file_size': doc.file_size,
+            'page_count': doc.page_count,
+            'created_at': doc.created_at.isoformat() if doc.created_at else None,
+            'processed': doc.processed,
+            'chunks': chunks,
+            'doi': doc.doi,
+            'authors': doc.authors,
+            'journal': doc.journal,
+            'publication_year': doc.publication_year,
+            'volume': doc.volume,
+            'issue': doc.issue,
+            'pages': doc.pages,
+            'formatted_citation': doc.formatted_citation,
+            'needs_processing': doc.file_type == "pdf" and not doc.processed and doc.file_path is not None,
+            'collections': collections
+        }
+            
+        return jsonify({
+            'success': True,
+            'document': result
+        })
+    except Exception as e:
+        logger.exception(f"Error retrieving document {document_id}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error retrieving document: {str(e)}'
+        }), 500
+        
+@app.route('/documents/<int:document_id>/process', methods=['POST'])
+def process_document(document_id):
+    """Manually trigger processing for a document that hasn't been processed yet."""
+    try:
+        doc = Document.query.get(document_id)
+        
+        if not doc:
+            return jsonify({
+                'success': False,
+                'message': f'Document with ID {document_id} not found'
+            }), 404
+        
+        # Check if document is already processed
+        if doc.processed:
+            return jsonify({
+                'success': False,
+                'message': 'This document has already been processed.'
+            }), 400
+        
+        # Check if document is a PDF and has a file path
+        if doc.file_type != "pdf" or not doc.file_path:
+            return jsonify({
+                'success': False,
+                'message': 'Only PDF documents with file paths can be processed.'
+            }), 400
+        
+        # Process the PDF
+        try:
+            logger.info(f"Starting manual processing of document: {doc.filename}")
+            
+            # Process this PDF
+            chunks, metadata = process_pdf(doc.file_path, doc.filename)
+            
+            # Update document with metadata if available
+            if metadata:
+                # Skip documents with errors
+                if 'error' not in metadata:
+                    if 'page_count' in metadata:
+                        doc.page_count = metadata['page_count']
+                    if 'doi' in metadata and metadata['doi']:
+                        doc.doi = metadata['doi']
+                    if 'authors' in metadata and metadata['authors']:
+                        doc.authors = metadata['authors']
+                    if 'journal' in metadata and metadata['journal']:
+                        doc.journal = metadata['journal']
+                    if 'publication_year' in metadata and metadata['publication_year']:
+                        doc.publication_year = metadata['publication_year']
+                    if 'volume' in metadata and metadata['volume']:
+                        doc.volume = metadata['volume']
+                    if 'issue' in metadata and metadata['issue']:
+                        doc.issue = metadata['issue']
+                    if 'pages' in metadata and metadata['pages']:
+                        doc.pages = metadata['pages']
+                    if 'formatted_citation' in metadata and metadata['formatted_citation']:
+                        doc.formatted_citation = metadata['formatted_citation']
+                    
+                    # If we have at least a journal name or authors, set a better title
+                    if doc.journal and not doc.title.startswith(doc.journal):
+                        if doc.authors:
+                            authors_short = doc.authors.split(';')[0] + " et al." if ";" in doc.authors else doc.authors
+                            doc.title = f"{authors_short} - {doc.journal}"
+                        else:
+                            doc.title = doc.journal
+                    
+                    # Process chunks if available
+                    if chunks:
+                        # Limit chunks to a reasonable number - increased from 125 to allow much more content
+                        max_chunks = 500
+                        process_chunks = chunks[:max_chunks] if len(chunks) > max_chunks else chunks
+                        
+                        # Add chunks to vector store and database in batches
+                        batch_size = 10
+                        total_added = 0
+                        for i in range(0, len(process_chunks), batch_size):
+                            try:
+                                # Get current batch
+                                current_batch = process_chunks[i:i + batch_size]
+                                chunk_records = []
+                                
+                                for j, chunk in enumerate(current_batch):
+                                    chunk_index = i + j
+                                    # Add to vector store
+                                    vector_store.add_text(chunk['text'], chunk['metadata'])
+                                    
+                                    # Create chunk record
+                                    chunk_record = DocumentChunk(
+                                        document_id=doc.id,
+                                        chunk_index=chunk_index,
+                                        page_number=chunk['metadata'].get('page', None),
+                                        text_content=chunk['text']
+                                    )
+                                    chunk_records.append(chunk_record)
+                                
+                                # Save chunk records for this batch
+                                if chunk_records:
+                                    db.session.add_all(chunk_records)
+                                    db.session.commit()
+                                    total_added += len(chunk_records)
+                                    
+                                    # Only save vector store periodically to reduce file I/O operations
+                                    if total_added % 30 == 0:
+                                        logger.info(f"Saving vector store after {total_added} chunks for document {doc.id}")
+                                        vector_store._save()
+                                
+                                # Log progress for large documents
+                                if len(process_chunks) > 100 and i % 100 == 0:
+                                    logger.info(f"Processing PDF {doc.filename}: {i}/{len(process_chunks)} chunks processed")
+                                
+                                # Force garbage collection to free memory
+                                import gc
+                                gc.collect()
+                                
+                            except Exception as batch_error:
+                                logger.warning(f"Error processing chunk batch {i}-{i+batch_size} from {doc.filename}: {str(batch_error)}")
+                                # Continue with next batch
+                                
+                        logger.info(f"Successfully added {total_added}/{len(process_chunks)} chunks for PDF {doc.filename}")
+                    
+                    # Mark document as processed
+                    doc.processed = True
+                    
+                    # Save changes
+                    db.session.commit()
+                    
+                    # Final vector store save at the end of processing
+                    logger.info(f"Final vector store save after processing document {doc.id}")
+                    vector_store._save()
+                    
+                    # Success response
+                    return jsonify({
+                        'success': True,
+                        'message': 'Document has been successfully processed.',
+                        'doi_found': bool(doc.doi),
+                        'citation_found': bool(doc.formatted_citation),
+                        'chunks_added': len(chunks) if chunks else 0
+                    })
+                else:
+                    # Error in metadata
+                    return jsonify({
+                        'success': False,
+                        'message': f'Error processing document: {metadata["error"]}'
+                    }), 500
+            else:
+                # No metadata
+                return jsonify({
+                    'success': False,
+                    'message': 'Could not extract metadata from document.'
+                }), 500
+                
+        except Exception as process_error:
+            logger.exception(f"Error processing document: {str(process_error)}")
+            return jsonify({
+                'success': False,
+                'message': f'Error processing document: {str(process_error)}'
+            }), 500
+            
+    except Exception as e:
+        logger.exception(f"Error processing document {document_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'Error processing document: {str(e)}'
+        }), 500
+
+@app.route('/documents/<int:document_id>/load_more_content', methods=['POST'])
+def load_more_document_content(document_id):
+    """Load more content for a document that has additional chunks available."""
+    try:
+        # Find the document
+        doc = Document.query.get(document_id)
+        
+        if not doc:
+            return jsonify({
+                'success': False,
+                'message': f'Document with ID {document_id} not found'
+            }), 404
+        
+        # Check if this is a website document (only website docs support this feature)
+        if doc.file_type != 'website':
+            return jsonify({
+                'success': False,
+                'message': 'This operation is only supported for website documents'
+            }), 400
+        
+        # Check if there's more content to load by looking at file_size (repurposed to store total chunk count)
+        current_chunk_count = len(doc.chunks)
+        total_possible_chunks = doc.file_size or 0
+        
+        # If there's no more content or file_size wasn't set properly
+        if total_possible_chunks <= current_chunk_count or total_possible_chunks <= 0:
+            return jsonify({
+                'success': False,
+                'message': 'No additional content available for this document'
+            }), 400
+        
+        # Get the document URL
+        url = doc.source_url
+        if not url:
+            return jsonify({
+                'success': False,
+                'message': 'Document has no source URL to load additional content'
+            }), 400
+        
+        # Determine how many more chunks to load (maximum 100 more at a time)
+        chunks_to_load = min(100, total_possible_chunks - current_chunk_count)
+        
+        logger.info(f"Attempting to load {chunks_to_load} more chunks for document {document_id}")
+        
+        # Extract the topic name from the URL for crawling parameters
+        parsed_url = urllib.parse.urlparse(url)
+        path_parts = parsed_url.path.strip('/').split('/')
+        topic_slug = path_parts[-1] if path_parts else ""
+        
+        try:
+            # Get fresh content to ensure we have all chunks
+            chunks = create_minimal_content_for_topic(url)
+            
+            if not chunks:
+                return jsonify({
+                    'success': False,
+                    'message': 'Failed to retrieve additional content'
+                }), 500
+            
+            # Skip chunks we already have and take only the next batch
+            start_index = current_chunk_count
+            end_index = min(start_index + chunks_to_load, len(chunks))
+            
+            if start_index >= len(chunks):
+                return jsonify({
+                    'success': False,
+                    'message': 'No additional content available'
+                }), 400
+            
+            chunks_to_add = chunks[start_index:end_index]
+            added_count = 0
+            
+            # Process chunks in smaller batches
+            batch_size = 10  # Process 10 chunks at a time
+            for i in range(0, len(chunks_to_add), batch_size):
+                try:
+                    # Get current batch
+                    current_batch = chunks_to_add[i:i+batch_size]
+                    batch_records = []
+                    
+                    for j, chunk in enumerate(current_batch):
+                        chunk_index = current_chunk_count + i + j
+                        
+                        # Update metadata to reflect new chunk index
+                        chunk['metadata']['chunk_index'] = chunk_index
+                        
+                        # Add to vector store
+                        vector_store.add_text(chunk['text'], chunk['metadata'])
+                        
+                        # Create database record
+                        chunk_record = DocumentChunk(
+                            document_id=doc.id,
+                            chunk_index=chunk_index,
+                            page_number=chunk['metadata'].get('page_number', 1),
+                            text_content=chunk['text']
+                        )
+                        batch_records.append(chunk_record)
+                    
+                    # Add and commit all records in this batch
+                    if batch_records:
+                        db.session.add_all(batch_records)
+                        db.session.commit()
+                        added_count += len(batch_records)
+                        
+                        # Only save vector store periodically to reduce file I/O operations
+                        if added_count % 10 == 0:
+                            logger.info(f"Saving vector store after adding {added_count} more chunks")
+                            vector_store._save()
+                    
+                    # Force garbage collection to free memory
+                    import gc
+                    gc.collect()
+                    
+                except Exception as e:
+                    logger.error(f"Error processing chunk batch {i+start_index}-{i+start_index+batch_size}: {str(e)}")
+                    # Continue with next batch
+            
+            # Update total loaded count
+            new_total = current_chunk_count + added_count
+            
+            # Return results
+            return jsonify({
+                'success': True,
+                'message': f'Added {added_count} more chunks to document',
+                'document_id': document_id,
+                'chunks_loaded': added_count,
+                'total_chunks_now': new_total,
+                'total_possible_chunks': total_possible_chunks,
+                'has_more': new_total < total_possible_chunks
+            })
+            
+        except Exception as e:
+            logger.exception(f"Error loading additional content: {str(e)}")
+            return jsonify({
+                'success': False,
+                'message': f'Error loading additional content: {str(e)}'
+            }), 500
+    
+    except Exception as e:
+        logger.exception(f"Error processing request: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'Error: {str(e)}'
+        }), 500
+
+@app.route('/documents/<int:document_id>', methods=['DELETE'])
+def delete_document(document_id):
+    """Delete a specific document and its chunks."""
+    try:
+        doc = Document.query.get(document_id)
+        
+        if not doc:
+            return jsonify({
+                'success': False,
+                'message': f'Document with ID {document_id} not found'
+            }), 404
+        
+        # Save the filename for reporting
+        filename = doc.filename
+        
+        # First, remove the document from the vector store
+        try:
+            # Enhanced removal with URL pattern backup for website documents
+            removed_chunks = 0
+            
+            # If it's a website document, try to extract a URL pattern for more thorough cleaning
+            if doc.file_type == 'website' and doc.source_url:
+                # For rheum.reviews, extract the topic pattern
+                if 'rheum.reviews' in doc.source_url:
+                    url_parts = doc.source_url.split('/')
+                    for part in url_parts:
+                        if part and len(part) > 5 and '-' in part:  # Likely a slug/pattern
+                            pattern = part
+                            logger.info(f"Trying URL pattern-based removal for pattern: {pattern}")
+                            try:
+                                # Remove by URL pattern first
+                                url_removed = vector_store.remove_document_by_url(pattern)
+                                if url_removed > 0:
+                                    logger.info(f"Removed {url_removed} chunks by URL pattern '{pattern}'")
+                                    removed_chunks += url_removed
+                            except Exception as url_err:
+                                logger.error(f"Error during URL pattern removal: {url_err}")
+            
+            # Now try the standard document ID-based removal as well
+            try:
+                id_removed = vector_store.remove_document(document_id)
+                logger.info(f"Removed {id_removed} chunks by document ID {document_id}")
+                removed_chunks += id_removed
+            except Exception as id_err:
+                logger.error(f"Error during document ID removal: {id_err}")
+                
+            if removed_chunks > 0:
+                logger.info(f"Successfully removed total of {removed_chunks} chunks for document {document_id} from vector store")
+            else:
+                logger.warning(f"No chunks were removed for document {document_id} from vector store")
+                
+        except Exception as e:
+            logger.error(f"Error removing document from vector store: {e}")
+            # Continue with database deletion even if vector store deletion fails
+        
+        # Delete all chunks from the database
+        chunks_deleted = DocumentChunk.query.filter_by(document_id=document_id).delete()
+        logger.info(f"Deleted {chunks_deleted} database chunks for document {document_id}")
+        
+        # Delete the document from the database
+        db.session.delete(doc)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Document "{filename}" (ID: {document_id}) deleted successfully from both database and vector store'
+        })
+    except Exception as e:
+        logger.exception(f"Error deleting document {document_id}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error deleting document: {str(e)}'
+        }), 500
+
+@app.route('/collections', methods=['GET'])
+def get_collections():
+    """Get a list of all collections."""
+    try:
+        collections = Collection.query.all()
+        results = []
+        
+        for coll in collections:
+            results.append({
+                'id': coll.id,
+                'name': coll.name,
+                'description': coll.description,
+                'created_at': coll.created_at.isoformat() if coll.created_at else None,
+                'document_count': len(coll.documents)
+            })
+            
+        return jsonify({
+            'success': True,
+            'collections': results
+        })
+    except Exception as e:
+        logger.exception("Error retrieving collections")
+        return jsonify({
+            'success': False, 
+            'message': f'Error retrieving collections: {str(e)}'
+        }), 500
+
+@app.route('/collections', methods=['POST'])
+def create_collection():
+    """Create a new collection."""
+    try:
+        logger.debug(f"Collection creation request received: {request.get_data(as_text=True)}")
+        
+        # Check content type
+        if request.content_type != 'application/json':
+            logger.warning(f"Incorrect content type: {request.content_type}")
+            return jsonify({
+                'success': False,
+                'message': 'Content-Type must be application/json'
+            }), 400
+        
+        data = request.json
+        logger.debug(f"Parsed JSON data: {data}")
+        
+        if not data or 'name' not in data:
+            logger.warning("Name is missing from the request")
+            return jsonify({
+                'success': False,
+                'message': 'Collection name is required'
+            }), 400
+            
+        name = data.get('name')
+        description = data.get('description', '')
+        
+        logger.info(f"Creating collection with name: '{name}', description: '{description}'")
+        
+        # Check if collection with this name already exists
+        existing = Collection.query.filter_by(name=name).first()
+        if existing:
+            logger.warning(f"Collection with name '{name}' already exists")
+            return jsonify({
+                'success': False,
+                'message': f'Collection with name "{name}" already exists'
+            }), 400
+        
+        # Create new collection
+        new_collection = Collection(
+            name=name,
+            description=description
+        )
+        
+        db.session.add(new_collection)
+        db.session.commit()
+        
+        logger.info(f"Collection created successfully with ID: {new_collection.id}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Collection "{name}" created successfully',
+            'collection_id': new_collection.id
+        })
+    except Exception as e:
+        logger.exception(f"Error creating collection: {str(e)}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error creating collection: {str(e)}'
+        }), 500
+
+@app.route('/collections/<int:collection_id>/documents', methods=['POST'])
+def add_document_to_collection(collection_id):
+    """Add a document to a collection."""
+    try:
+        data = request.json
+        
+        if not data or 'document_id' not in data:
+            return jsonify({
+                'success': False,
+                'message': 'Document ID is required'
+            }), 400
+            
+        document_id = data.get('document_id')
+        
+        # Check if collection exists
+        collection = Collection.query.get(collection_id)
+        if not collection:
+            return jsonify({
+                'success': False,
+                'message': f'Collection with ID {collection_id} not found'
+            }), 404
+            
+        # Check if document exists
+        document = Document.query.get(document_id)
+        if not document:
+            return jsonify({
+                'success': False,
+                'message': f'Document with ID {document_id} not found'
+            }), 404
+            
+        # Check if document is already in the collection
+        if document in collection.documents:
+            return jsonify({
+                'success': False,
+                'message': f'Document with ID {document_id} is already in collection "{collection.name}"'
+            }), 400
+            
+        # Add document to collection
+        collection.documents.append(document)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Document "{document.title}" added to collection "{collection.name}"'
+        })
+    except Exception as e:
+        logger.exception(f"Error adding document to collection {collection_id}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error adding document to collection: {str(e)}'
+        }), 500
+
+@app.route('/collections/<int:collection_id>', methods=['GET'])
+def get_collection(collection_id):
+    """Get details of a specific collection."""
+    try:
+        collection = Collection.query.get(collection_id)
+        
+        if not collection:
+            return jsonify({
+                'success': False,
+                'message': f'Collection with ID {collection_id} not found'
+            }), 404
+            
+        # Get documents in this collection
+        documents = []
+        for doc in collection.documents:
+            documents.append({
+                'id': doc.id,
+                'title': doc.title,
+                'filename': doc.filename,
+                'file_type': doc.file_type,
+                'created_at': doc.created_at.isoformat() if doc.created_at else None
+            })
+            
+        result = {
+            'id': collection.id,
+            'name': collection.name,
+            'description': collection.description,
+            'created_at': collection.created_at.isoformat() if collection.created_at else None,
+            'updated_at': collection.updated_at.isoformat() if collection.updated_at else None,
+            'documents': documents
+        }
+        
+        return jsonify({
+            'success': True,
+            'collection': result
+        })
+    except Exception as e:
+        logger.exception(f"Error retrieving collection {collection_id}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error retrieving collection: {str(e)}'
+        }), 500
+
+@app.route('/collections/<int:collection_id>', methods=['PUT'])
+def update_collection(collection_id):
+    """Update a collection."""
+    try:
+        logger.debug(f"Collection update request for ID {collection_id}: {request.get_data(as_text=True)}")
+        
+        # Check content type
+        if request.content_type != 'application/json':
+            logger.warning(f"Incorrect content type: {request.content_type}")
+            return jsonify({
+                'success': False,
+                'message': 'Content-Type must be application/json'
+            }), 400
+        
+        data = request.json
+        logger.debug(f"Parsed JSON data: {data}")
+        
+        if not data:
+            logger.warning("No data provided in the request")
+            return jsonify({
+                'success': False,
+                'message': 'No update data provided'
+            }), 400
+            
+        # Check if collection exists
+        collection = Collection.query.get(collection_id)
+        if not collection:
+            logger.warning(f"Collection with ID {collection_id} not found")
+            return jsonify({
+                'success': False,
+                'message': f'Collection with ID {collection_id} not found'
+            }), 404
+            
+        # Update collection fields
+        if 'name' in data:
+            # Check if name is already taken by another collection
+            existing = Collection.query.filter(Collection.name == data['name'], Collection.id != collection_id).first()
+            if existing:
+                logger.warning(f"Collection with name '{data['name']}' already exists")
+                return jsonify({
+                    'success': False,
+                    'message': f'Collection with name "{data["name"]}" already exists'
+                }), 400
+                
+            collection.name = data['name']
+            
+        if 'description' in data:
+            collection.description = data['description']
+            
+        # Update the updated_at timestamp
+        collection.updated_at = datetime.datetime.now(datetime.timezone.utc)
+        
+        db.session.commit()
+        
+        logger.info(f"Collection {collection_id} updated successfully")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Collection updated successfully',
+            'collection_id': collection.id
+        })
+    except Exception as e:
+        logger.exception(f"Error updating collection {collection_id}: {str(e)}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error updating collection: {str(e)}'
+        }), 500
+
+@app.route('/collections/<int:collection_id>', methods=['DELETE'])
+def delete_collection(collection_id):
+    """Delete a collection."""
+    try:
+        # Check if collection exists
+        collection = Collection.query.get(collection_id)
+        if not collection:
+            return jsonify({
+                'success': False,
+                'message': f'Collection with ID {collection_id} not found'
+            }), 404
+            
+        # Store name for response message
+        collection_name = collection.name
+            
+        # Delete the collection
+        db.session.delete(collection)
+        db.session.commit()
+        
+        logger.info(f"Collection {collection_id} '{collection_name}' deleted successfully")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Collection "{collection_name}" deleted successfully'
+        })
+    except Exception as e:
+        logger.exception(f"Error deleting collection {collection_id}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error deleting collection: {str(e)}'
+        }), 500
+        
+@app.route('/background_status', methods=['GET'])
+def get_background_status():
+    """Get status of background processing."""
+    try:
+        status = background_processor.get_status()
+        
+        # Get count of unprocessed documents
+        unprocessed_count = Document.query.filter_by(processed=False, file_type='pdf').count()
+        
+        return jsonify({
+            'success': True,
+            'status': status,
+            'unprocessed_documents': unprocessed_count
+        })
+    except Exception as e:
+        logger.exception(f"Error getting background processor status: {str(e)}")
+        return jsonify({
+            'success': False, 
+            'message': f'Error getting background processor status: {str(e)}'
+        }), 500
+
+@app.route('/view_pdf/<int:document_id>', methods=['GET'])
+def view_pdf(document_id):
+    """Serve the PDF file for direct viewing in the browser."""
+    try:
+        # Get the document from the database
+        document = db.session.get(Document, document_id)
+        
+        if not document:
+            logger.warning(f"Document with ID {document_id} not found")
+            abort(404)
+            
+        # Check if it's a PDF and has a file path
+        if document.file_type != "pdf" or not document.file_path:
+            logger.warning(f"Document is not a PDF or has no file path: {document.file_path}")
+            abort(400, description="Document is not a PDF or file is missing")
+            
+        # Verify file exists
+        if not os.path.exists(document.file_path):
+            logger.warning(f"PDF file not found on disk: {document.file_path}")
+            abort(404, description="PDF file not found on disk")
+            
+        # Serve the file with the original filename
+        return send_file(
+            document.file_path,
+            mimetype='application/pdf',
+            as_attachment=False,
+            download_name=document.filename
+        )
+        
+    except Exception as e:
+        logger.exception(f"Error serving PDF: {str(e)}")
+        abort(500, description=f"Error serving PDF: {str(e)}")

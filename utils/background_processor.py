@@ -45,6 +45,22 @@ class BackgroundProcessor:
         self.last_run_time = None
         self.documents_processed = 0
         
+        # Create SQLAlchemy engine and session
+        self.engine = create_engine(DATABASE_URL)
+        self.Session = scoped_session(sessionmaker(bind=self.engine))
+        
+        # Init vector store
+        self.vector_store = VectorStore()
+        
+    def _create_session(self):
+        """Create a new database session. Used to recover from transaction errors."""
+        try:
+            return self.Session()
+        except Exception as e:
+            logger.exception(f"Error creating session: {str(e)}")
+            # If we can't create a session through the scoped session, try direct creation
+            return sessionmaker(bind=self.engine)()
+        
     def start(self):
         """Start the background processor if it's not already running."""
         if self.running:
@@ -72,7 +88,7 @@ class BackgroundProcessor:
         while self.running:
             try:
                 # Start a new session for this iteration
-                session = Session()
+                session = self._create_session()
                 
                 # First, check if there are any processed website documents that have more content available
                 # These are documents where file_size > 0 and file_size > number of chunks
@@ -195,14 +211,48 @@ class BackgroundProcessor:
                     logger.exception(f"Error checking for documents with more content: {str(e)}")
                 
                 # Check for unprocessed documents
-                unprocessed_docs = session.query(Document).filter_by(
-                    processed=False,
-                ).limit(self.batch_size).all()
-                
-                if not unprocessed_docs:
-                    logger.debug("No unprocessed documents found, sleeping...")
-                    session.close()
-                    time.sleep(self.sleep_time)
+                try:
+                    # First, look for documents with processing_state set (partially processed)
+                    partially_processed_docs = []
+                    try:
+                        logger.debug("Checking for partially processed documents...")
+                        partially_processed_docs = session.query(Document).filter(
+                            Document.processed == False,
+                            Document.processing_state.isnot(None)
+                        ).limit(self.batch_size).all()
+                        
+                        if partially_processed_docs:
+                            logger.info(f"Found {len(partially_processed_docs)} partially processed documents")
+                    except Exception as e:
+                        logger.warning(f"Error finding partially processed documents: {str(e)}")
+                        # Close session and create a new one to recover from transaction errors
+                        session.close()
+                        session = self._create_session()
+                    
+                    # If no partially processed docs, look for any unprocessed docs
+                    if not partially_processed_docs:
+                        unprocessed_docs = session.query(Document).filter_by(
+                            processed=False,
+                        ).limit(self.batch_size).all()
+                    else:
+                        unprocessed_docs = partially_processed_docs
+                    
+                    if not unprocessed_docs:
+                        logger.debug("No unprocessed documents found, sleeping...")
+                        session.close()
+                        time.sleep(self.sleep_time)
+                        continue
+                        
+                except Exception as e:
+                    # Handle database transaction errors
+                    logger.exception(f"Database error checking for unprocessed documents: {str(e)}")
+                    # Close session and create a new one
+                    try:
+                        session.close()
+                    except:
+                        pass
+                    time.sleep(2)  # Brief pause to let database recover
+                    session = self._create_session()
                     continue
                 
                 # Process each document
@@ -348,7 +398,7 @@ class BackgroundProcessor:
         """Get the current status of the background processor."""
         # Count how many documents have more content to load
         try:
-            session = Session()
+            session = self._create_session()
             from sqlalchemy import func
             
             # Create subquery to get the chunk count for each document

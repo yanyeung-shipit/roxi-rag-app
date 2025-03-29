@@ -743,8 +743,9 @@ def remove_documents_by_url():
         
 # New endpoint specifically for adding multiple rheum.reviews topic pages at once
 @app.route('/add_topic_pages', methods=['POST'])
+@app.route('/add_topic_pages', methods=['POST'])
 def add_topic_pages():
-    """Add multiple rheum.reviews topic pages at once. Memory-optimized version."""
+    """Add multiple rheum.reviews topic pages at once. Memory-optimized version with incremental processing."""
     try:
         # Try to get data from JSON or form data
         topics = None
@@ -804,229 +805,207 @@ def add_topic_pages():
             except Exception as e:
                 logger.error(f"Error finding collection: {e}")
         
-        # MEMORY OPTIMIZATION: Reduce maximum number of topics to 2
-        max_topics = 2
-        if len(topics) > max_topics:
-            topics = topics[:max_topics]  # Silently truncate to reduce memory issues
-            logger.warning(f"Limiting to first {max_topics} topics to prevent memory issues")
+        # IMPROVED APPROACH: Process just the first topic in this request with initial batch
+        # Additional topics and remaining chunks will be processed in the background
+        first_topic = topics[0]
+        remaining_topics = topics[1:] if len(topics) > 1 else []
         
-        # Format topic URLs
-        base_url = "https://rheum.reviews/topic/"
-        processed_topics = []
-        failed_topics = []
+        # Set to store successfully created document IDs for background processing
+        document_ids_for_background = []
         
-        # Process one topic at a time to reduce memory pressure
-        for topic in topics:
-            # Reset variables to help with memory cleanup
-            chunks = None
-            chunk_records = []
+        # Clean the topic name for URL
+        topic_slug = first_topic.strip().lower().replace(' ', '-')
+        if not topic_slug:
+            return jsonify({
+                'success': False, 
+                'message': f'Invalid topic name: "{first_topic}"'
+            }), 400
+                
+        url = f"https://rheum.reviews/topic/{topic_slug}/"
+        
+        try:
+            # Create a new document record in the database
+            new_document = Document(
+                filename=url,
+                title=f"Topic: {first_topic}",  # Will update with proper title after scraping
+                file_type="website",
+                source_url=url,
+                processed=False
+            )
             
-            # Clean the topic name for URL
-            topic_slug = topic.strip().lower().replace(' ', '-')
-            if not topic_slug:
-                failed_topics.append({"topic": topic, "reason": "Invalid topic name"})
-                continue
-                
-            url = f"{base_url}{topic_slug}/"
+            db.session.add(new_document)
+            db.session.commit()
+            logger.info(f"Created document record with ID {new_document.id} for topic {first_topic}")
             
-            try:
-                # Create a new document record in the database
-                new_document = Document(
-                    filename=url,
-                    title=f"Topic: {topic}",  # Will update with proper title after scraping
-                    file_type="website",
-                    source_url=url,
-                    processed=False
-                )
-                
-                db.session.add(new_document)
-                db.session.commit()
-                
-                # Add to collection if specified
-                if collection:
-                    try:
-                        collection.documents.append(new_document)
-                        db.session.commit()
-                        logger.info(f"Added document {new_document.id} to collection {collection_id}")
-                    except Exception as collection_error:
-                        logger.error(f"Error adding document to collection: {collection_error}")
-                
-                # Process the topic page with strict limits to avoid memory issues
-                logger.info(f"Processing topic page with memory optimization: {url}")
+            # Add to collection if specified
+            if collection:
                 try:
-                    # Use memory-optimized content fetching for topic pages 
-                    chunks = create_minimal_content_for_topic(url)
-                    
-                    # Don't even try crawling to avoid memory issues
-                    if not chunks:
-                        logger.warning(f"Memory-optimized content extraction failed for {url}")
-                        raise Exception("Could not extract content from topic page")
-                    
-                except Exception as e:
-                    logger.error(f"Error processing topic {topic}: {str(e)}")
-                    failed_topics.append({"topic": topic, "reason": f"Error: {str(e)}"})
-                    
-                    # Clean up any partial document
-                    try:
-                        db.session.delete(new_document)
-                        db.session.commit()
-                    except Exception:
-                        pass
-                    
-                    continue
+                    collection.documents.append(new_document)
+                    db.session.commit()
+                    logger.info(f"Added document {new_document.id} to collection {collection_id}")
+                except Exception as collection_error:
+                    logger.error(f"Error adding document to collection: {collection_error}")
+            
+            # Get initial content to avoid timeout
+            try:
+                # Fetch content - optimized for memory
+                chunks = create_minimal_content_for_topic(url)
                 
                 if not chunks or len(chunks) == 0:
-                    failed_topics.append({"topic": topic, "reason": "No content extracted"})
-                    
-                    # Clean up any partial document
-                    try:
-                        db.session.delete(new_document)
-                        db.session.commit()
-                    except Exception:
-                        pass
-                    
-                    continue
+                    return jsonify({
+                        'success': False,
+                        'message': f'Failed to extract content for topic {first_topic}'
+                    }), 500
                 
-                # Update document with title
+                # Update document with title and metadata
                 if 'title' in chunks[0]['metadata']:
                     new_document.title = chunks[0]['metadata']['title']
                     db.session.commit()
                 
-                # MEMORY OPTIMIZATION: Set chunk limits based on request size
-                # NOTE: All topics are now treated equally with no priority distinction
+                # Store total available chunks in file_size field (for load_more_content)
+                total_chunks = len(chunks)
+                new_document.file_size = total_chunks
+                db.session.commit()
                 
-                # Set chunk limit based on whether this is a single topic request
-                if len(topics) == 1:
-                    # For single topics, allow maximum chunks
-                    max_chunks = 500
-                    logger.info(f"Single topic requested: {topic}, allowing {max_chunks} chunks")
-                else:
-                    # For multiple topics, reduce chunks to avoid memory issues
-                    max_chunks = 100
-                    logger.info(f"Topic in batch: {topic}, allowing {max_chunks} chunks")
+                # IMPROVEMENT 1: Only process a small initial batch (max 30 chunks) for immediate feedback
+                # The rest will be processed in the background
+                initial_batch_size = min(30, len(chunks))
+                initial_chunks = chunks[:initial_batch_size]
                 
-                # Store the original number of chunks for later use
-                original_chunk_count = len(chunks)
-                
-                # Apply the limit
-                if len(chunks) > max_chunks:
-                    logger.warning(f"Limiting chunks from {original_chunk_count} to {max_chunks} for memory optimization")
+                # Save the initial batch to database and vector store
+                chunk_records = []
+                for i, chunk in enumerate(initial_chunks):
+                    # Add to vector store
+                    vector_store.add_text(chunk['text'], chunk['metadata'])
                     
-                    # Store metadata about remaining chunks for later loading
-                    if original_chunk_count > max_chunks:
-                        # Add a special flag to the database record to indicate more content is available
-                        new_document.file_size = original_chunk_count  # Repurpose file_size to store total chunk count
-                        db.session.commit()
+                    # Create database record
+                    chunk_record = DocumentChunk(
+                        document_id=new_document.id,
+                        chunk_index=i,
+                        page_number=chunk['metadata'].get('page_number', 1),
+                        text_content=chunk['text']
+                    )
+                    chunk_records.append(chunk_record)
+                
+                # Save all records to database
+                db.session.add_all(chunk_records)
+                db.session.commit()
+                
+                # Save vector store after initial batch
+                vector_store._save()
+                
+                # Partially mark as processed but queue for background processing
+                # Will fully process the remaining chunks in the background
+                if len(chunks) > initial_batch_size:
+                    # Mark original document for continued background processing
+                    new_document.processed = False
                     
-                    chunks = chunks[:max_chunks]
-                
-                success_count = 0
-                
-                # Process chunks in smaller batches with explicit database commits
-                batch_size = 10  # Process 10 chunks at a time
-                for i in range(0, len(chunks), batch_size):
-                    try:
-                        # Get current batch
-                        current_batch = chunks[i:i+batch_size]
-                        batch_records = []
-                        
-                        for j, chunk in enumerate(current_batch):
-                            chunk_index = i + j
-                            # Add to vector store
-                            vector_store.add_text(chunk['text'], chunk['metadata'])
-                            
-                            # Create database record
-                            chunk_record = DocumentChunk(
-                                document_id=new_document.id,
-                                chunk_index=chunk_index,
-                                page_number=chunk['metadata'].get('page_number', 1),
-                                text_content=chunk['text']
-                            )
-                            batch_records.append(chunk_record)
-                        
-                        # Add and commit all records in this batch
-                        db.session.add_all(batch_records)
-                        db.session.commit()
-                        
-                        success_count += len(current_batch)
-                        
-                        # Only save vector store periodically to reduce file system operations
-                        if (i // batch_size) % 3 == 0:  # Every 3rd batch
-                            logger.info(f"Saving vector store for topic {topic} after batch {i // batch_size}")
-                            vector_store._save()
-                        
-                        # Log progress for large documents
-                        if len(chunks) > 100 and i % 100 == 0:
-                            logger.info(f"Processing topic {topic}: {i}/{len(chunks)} chunks processed")
-                            
-                        # Force garbage collection after each batch to free memory
-                        import gc
-                        gc.collect()
-                        
-                    except Exception as e:
-                        logger.error(f"Error processing chunk batch {i}-{i+batch_size} for topic {topic}: {str(e)}")
-                        # Continue processing next batch
-                
-                # Mark document as processed if any chunks were successful
-                if success_count > 0:
-                    new_document.processed = True
+                    # Add special processing_state field to track progress
+                    new_document.processing_state = json.dumps({
+                        "total_chunks": total_chunks,
+                        "processed_chunks": initial_batch_size,
+                        "status": "processing"
+                    })
                     db.session.commit()
                     
-                    # Re-query document to get the most up-to-date chunk count
-                    # This ensures we report the accurate number of chunks
-                    db.session.refresh(new_document)
-                    actual_chunk_count = len(new_document.chunks)
-                    
-                    processed_topics.append({
-                        "topic": topic,
-                        "url": url,
-                        "chunks": actual_chunk_count,
-                        "chunks_processed": success_count,  # Include initial processing count for debugging
-                        "document_id": new_document.id
-                    })
+                    # Add to background processing queue
+                    document_ids_for_background.append(new_document.id)
                 else:
-                    failed_topics.append({"topic": topic, "reason": "Failed to add chunks to database"})
-                    
-                    # Clean up any partial document
+                    # Small document, mark as fully processed
+                    new_document.processed = True
+                    new_document.processing_state = json.dumps({
+                        "total_chunks": total_chunks,
+                        "processed_chunks": total_chunks,
+                        "status": "completed"
+                    })
+                    db.session.commit()
+                
+                # Queue any remaining topics for background processing
+                remaining_document_ids = []
+                for next_topic in remaining_topics:
                     try:
-                        db.session.delete(new_document)
+                        # Create document records for remaining topics
+                        next_slug = next_topic.strip().lower().replace(' ', '-')
+                        if not next_slug:
+                            continue
+                            
+                        next_url = f"https://rheum.reviews/topic/{next_slug}/"
+                        
+                        # Create a new document record
+                        next_document = Document(
+                            filename=next_url,
+                            title=f"Topic: {next_topic}",
+                            file_type="website",
+                            source_url=next_url,
+                            processed=False,
+                            # Mark explicitly for background processing
+                            processing_state=json.dumps({
+                                "total_chunks": 0,  # Will be determined during processing
+                                "processed_chunks": 0,
+                                "status": "queued"
+                            })
+                        )
+                        
+                        db.session.add(next_document)
                         db.session.commit()
-                    except Exception:
-                        pass
+                        
+                        # Add to collection if specified
+                        if collection:
+                            collection.documents.append(next_document)
+                            db.session.commit()
+                        
+                        # Add to background processing queue
+                        remaining_document_ids.append(next_document.id)
+                    except Exception as next_error:
+                        logger.error(f"Error queueing topic {next_topic}: {str(next_error)}")
                 
-                # Explicitly clean up memory
-                chunks = None
-                chunk_records = []
+                # All remaining documents will be processed by the background processor
                 
-            except Exception as e:
-                logger.exception(f"Error processing topic {topic}: {str(e)}")
-                failed_topics.append({"topic": topic, "reason": str(e)})
-            
-            # Force Python garbage collection to free memory
-            import gc
-            gc.collect()
-        
-        if processed_topics:
-            # Create more descriptive success message showing exact chunk counts
-            topic_chunks_info = []
-            for topic in processed_topics:
-                chunk_info = f"{topic['topic']} - {topic['chunks']} chunks"
-                topic_chunks_info.append(chunk_info)
-            
-            topic_details = ", ".join(topic_chunks_info)
-            success_message = f"Successfully processed topics: {topic_details}"
-            
-            return jsonify({
-                'success': True,
-                'message': success_message,
-                'processed': processed_topics,
-                'failed': failed_topics
-            })
-        else:
+                # Get accurate chunk count for the first document
+                db.session.refresh(new_document)
+                actual_chunk_count = len(new_document.chunks)
+                
+                # Create response message
+                response_data = {
+                    'success': True,
+                    'document_id': new_document.id, 
+                    'topic': first_topic,
+                    'url': url,
+                    'initial_chunks_processed': actual_chunk_count,
+                    'total_chunks': total_chunks,
+                    'processing_complete': actual_chunk_count >= total_chunks,
+                    'remaining_topics_queued': len(remaining_document_ids)
+                }
+                
+                # Create user-friendly message
+                if len(chunks) > initial_batch_size:
+                    message = f"Topic {first_topic} initial processing complete with {actual_chunk_count} chunks. " + \
+                            f"Remaining {total_chunks - actual_chunk_count} chunks will be processed in the background."
+                    
+                    if remaining_document_ids:
+                        message += f" {len(remaining_document_ids)} additional topics queued for background processing."
+                else:
+                    message = f"Topic {first_topic} fully processed with {actual_chunk_count} chunks."
+                    
+                    if remaining_document_ids:
+                        message += f" {len(remaining_document_ids)} additional topics queued for background processing."
+                
+                response_data['message'] = message
+                
+                return jsonify(response_data)
+                
+            except Exception as content_error:
+                logger.exception(f"Error processing content for {first_topic}: {str(content_error)}")
+                return jsonify({
+                    'success': False,
+                    'message': f'Error processing content: {str(content_error)}'
+                }), 500
+                
+        except Exception as doc_error:
+            logger.exception(f"Error creating document: {str(doc_error)}")
             return jsonify({
                 'success': False,
-                'message': 'Failed to process any topic pages. Try with fewer topics (1-2 max).',
-                'failed': failed_topics
+                'message': f'Error creating document: {str(doc_error)}'
             }), 500
             
     except Exception as e:
@@ -1034,9 +1013,7 @@ def add_topic_pages():
         return jsonify({
             'success': False,
             'message': f'Error processing topic pages: {str(e)}'
-        }), 500
-
-# New endpoints for database operations
+        }), 500# New endpoints for database operations
 
 @app.route('/documents', methods=['GET'])
 def get_documents():
@@ -1802,17 +1779,80 @@ def delete_collection(collection_id):
         
 @app.route('/background_status', methods=['GET'])
 def get_background_status():
-    """Get status of background processing."""
+    """Get status of background processing and detailed information on unprocessed documents."""
     try:
-        status = background_processor.get_status()
+        # Get background processor status
+        processor_status = background_processor.get_status()
         
-        # Get count of unprocessed documents
-        unprocessed_count = Document.query.filter_by(processed=False, file_type='pdf').count()
+        # Fetch partially processed documents
+        unprocessed_docs = []
+        try:
+            partially_processed = Document.query.filter(
+                Document.processed == False,
+                Document.processing_state.isnot(None)
+            ).all()
+            
+            for doc in partially_processed:
+                try:
+                    # Parse the processing state
+                    proc_state = json.loads(doc.processing_state)
+                    total_chunks = proc_state.get('total_chunks', 0)
+                    processed_chunks = proc_state.get('processed_chunks', 0)
+                    status = proc_state.get('status', 'unknown')
+                    
+                    # Calculate percentage
+                    percent_complete = int((processed_chunks / total_chunks * 100) if total_chunks > 0 else 0)
+                    
+                    unprocessed_docs.append({
+                        'id': doc.id,
+                        'title': doc.title,
+                        'file_type': doc.file_type,
+                        'total_chunks': total_chunks,
+                        'processed_chunks': processed_chunks,
+                        'percent_complete': percent_complete,
+                        'status': status
+                    })
+                except (json.JSONDecodeError, TypeError):
+                    # If we can't parse the state, add basic info
+                    unprocessed_docs.append({
+                        'id': doc.id,
+                        'title': doc.title,
+                        'file_type': doc.file_type,
+                        'status': 'unknown'
+                    })
+                    
+        except Exception as doc_error:
+            logger.warning(f"Error fetching partially processed documents: {str(doc_error)}")
+            
+        # Also fetch any queued but not yet started documents
+        try:
+            fully_unprocessed = Document.query.filter(
+                Document.processed == False,
+                Document.processing_state == None
+            ).limit(5).all()
+            
+            for doc in fully_unprocessed:
+                unprocessed_docs.append({
+                    'id': doc.id,
+                    'title': doc.title,
+                    'file_type': doc.file_type,
+                    'status': 'queued'
+                })
+        except Exception as unproc_error:
+            logger.warning(f"Error fetching unprocessed documents: {str(unproc_error)}")
+        
+        # Get count of all unprocessed documents
+        try:
+            unprocessed_count = Document.query.filter_by(processed=False).count()
+        except Exception:
+            unprocessed_count = len(unprocessed_docs)
         
         return jsonify({
-            'success': True,
-            'status': status,
-            'unprocessed_documents': unprocessed_count
+            'success': True, 
+            'processor_status': processor_status,
+            'unprocessed_documents': unprocessed_docs,
+            'total_unprocessed_count': unprocessed_count,
+            'has_pending_work': len(unprocessed_docs) > 0 or unprocessed_count > 0
         })
     except Exception as e:
         logger.exception(f"Error getting background processor status: {str(e)}")

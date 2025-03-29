@@ -21,6 +21,7 @@ class Document(db.Model):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     processed = Column(Boolean, default=False)
+    processing_state = Column(Text, nullable=True)  # JSON string for tracking processing progress
     
     # Citation metadata fields
     doi = Column(String(100), nullable=True)  # Digital Object Identifier (e.g., "10.1038/nrdp.2018.1")

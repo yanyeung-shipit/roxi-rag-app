@@ -898,9 +898,9 @@ This is a specialized page about {topic_name} in rheumatology."""
 
 def create_minimal_content_for_topic(url):
     """
-    Create comprehensive content for topic pages.
-    This is an enhanced method that extracts maximum content from topic pages.
-    Optimized to produce many high-quality chunks rather than a few minimal chunks.
+    Create comprehensive content for topic pages with enhanced memory optimization.
+    This is an improved method that handles memory usage more effectively.
+    Processes content in smaller batches to avoid timeout issues.
     
     Args:
         url (str): URL of the topic page
