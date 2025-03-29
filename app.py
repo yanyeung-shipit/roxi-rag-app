@@ -919,31 +919,48 @@ def add_topic_pages():
                 
                 success_count = 0
                 
-                # Process chunks one at a time with explicit database commits
-                for i, chunk in enumerate(chunks):
+                # Process chunks in smaller batches with explicit database commits
+                batch_size = 10  # Process 10 chunks at a time
+                for i in range(0, len(chunks), batch_size):
                     try:
-                        # Add to vector store
-                        vector_store.add_text(chunk['text'], chunk['metadata'])
+                        # Get current batch
+                        current_batch = chunks[i:i+batch_size]
+                        batch_records = []
                         
-                        # Create and immediately save database record to minimize memory usage
-                        chunk_record = DocumentChunk(
-                            document_id=new_document.id,
-                            chunk_index=i,
-                            page_number=chunk['metadata'].get('page_number', 1),
-                            text_content=chunk['text']
-                        )
+                        for j, chunk in enumerate(current_batch):
+                            chunk_index = i + j
+                            # Add to vector store
+                            vector_store.add_text(chunk['text'], chunk['metadata'])
+                            
+                            # Create database record
+                            chunk_record = DocumentChunk(
+                                document_id=new_document.id,
+                                chunk_index=chunk_index,
+                                page_number=chunk['metadata'].get('page_number', 1),
+                                text_content=chunk['text']
+                            )
+                            batch_records.append(chunk_record)
                         
-                        db.session.add(chunk_record)
+                        # Add and commit all records in this batch
+                        db.session.add_all(batch_records)
                         db.session.commit()
                         
-                        success_count += 1
+                        success_count += len(current_batch)
                         
-                        # Save vector store after each chunk to prevent memory buildup
+                        # Save vector store after each batch to prevent memory buildup
                         vector_store._save()
                         
+                        # Log progress for large documents
+                        if len(chunks) > 100 and i % 100 == 0:
+                            logger.info(f"Processing topic {topic}: {i}/{len(chunks)} chunks processed")
+                            
+                        # Force garbage collection after each batch to free memory
+                        import gc
+                        gc.collect()
+                        
                     except Exception as e:
-                        logger.error(f"Error processing chunk {i} for topic {topic}: {str(e)}")
-                        # Continue processing next chunk
+                        logger.error(f"Error processing chunk batch {i}-{i+batch_size} for topic {topic}: {str(e)}")
+                        # Continue processing next batch
                 
                 # Mark document as processed if any chunks were successful
                 if success_count > 0:
@@ -1167,27 +1184,51 @@ def process_document(document_id):
                         max_chunks = 500
                         process_chunks = chunks[:max_chunks] if len(chunks) > max_chunks else chunks
                         
-                        # Add chunks to vector store and database
-                        chunk_records = []
-                        for i, chunk in enumerate(process_chunks):
+                        # Add chunks to vector store and database in batches
+                        batch_size = 10
+                        total_added = 0
+                        for i in range(0, len(process_chunks), batch_size):
                             try:
-                                # Add to vector store
-                                vector_store.add_text(chunk['text'], chunk['metadata'])
+                                # Get current batch
+                                current_batch = process_chunks[i:i + batch_size]
+                                chunk_records = []
                                 
-                                # Create chunk record
-                                chunk_record = DocumentChunk(
-                                    document_id=doc.id,
-                                    chunk_index=i,
-                                    page_number=chunk['metadata'].get('page', None),
-                                    text_content=chunk['text']
-                                )
-                                chunk_records.append(chunk_record)
-                            except Exception as chunk_error:
-                                logger.warning(f"Error adding chunk {i} from {doc.filename}: {str(chunk_error)}")
-                        
-                        # Save chunk records
-                        if chunk_records:
-                            db.session.add_all(chunk_records)
+                                for j, chunk in enumerate(current_batch):
+                                    chunk_index = i + j
+                                    # Add to vector store
+                                    vector_store.add_text(chunk['text'], chunk['metadata'])
+                                    
+                                    # Create chunk record
+                                    chunk_record = DocumentChunk(
+                                        document_id=doc.id,
+                                        chunk_index=chunk_index,
+                                        page_number=chunk['metadata'].get('page', None),
+                                        text_content=chunk['text']
+                                    )
+                                    chunk_records.append(chunk_record)
+                                
+                                # Save chunk records for this batch
+                                if chunk_records:
+                                    db.session.add_all(chunk_records)
+                                    db.session.commit()
+                                    total_added += len(chunk_records)
+                                    
+                                    # Save vector store periodically
+                                    vector_store._save()
+                                
+                                # Log progress for large documents
+                                if len(process_chunks) > 100 and i % 100 == 0:
+                                    logger.info(f"Processing PDF {doc.filename}: {i}/{len(process_chunks)} chunks processed")
+                                
+                                # Force garbage collection to free memory
+                                import gc
+                                gc.collect()
+                                
+                            except Exception as batch_error:
+                                logger.warning(f"Error processing chunk batch {i}-{i+batch_size} from {doc.filename}: {str(batch_error)}")
+                                # Continue with next batch
+                                
+                        logger.info(f"Successfully added {total_added}/{len(process_chunks)} chunks for PDF {doc.filename}")
                     
                     # Mark document as processed
                     doc.processed = True
@@ -1303,35 +1344,48 @@ def load_more_document_content(document_id):
             chunks_to_add = chunks[start_index:end_index]
             added_count = 0
             
-            # Process each additional chunk
-            for i, chunk in enumerate(chunks_to_add):
+            # Process chunks in smaller batches
+            batch_size = 10  # Process 10 chunks at a time
+            for i in range(0, len(chunks_to_add), batch_size):
                 try:
-                    # Update chunk index to continue from existing chunks
-                    chunk_index = current_chunk_count + i
+                    # Get current batch
+                    current_batch = chunks_to_add[i:i+batch_size]
+                    batch_records = []
                     
-                    # Update metadata to reflect new chunk index
-                    chunk['metadata']['chunk_index'] = chunk_index
+                    for j, chunk in enumerate(current_batch):
+                        chunk_index = current_chunk_count + i + j
+                        
+                        # Update metadata to reflect new chunk index
+                        chunk['metadata']['chunk_index'] = chunk_index
+                        
+                        # Add to vector store
+                        vector_store.add_text(chunk['text'], chunk['metadata'])
+                        
+                        # Create database record
+                        chunk_record = DocumentChunk(
+                            document_id=doc.id,
+                            chunk_index=chunk_index,
+                            page_number=chunk['metadata'].get('page_number', 1),
+                            text_content=chunk['text']
+                        )
+                        batch_records.append(chunk_record)
                     
-                    # Add to vector store
-                    vector_store.add_text(chunk['text'], chunk['metadata'])
+                    # Add and commit all records in this batch
+                    if batch_records:
+                        db.session.add_all(batch_records)
+                        db.session.commit()
+                        added_count += len(batch_records)
+                        
+                        # Save vector store after each batch
+                        vector_store._save()
                     
-                    # Create database record
-                    chunk_record = DocumentChunk(
-                        document_id=doc.id,
-                        chunk_index=chunk_index,
-                        page_number=chunk['metadata'].get('page_number', 1),
-                        text_content=chunk['text']
-                    )
+                    # Force garbage collection to free memory
+                    import gc
+                    gc.collect()
                     
-                    db.session.add(chunk_record)
-                    db.session.commit()
-                    
-                    # Save vector store after each chunk
-                    vector_store._save()
-                    
-                    added_count += 1
                 except Exception as e:
-                    logger.error(f"Error adding chunk {i+start_index}: {str(e)}")
+                    logger.error(f"Error processing chunk batch {i+start_index}-{i+start_index+batch_size}: {str(e)}")
+                    # Continue with next batch
             
             # Update total loaded count
             new_total = current_chunk_count + added_count
