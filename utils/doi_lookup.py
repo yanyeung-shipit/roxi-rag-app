@@ -332,3 +332,16 @@ def extract_and_get_citation(text: str) -> Tuple[bool, Dict[str, Any]]:
         return False, {}
     
     return get_citation_from_doi(doi)
+
+def get_metadata_from_doi(doi: str) -> Optional[Dict[str, Any]]:
+    """
+    Get metadata for a DOI. This is a convenience function for 
+    lookup_doi_metadata that can be called from other modules.
+    
+    Args:
+        doi (str): The DOI to look up.
+        
+    Returns:
+        Optional[Dict[str, Any]]: The metadata for the DOI, or None if not found.
+    """
+    return lookup_doi_metadata(doi)

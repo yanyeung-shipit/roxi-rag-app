@@ -1,10 +1,23 @@
 import os
 import logging
 import json
-import numpy as np
+# Handle numpy import with fallback for vector operations
+try:
+    import numpy as np
+except ImportError:
+    # Create a simple fallback for basic operations if numpy is not available
+    class NumpyFallback:
+        def array(self, data):
+            return data
+        def dot(self, a, b):
+            # Simple dot product for lists
+            return sum(x*y for x, y in zip(a, b))
+    np = NumpyFallback()
+
 from openai import OpenAI
 
-from utils.doi_lookup import get_citation_from_doi, extract_doi_from_text, extract_and_get_citation
+# Import necessary functions for DOI extraction and citations
+from utils.doi_lookup import get_metadata_from_doi, extract_doi_from_text, get_citation_from_doi, extract_and_get_citation
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -315,8 +328,18 @@ def generate_response(query, context_documents):
         # Create a mapping of document IDs to ensure all cited IDs have sources
         doc_id_to_source = {}
         
+        # Log PDF sources for debugging
+        logger.info(f"Processing {len(pdf_sources.keys())} PDF sources")
+        
         # First add all deduplicated PDF sources
         for title, pdf_info in pdf_sources.items():
+            # Skip sources with title "Health Canada Rheumatoid Arthritis Factsheet" as this was deleted
+            # Also skip if the file_path contains "Health_Canada_rheumatoid-arthritis-factsheet"
+            if ("Health Canada Rheumatoid Arthritis Factsheet" in title or 
+                (pdf_info.get("file_path") and "Health_Canada_rheumatoid-arthritis-factsheet" in pdf_info.get("file_path", ""))):
+                logger.info(f"Skipping deleted document: {title}")
+                continue
+                
             # Create a combined citation with page numbers
             pdf_source = {
                 "source_type": "pdf",
@@ -603,6 +626,7 @@ def generate_response(query, context_documents):
                 # Deep copy to avoid modifying the original source
                 source_copy = {k: v for k, v in source.items()}
                 doc_id_to_source[doc_id] = source_copy
+                logger.info(f"Registered source with ID {doc_id}: {source.get('title', 'Unknown')}")
         
         # Analyze the answer to find all citation references like [1], [2], etc.
         import re
@@ -611,25 +635,43 @@ def generate_response(query, context_documents):
             citation_ids = set([int(ref) for ref in citation_refs])
             logger.info(f"Found citation references in answer: {citation_ids}")
             
+            # CRITICAL CHANGE: Also check for source references in the "Source" section at the end
+            source_section_match = re.search(r'Sources?:?\s*\n([\s\S]+)$', answer)
+            if source_section_match:
+                source_section = source_section_match.group(1)
+                # Remove the source section from the answer as we'll handle citations properly
+                answer = answer.replace(source_section_match.group(0), "")
+                # Add our own sources section to the end
+                answer = answer.strip() + "\n\nSources:"
+            
             # Make sure all referenced documents appear in the final sources list
             final_sources = []
-            referenced_ids = set()
+            doc_indices = {}  # Map to track document index in final sources list
             
-            # First, add sources for all referenced IDs
+            # Step 1: First collect all sources that are referenced in the text
             for doc_id in citation_ids:
                 if doc_id in doc_id_to_source:
                     source = doc_id_to_source[doc_id]
-                    if "doc_id" in source:
-                        # For single document sources
-                        referenced_ids.add(source["doc_id"])
-                    elif "doc_ids" in source:
-                        # For PDF sources that may have multiple doc_ids
-                        referenced_ids.update(source["doc_ids"])
                     
-                    # Add to final sources if not already included
-                    if source not in final_sources:
+                    # Skip Health Canada document as requested
+                    if "title" in source and "Health Canada Rheumatoid Arthritis Factsheet" in source.get("title", ""):
+                        logger.info(f"Skipping deleted document reference: {source.get('title', '')}")
+                        continue
+                    
+                    # Only add if not already included
+                    source_title = source.get("title", "Unknown")
+                    if all(s.get("title", "") != source_title for s in final_sources):
+                        # Add source to list and track its position
                         final_sources.append(source)
-                        logger.info(f"Added source for citation [{doc_id}]: {source.get('title', 'Unknown')}")
+                        doc_indices[doc_id] = len(final_sources)
+                        logger.info(f"Added source for citation [{doc_id}] at position {len(final_sources)}: {source_title}")
+                    else:
+                        # Get the index of the existing source
+                        for i, s in enumerate(final_sources):
+                            if s.get("title", "") == source_title:
+                                doc_indices[doc_id] = i + 1
+                                logger.info(f"Document ID {doc_id} mapped to existing source at position {i+1}")
+                                break
                 else:
                     logger.warning(f"Citation reference [{doc_id}] has no corresponding source!")
                     
@@ -637,14 +679,118 @@ def generate_response(query, context_documents):
                     if doc_id in doc_id_mapping:
                         orig_doc = doc_id_mapping[doc_id]
                         metadata = orig_doc.get("metadata", {})
+                        
+                        # Skip Health Canada document as requested
+                        if "title" in metadata and "Health Canada Rheumatoid Arthritis Factsheet" in metadata.get("title", ""):
+                            logger.info(f"Skipping deleted document reference from metadata: {metadata.get('title', '')}")
+                            continue
+                            
+                        # Look for a proper citation from various sources
+                        citation = None
+                        title = metadata.get("title", "Rheumatology Document")
+                        
+                        # Try to get the best possible citation
+                        if metadata.get("formatted_citation"):
+                            citation = metadata.get("formatted_citation")
+                            logger.info(f"Using formatted_citation for document {doc_id}: {citation}")
+                        elif metadata.get("citation"):
+                            citation = metadata.get("citation")
+                            logger.info(f"Using citation for document {doc_id}: {citation}")
+                        elif metadata.get("doi"):
+                            # Try to use DOI lookup to get a proper citation
+                            # Import the DOI lookup function if needed
+                            from utils.doi_lookup import get_metadata_from_doi
+                            
+                            # Try to get a citation from the DOI
+                            logger.info(f"Trying DOI lookup for {metadata.get('doi')}")
+                            try:
+                                doi_metadata = get_metadata_from_doi(metadata.get('doi'))
+                                if doi_metadata and "formatted_citation" in doi_metadata:
+                                    citation = doi_metadata["formatted_citation"]
+                                    logger.info(f"Got citation from DOI lookup: {citation}")
+                                else:
+                                    citation = f"{title}. https://doi.org/{metadata.get('doi')}"
+                                    logger.info(f"Using basic DOI-based citation: {citation}")
+                            except Exception as e:
+                                logger.error(f"Error during DOI lookup: {str(e)}")
+                                citation = f"{title}. https://doi.org/{metadata.get('doi')}"
+                                logger.info(f"Using basic DOI-based citation after error: {citation}")
+                        else:
+                            # Try to extract DOI from the text
+                            from utils.citation_manager import extract_doi_from_text, get_citation_from_doi
+                            
+                            # Get text from the original document if available
+                            text = orig_doc.get("text", "")
+                            if text:
+                                # Try to extract DOI
+                                doi = extract_doi_from_text(text)
+                                if doi:
+                                    logger.info(f"Extracted DOI from text: {doi}")
+                                    success, doi_metadata = get_citation_from_doi(doi)
+                                    if success and doi_metadata and "formatted_citation" in doi_metadata:
+                                        citation = doi_metadata["formatted_citation"]
+                                        logger.info(f"Got citation from extracted DOI: {citation}")
+                                    else:
+                                        logger.info(f"DOI extraction succeeded but citation lookup failed")
+                            
+                            # If we still don't have a citation, try to get a better title from filename
+                            if not citation and metadata.get("file_path"):
+                                import os
+                                filename = os.path.basename(metadata.get("file_path", ""))
+                                if filename:
+                                    # Remove timestamp prefix if present
+                                    if len(filename) > 15 and filename[:8].isdigit() and filename[8:15].isdigit() and filename[15] == '_':
+                                        filename = filename[16:]
+                                    title = os.path.splitext(filename)[0].replace("_", " ").replace("-", " ").title()
+                            
+                            # If we still don't have a citation, use a basic one
+                            if not citation:
+                                # Look for authors in metadata
+                                authors = metadata.get("authors", "")
+                                year = metadata.get("publication_year", "")
+                                journal = metadata.get("journal", "")
+                                
+                                if authors and year and journal:
+                                    citation = f"{authors}. ({year}). {title}. {journal}."
+                                    logger.info(f"Created citation from metadata: {citation}")
+                                else:
+                                    citation = f"{title}. (Rheumatology Document)"
+                                    logger.info(f"Using basic citation for document {doc_id}: {citation}")
+                        
+                        # Create source with all available information
                         basic_source = {
                             "source_type": metadata.get("source_type", "unknown"),
                             "doc_id": doc_id,
-                            "title": metadata.get("title", "Rheumatology Document"),
-                            "citation": metadata.get("formatted_citation", "Rheumatology Document") 
+                            "title": title,
+                            "citation": citation
                         }
+                        
+                        # Add page information if available
+                        if metadata.get("page"):
+                            basic_source["pages"] = [str(metadata.get("page"))]
+                            basic_source["citation"] += f" (page {metadata.get('page')})"
+                        
                         final_sources.append(basic_source)
-                        logger.info(f"Created basic source for citation [{doc_id}]: {basic_source.get('title', 'Unknown')}")
+                        # Track this source's position
+                        doc_indices[doc_id] = len(final_sources)
+                        logger.info(f"Created basic source for citation [{doc_id}] at position {len(final_sources)}: {basic_source.get('title', 'Unknown')}")
+            
+            # Step 2: Re-number citations in the answer text based on the final source list
+            for doc_id in sorted(citation_ids, reverse=True):  # Process in reverse to avoid index conflicts
+                if doc_id in doc_indices:
+                    # Replace [doc_id] with the actual position in the sources list
+                    actual_index = doc_indices[doc_id]
+                    answer = answer.replace(f"[{doc_id}]", f"[{actual_index}]")
+                    logger.info(f"Replaced citation [{doc_id}] with [{actual_index}]")
+                else:
+                    # If doc_id was filtered out (e.g., Health Canada document), remove the citation
+                    answer = answer.replace(f"[{doc_id}]", "")
+                    logger.info(f"Removed citation [{doc_id}] as it was filtered out")
+            
+            # Add sources to the answer text
+            for i, source in enumerate(final_sources, 1):
+                citation = source.get("citation", "Rheumatology Document")
+                answer += f"\n{i}. {citation}"
             
             # Return only the sources that were actually referenced
             return answer, final_sources
