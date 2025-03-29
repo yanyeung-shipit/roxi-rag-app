@@ -105,10 +105,15 @@ def generate_response(query, context_documents):
                     pdf_sources[title]["pages"].add(str(page))
                     # We'll still add this to all_sources for context tracking
                 else:
-                    # Create a new PDF entry
+                    # Create a new PDF entry with a fallback citation if none exists
+                    citation = source_info.get("citation", "") 
+                    if not citation or citation.strip() == "":
+                        # Create a better fallback citation based on the title
+                        citation = f"{title}. (PDF Document)"
+                    
                     pdf_sources[title] = {
                         "title": title,
-                        "citation": source_info.get("citation", ""),
+                        "citation": citation,
                         "source_type": "pdf",
                         "pages": {str(page)},
                         "doc_ids": [i+1]
@@ -139,10 +144,23 @@ def generate_response(query, context_documents):
                 if "citation" not in source_info or not source_info["citation"]:
                     title = metadata.get("title", "Unnamed Source")
                     url = metadata.get("url", None)
+                    
+                    # Format the filename to be more user-friendly
+                    if title == "Unnamed Source" and "file_path" in metadata:
+                        # Try to extract a better title from the file_path
+                        file_path = metadata.get("file_path", "")
+                        if file_path:
+                            # Get the filename part
+                            import os
+                            filename = os.path.basename(file_path)
+                            # Remove extension and format
+                            title = os.path.splitext(filename)[0].replace("_", " ").replace("-", " ").title()
+                    
                     if url:
                         source_info["citation"] = f"{title}. Retrieved from {url}"
                     else:
-                        source_info["citation"] = f"{title}. (No source URL available)"
+                        # More descriptive citation when URL is not available
+                        source_info["citation"] = f"{title}. (Document from Knowledge Base)"
             
             all_sources.append(source_info)
             
@@ -216,10 +234,22 @@ def generate_response(query, context_documents):
                     # Create a default citation if none exists
                     title = source.get("title", "Unnamed Source")
                     url = source.get("url", None)
+                    
+                    # Try to extract a better title if we have a file_path
+                    if title == "Unnamed Source" and "file_path" in source:
+                        # Try to extract a better title from the file_path
+                        file_path = source.get("file_path", "")
+                        if file_path:
+                            # Get the filename part
+                            import os
+                            filename = os.path.basename(file_path)
+                            # Remove extension and format
+                            title = os.path.splitext(filename)[0].replace("_", " ").replace("-", " ").title()
+                    
                     if url:
                         source["citation"] = f"{title}. Retrieved from {url}"
                     else:
-                        source["citation"] = f"{title}. (Document with unknown source)"
+                        source["citation"] = f"{title}. (Document from Rheumatology Knowledge Base)"
                 
                 # Make sure we have required fields
                 if "title" not in source or not source["title"]:
