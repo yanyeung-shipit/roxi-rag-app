@@ -10,8 +10,7 @@ import tempfile
 from collections import defaultdict
 import concurrent.futures
 
-# Import our citation manager
-from utils.citation_manager import extract_citation_info as get_citation_info
+# We'll import the citation manager directly when needed to avoid circular imports
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -37,7 +36,9 @@ def extract_citation_info(filename, pdf_path=None):
     """
     # If we have a PDF path, use our advanced citation manager
     if pdf_path:
-        citation, _ = get_citation_info(filename, pdf_path)
+        # Import here to avoid circular imports
+        from utils.citation_manager import extract_citation_info as citation_manager_extract
+        citation, _ = citation_manager_extract(filename, pdf_path)
         return citation
         
     # Legacy code for backward compatibility
@@ -218,8 +219,11 @@ def process_pdf(file_path, file_name, extract_citation=True):
         
         # Extract citation information if requested
         if extract_citation:
+            # Import here to avoid circular imports
+            from utils.citation_manager import extract_citation_info
+            
             # Use our enhanced citation manager to get citation and metadata
-            formatted_citation, citation_metadata = get_citation_info(file_name, file_path)
+            formatted_citation, citation_metadata = extract_citation_info(file_name, file_path)
             document_metadata['formatted_citation'] = formatted_citation
             
             # Copy citation metadata to document metadata if available
@@ -275,6 +279,7 @@ def process_pdf(file_path, file_name, extract_citation=True):
                     # Get citation from document metadata if available
                     citation_info = document_metadata.get('formatted_citation', None)
                     if not citation_info:
+                        # Call our own extract_citation_info function
                         citation_info = extract_citation_info(file_name)
                     
                     chunks.append({

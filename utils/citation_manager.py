@@ -1,4 +1,5 @@
 import re
+import os
 import json
 import logging
 import requests
@@ -371,9 +372,50 @@ def extract_citation_info(filename: str, pdf_path: Optional[str] = None) -> Tupl
         except Exception as e:
             logger.error(f"Error during citation extraction: {str(e)}")
     
-    # If we couldn't extract citation info, fall back to the filename-based method
-    from utils.document_processor import extract_citation_info as legacy_extract_citation_info
-    citation = legacy_extract_citation_info(filename)
+    # If we couldn't extract citation info, create a fallback citation from the filename
+    # Do not import from document_processor to avoid circular reference
+    
+    # Remove file extension if present
+    base_name = os.path.splitext(filename)[0].lower()
+    
+    # Current year for retrieval date
+    current_year = datetime.now().year
+    formatted_date = datetime.now().strftime("%B %d, %Y")
+    
+    # Try to extract author and year from filename pattern (e.g., "smith2020")
+    match = re.match(r'([a-z]+)(\d{4})', base_name)
+    if match:
+        author = match.group(1).capitalize()
+        year = match.group(2)
+        
+        # Generate a title from the filename, replacing underscores with spaces
+        title_parts = base_name.split('_')
+        if len(title_parts) > 1:
+            # If there are underscores in the name, use them to create a better title
+            title = ' '.join([p.capitalize() for p in title_parts if p != author.lower() and p != year])
+        else:
+            # Otherwise just use a generic title
+            title = "Research Paper"
+        
+        # Format in APA 7th edition style
+        citation = f"{author}, {author[0].upper()}. ({year}). {title}. Retrieved {formatted_date}."
+        return citation, metadata
+    
+    # Try to handle filenames with underscores as title elements (e.g., "cancer_research_2020.pdf")
+    match = re.match(r'(.+)_(\d{4})', base_name)
+    if match:
+        title = match.group(1).replace('_', ' ').title()
+        year = match.group(2)
+        
+        # Format as APA citation with title and year
+        citation = f"{title} ({year}). Retrieved {formatted_date}."
+        return citation, metadata
+    
+    # Clean the filename to create a better title
+    title = base_name.replace('_', ' ').replace('-', ' ').title()
+    
+    # Default APA format for document with unknown year and author
+    citation = f"{title} (n.d.). Retrieved {formatted_date}."
     
     return citation, metadata
 
