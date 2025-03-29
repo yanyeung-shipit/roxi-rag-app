@@ -471,21 +471,22 @@ def generate_response(query, context_documents):
             "4. Many website sources may only contain brief references or category names - treat these as valuable and interpret them as indications that the website covers those topics.\n"
             "5. Provide citations for your answer using the format [n] where n is the document number.\n"
             "6. Cite multiple sources if the information comes from multiple documents.\n"
-            "7. IMPORTANT: Always make sure that every citation number [n] in your answer is included in the sources list you provide at the end.\n"
+            "7. IMPORTANT: Always make sure that every citation number [n] in your answer is included in the sources list.\n"
             "8. CRITICAL: When you use a citation like [3] or [4] in your answer, ensure that source #3 or #4 appears in your final sources list.\n"
-            "9. Be concise and direct in your answers.\n"
-            "10. Pay equal attention to ALL document sources - both PDFs and websites. Some of your most valuable information may come from website sources.\n"
-            "11. Website sources may include multiple pages from the same domain, each containing different information - treat each page as a distinct source of knowledge.\n"
-            "12. If documents provide conflicting information, acknowledge this and present both viewpoints with citations.\n"
-            "13. If you find information from websites, especially rheumatology-focused websites, treat this as high-quality information comparable to peer-reviewed sources.\n"
-            "14. When citing website sources, include the specific page number if available, as this indicates which specific page from the domain was used.\n"
-            "15. If the documents contain website navigation elements or section headers related to the query, interpret these as indications that the website contains content on those topics.\n"
-            "16. For website content that appears to be chapter or section titles, extrapolate that the site likely contains detailed information on those topics even if not provided in the context.\n"
-            "17. When discussing any rheumatology condition, include details on clinical phenotypes, organ involvement, diagnosis, and treatment approaches if found in the context.\n"
-            "18. If you see even brief mentions of specific conditions in the context, prioritize these for a comprehensive answer.\n"
+            "9. DO NOT include a 'Sources:' section at the end of your answer - citations will be displayed separately in the interface.\n"
+            "10. Be concise and direct in your answers.\n"
+            "11. Pay equal attention to ALL document sources - both PDFs and websites. Some of your most valuable information may come from website sources.\n"
+            "12. Website sources may include multiple pages from the same domain, each containing different information - treat each page as a distinct source of knowledge.\n"
+            "13. If documents provide conflicting information, acknowledge this and present both viewpoints with citations.\n"
+            "14. If you find information from websites, especially rheumatology-focused websites, treat this as high-quality information comparable to peer-reviewed sources.\n"
+            "15. When citing website sources, include the specific page number if available, as this indicates which specific page from the domain was used.\n"
+            "16. If the documents contain website navigation elements or section headers related to the query, interpret these as indications that the website contains content on those topics.\n"
+            "17. For website content that appears to be chapter or section titles, extrapolate that the site likely contains detailed information on those topics even if not provided in the context.\n"
+            "18. When discussing any rheumatology condition, include details on clinical phenotypes, organ involvement, diagnosis, and treatment approaches if found in the context.\n"
+            "19. If you see even brief mentions of specific conditions in the context, prioritize these for a comprehensive answer.\n"
             
             "SPECIALIZED RHEUMATOLOGY GUIDELINES:\n"
-            "17. You are a comprehensive rheumatology knowledge base covering ALL rheumatic conditions including:\n"
+            "20. You are a comprehensive rheumatology knowledge base covering ALL rheumatic conditions including:\n"
             "   - Inflammatory arthritides (RA, PsA, SpA, AS, etc.)\n"
             "   - Connective tissue diseases (SLE, SSc, myositis, Sjögren's, MCTD, etc.)\n"
             "   - Vasculitides (GCA, Takayasu's, ANCA-associated, IgG4-RD, etc.)\n"
@@ -493,7 +494,7 @@ def generate_response(query, context_documents):
             "   - Autoinflammatory syndromes (AOSD, FMF, CAPS, etc.)\n"
             "   - Other conditions (fibromyalgia, osteoarthritis, PMR, etc.)\n"
             
-            "18. When encountering disease abbreviations or terms in context, recognize their significance:\n"
+            "21. When encountering disease abbreviations or terms in context, recognize their significance:\n"
             "   - 'RA' → rheumatoid arthritis, 'PsA' → psoriatic arthritis, 'SpA' → spondyloarthritis\n"
             "   - 'AS' → ankylosing spondylitis, 'axSpA' → axial spondyloarthritis\n"
             "   - 'SLE' → systemic lupus erythematosus, 'SSc' → systemic sclerosis, 'MCTD' → mixed connective tissue disease\n"
@@ -501,9 +502,9 @@ def generate_response(query, context_documents):
             "   - 'ANCA' → anti-neutrophil cytoplasmic antibody, 'GPA' → granulomatosis with polyangiitis\n"
             "   - 'IgG4-RD' → IgG4-related disease\n"
             
-            "19. Emphasize the multisystem nature and disease spectrum of rheumatic conditions, acknowledging that many have overlapping features\n"
+            "22. Emphasize the multisystem nature and disease spectrum of rheumatic conditions, acknowledging that many have overlapping features\n"
             
-            "20. Interpret website navigation sections about specific diseases as strong evidence that the site contains comprehensive information about these conditions"
+            "23. Interpret website navigation sections about specific diseases as strong evidence that the site contains comprehensive information about these conditions"
         )
         
         response = client.chat.completions.create(
@@ -788,9 +789,22 @@ def generate_response(query, context_documents):
                     answer = answer.replace(f"[{doc_id}]", f"[{actual_index}]")
                     logger.info(f"Replaced citation [{doc_id}] with [{actual_index}]")
                 else:
-                    # If doc_id was filtered out (e.g., Health Canada document), remove the citation
-                    answer = answer.replace(f"[{doc_id}]", "")
-                    logger.info(f"Removed citation [{doc_id}] as it was filtered out")
+                    # If doc_id was filtered out (e.g., Health Canada document), replace with a generic citation
+                    # rather than removing it completely, to preserve the text flow
+                    if "Health_Canada" in str(doc_id) or "Health Canada" in str(doc_id):
+                        # Only completely remove Health Canada references
+                        answer = answer.replace(f"[{doc_id}]", "")
+                        logger.info(f"Removed citation [{doc_id}] as it was a filtered Health Canada document")
+                    else:
+                        # Replace other filtered citations with reference to the first source
+                        # This ensures citations don't disappear from the text
+                        if len(final_sources) > 0:
+                            answer = answer.replace(f"[{doc_id}]", f"[1]")
+                            logger.info(f"Replaced filtered citation [{doc_id}] with [1]")
+                        else:
+                            # If there are no sources left at all, remove the citation
+                            answer = answer.replace(f"[{doc_id}]", "")
+                            logger.info(f"Removed citation [{doc_id}] as there are no valid sources")
             
             # Remove any "Sources:" section that might be in the answer body (added by the model)
             # This pattern matches "Sources:" followed by a list of numbered items

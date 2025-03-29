@@ -167,9 +167,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data.sources && data.sources.length > 0) {
                     sourcesHeader.classList.remove('d-none');
                     
+                    // Clear existing sources first
+                    sourcesList.innerHTML = '';
+                    
+                    // Create a numbered list for sources
+                    const sourceOlElement = document.createElement('ol');
+                    sourceOlElement.className = 'source-list ps-3';
+                    sourcesList.appendChild(sourceOlElement);
+                    
                     data.sources.forEach((source, index) => {
-                        const sourceItem = document.createElement('div');
-                        sourceItem.className = 'source-item';
+                        const sourceItem = document.createElement('li');
+                        sourceItem.className = 'source-item mb-2';
                         sourceItem.id = `source-${index + 1}`;
                         
                         // Get citation text - use APA citation if available, otherwise use default
@@ -214,7 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             <div class="source-citation">${citationText}</div>
                         `;
                         
-                        sourcesList.appendChild(sourceItem);
+                        sourceOlElement.appendChild(sourceItem);
                     });
                 }
             } else {
@@ -323,6 +331,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!sources || sources.length === 0) {
             return answer;
         }
+        
+        // Remove any "Sources:" section that might appear at the end of the answer
+        // This pattern matches "Sources:" followed by anything to the end of the string
+        answer = answer.replace(/\s*Sources:[\s\S]*$/i, '');
         
         // Replace citation placeholders with clickable citation numbers
         sources.forEach((source, index) => {
