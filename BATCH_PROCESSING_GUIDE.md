@@ -1,119 +1,103 @@
-# Batch Processing Guide
+# ROXI Vector Store Processing Guide
 
-This guide explains how to use the batch processing tools to process chunks incrementally and add them to the vector store.
+This guide explains how to efficiently process and rebuild the vector store in the ROXI system. The vector store is a critical component that enables semantic search functionality across the knowledge base.
 
-## Background
+## Current Status
 
-The vector store needs to be populated with embeddings for all the chunks in the database. This is a time-consuming process, but it can be done incrementally. The scripts in this guide are designed to process chunks in a reliable way, avoiding timeouts and errors.
+As of March 29, 2025:
+- 1,261 total document chunks exist in the database across 23 documents
+- ~42.8% of these chunks (540) have been processed and added to the vector store
+- ~721 chunks remain to be processed
 
-## Quick Start
+## Processing Methods
 
-Process chunks one at a time (most reliable method):
-```
-./process_single_chunk.sh 6683  # Replace with the next chunk ID to process
-```
+### Single Chunk Processing
 
-Process a small batch of chunks (5 by default):
-```
-./process_multiple_chunks.sh 6682 5  # Replace first number with the last processed chunk ID
-```
+For reliable, one-at-a-time processing:
 
-Get the next chunks that need to be processed:
-```
-python get_next_chunks.py 6682 --limit 10  # Replace with the last processed chunk ID
+```bash
+./process_single_chunk.sh [chunk_id]
 ```
 
-Check the current progress:
+Example:
+```bash
+./process_single_chunk.sh 6694
 ```
+
+### Multi-Chunk Processing
+
+To process multiple chunks in sequence:
+
+```bash
+./process_n_chunks.sh [starting_chunk_id] [number_of_chunks]
+```
+
+Example (process 30 chunks starting at ID 6695):
+```bash
+./process_n_chunks.sh 6695 30
+```
+
+### Target Percentage Processing
+
+To process chunks until reaching a specific completion percentage:
+
+```bash
+./process_to_target.sh [target_percentage] [start_chunk_id] [max_chunks]
+```
+
+Example (process until 65% complete):
+```bash
+./process_to_target.sh 65.0 6725 200
+```
+
+### Background Processing
+
+For long-running processing that continues even if your connection drops:
+
+```bash
+./background_process_to_target.sh [target_percentage] [start_chunk_id] [max_chunks]
+```
+
+Example:
+```bash
+./background_process_to_target.sh 65.0 6725 200
+```
+
+To check the progress of background processing:
+
+```bash
+./check_target_progress.sh
+```
+
+## Monitoring Progress
+
+Check the current status of the vector store:
+
+```bash
 python check_progress.py
 ```
 
-## Script Details
+For detailed progress with time estimates and completion rates.
 
-### `process_single_chunk.sh`
+## Tips for Efficient Processing
 
-This script processes a single chunk and adds it to the vector store.
+1. **Incremental Processing**: Process chunks in small batches (20-30 at a time) to avoid timeouts
+2. **Background Processing**: For longer batches, use the background scripts
+3. **Regular Monitoring**: Check progress to ensure processing is continuing as expected
+4. **Handling Failures**: If a chunk fails to process, skip it and continue with the next one
+5. **Resource Consideration**: Processing is resource-intensive; limit concurrent processes
 
-**Usage:**
-```
-./process_single_chunk.sh CHUNK_ID
-```
+## Troubleshooting
 
-**Example:**
-```
-./process_single_chunk.sh 6683
-```
+If processing appears to stall:
 
-### `process_multiple_chunks.sh`
+1. Check for running processes with `ps aux | grep process`
+2. Look for log files in `logs/batch_processing/` directory
+3. If a process has terminated unexpectedly, check for and remove stale PID files
+4. If the vector store seems corrupted, consider using the rebuild scripts in the repository
 
-This script processes multiple chunks in sequence, one at a time. It's designed to be more reliable than batch processing by handling each chunk individually.
+## Next Steps
 
-**Usage:**
-```
-./process_multiple_chunks.sh LAST_ID BATCH_SIZE
-```
-
-**Example:**
-```
-./process_multiple_chunks.sh 6682 10
-```
-
-### `get_next_chunks.py`
-
-This script gets the next chunks to process after a given ID.
-
-**Usage:**
-```
-python get_next_chunks.py LAST_ID [--limit LIMIT]
-```
-
-**Example:**
-```
-python get_next_chunks.py 6682 --limit 5
-```
-
-### `check_progress.py`
-
-This script checks the current progress of rebuilding the vector store.
-
-**Usage:**
-```
-python check_progress.py
-```
-
-## Workflow
-
-A typical workflow would be:
-
-1. Check the current progress to see which chunks are already processed:
-   ```
-   python check_progress.py
-   ```
-
-2. Get the next batch of chunks to process:
-   ```
-   python get_next_chunks.py LAST_ID --limit 10
-   ```
-
-3. Process each chunk one at a time:
-   ```
-   ./process_single_chunk.sh CHUNK_ID
-   ```
-   
-   Or process a small batch at once:
-   ```
-   ./process_multiple_chunks.sh LAST_ID 5
-   ```
-
-4. Check the progress again to confirm the chunks were added:
-   ```
-   python check_progress.py
-   ```
-
-## Tips
-
-- Processing one chunk at a time is the most reliable method in the Replit environment
-- Each chunk takes approximately 1-1.5 seconds to process
-- Logs are stored in the `logs/batch_processing` directory
-- If a script times out, you can safely run it again with the next chunk ID
-- Don't run multiple processing scripts at the same time to avoid conflicts
+1. Continue processing chunks until reaching at least 65% completion
+2. Monitor system performance during and after processing
+3. Verify search quality improves as more chunks are added to the vector store
