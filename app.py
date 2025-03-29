@@ -893,7 +893,7 @@ def add_topic_pages():
                 
                 # Check if this is a priority topic (important rheumatology conditions)
                 priority_topics = ['rheumatoid-arthritis', 'lupus', 'systemic-sclerosis', 
-                                  'vasculitis', 'myositis', 'spondyloarthritis']
+                                  'vasculitis', 'myositis', 'spondyloarthritis', 'psoriatic-arthritis']
                 
                 is_priority = any(pt in topic_slug for pt in priority_topics)
                 
@@ -1179,8 +1179,8 @@ def process_document(document_id):
                     
                     # Process chunks if available
                     if chunks:
-                        # Limit chunks to a reasonable number
-                        max_chunks = 40
+                        # Limit chunks to a reasonable number - increased from 40 to allow more content
+                        max_chunks = 125
                         process_chunks = chunks[:max_chunks] if len(chunks) > max_chunks else chunks
                         
                         # Add chunks to vector store and database
@@ -1286,8 +1286,8 @@ def load_more_document_content(document_id):
                 'message': 'Document has no source URL to load additional content'
             }), 400
         
-        # Determine how many more chunks to load (maximum 5 more at a time)
-        chunks_to_load = min(5, total_possible_chunks - current_chunk_count)
+        # Determine how many more chunks to load (maximum 50 more at a time)
+        chunks_to_load = min(50, total_possible_chunks - current_chunk_count)
         
         logger.info(f"Attempting to load {chunks_to_load} more chunks for document {document_id}")
         
