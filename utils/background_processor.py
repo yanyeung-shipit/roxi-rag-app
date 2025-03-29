@@ -2,6 +2,7 @@ import os
 import time
 import logging
 import threading
+import urllib.parse
 from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
@@ -110,7 +111,26 @@ class BackgroundProcessor:
                                 
                             # Process the website
                             logger.info(f"Processing website: {doc.source_url}")
-                            result = scrape_website(doc.source_url, max_pages=10)
+                            
+                            # Use a higher page limit for topic pages to capture more content
+                            parsed_url = urllib.parse.urlparse(doc.source_url)
+                            topic_patterns = ['/topic/', '/disease/', '/diseases/', '/condition/', '/conditions/']
+                            
+                            if any(pattern in parsed_url.path for pattern in topic_patterns):
+                                # For specialized topic pages, focus only on the page itself with more intensive extraction
+                                logger.info(f"Detected topic page, using focused extraction for: {doc.source_url}")
+                                # Use 1 page but get maximum content from that single page
+                                result = scrape_website(doc.source_url, max_pages=1)
+                                
+                                # If we didn't get enough content, try direct topic extraction
+                                if not result or len(result) < 10:
+                                    from utils.web_scraper import create_minimal_content_for_topic
+                                    logger.info(f"Standard extraction produced insufficient content, trying specialized topic extraction")
+                                    result = create_minimal_content_for_topic(doc.source_url)
+                            else:
+                                # For general websites, crawl multiple pages
+                                logger.info(f"Detected general website, using multi-page crawling: {doc.source_url}")
+                                result = scrape_website(doc.source_url, max_pages=10)
                             
                             chunks = []
                             for i, chunk_data in enumerate(result):
