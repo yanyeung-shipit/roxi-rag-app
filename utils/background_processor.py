@@ -111,8 +111,8 @@ class BackgroundProcessor:
                                 current_chunk_count = len(doc.chunks)
                                 total_possible_chunks = doc.file_size or 0
                                 
-                                # Determine how many more chunks to load (maximum 50 at a time)
-                                chunks_to_load = min(50, total_possible_chunks - current_chunk_count)
+                                # Determine how many more chunks to load (maximum 100 at a time)
+                                chunks_to_load = min(100, total_possible_chunks - current_chunk_count)
                                 logger.info(f"Attempting to load {chunks_to_load} more chunks for document {doc.id}")
                                 
                                 # Get the document URL

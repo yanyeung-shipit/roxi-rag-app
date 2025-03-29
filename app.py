@@ -895,11 +895,11 @@ def add_topic_pages():
                 # Set chunk limit based on whether this is a single topic request
                 if len(topics) == 1:
                     # For single topics, allow maximum chunks
-                    max_chunks = 125
+                    max_chunks = 500
                     logger.info(f"Single topic requested: {topic}, allowing {max_chunks} chunks")
                 else:
                     # For multiple topics, reduce chunks to avoid memory issues
-                    max_chunks = 50
+                    max_chunks = 100
                     logger.info(f"Topic in batch: {topic}, allowing {max_chunks} chunks")
                 
                 # Store the original number of chunks for later use
@@ -1163,8 +1163,8 @@ def process_document(document_id):
                     
                     # Process chunks if available
                     if chunks:
-                        # Limit chunks to a reasonable number - increased from 40 to allow more content
-                        max_chunks = 125
+                        # Limit chunks to a reasonable number - increased from 125 to allow much more content
+                        max_chunks = 500
                         process_chunks = chunks[:max_chunks] if len(chunks) > max_chunks else chunks
                         
                         # Add chunks to vector store and database
@@ -1270,8 +1270,8 @@ def load_more_document_content(document_id):
                 'message': 'Document has no source URL to load additional content'
             }), 400
         
-        # Determine how many more chunks to load (maximum 50 more at a time)
-        chunks_to_load = min(50, total_possible_chunks - current_chunk_count)
+        # Determine how many more chunks to load (maximum 100 more at a time)
+        chunks_to_load = min(100, total_possible_chunks - current_chunk_count)
         
         logger.info(f"Attempting to load {chunks_to_load} more chunks for document {document_id}")
         
