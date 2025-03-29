@@ -161,6 +161,8 @@ def generate_response(query, context_documents):
                 if title in pdf_sources:
                     # Add this page to the existing PDF source
                     pdf_sources[title]["pages"].add(str(page))
+                    # Add this document ID to the list of doc_ids
+                    pdf_sources[title]["doc_ids"].append(i+1)
                     # We'll still add this to all_sources for context tracking
                 else:
                     # Create a new PDF entry with a fallback citation if none exists
@@ -434,16 +436,18 @@ def generate_response(query, context_documents):
             "4. Many website sources may only contain brief references or category names - treat these as valuable and interpret them as indications that the website covers those topics.\n"
             "5. Provide citations for your answer using the format [n] where n is the document number.\n"
             "6. Cite multiple sources if the information comes from multiple documents.\n"
-            "7. Be concise and direct in your answers.\n"
-            "8. Pay equal attention to ALL document sources - both PDFs and websites. Some of your most valuable information may come from website sources.\n"
-            "9. Website sources may include multiple pages from the same domain, each containing different information - treat each page as a distinct source of knowledge.\n"
-            "10. If documents provide conflicting information, acknowledge this and present both viewpoints with citations.\n"
-            "11. If you find information from websites, especially rheumatology-focused websites, treat this as high-quality information comparable to peer-reviewed sources.\n"
-            "12. When citing website sources, include the specific page number if available, as this indicates which specific page from the domain was used.\n"
-            "13. If the documents contain website navigation elements or section headers related to the query, interpret these as indications that the website contains content on those topics.\n"
-            "14. For website content that appears to be chapter or section titles, extrapolate that the site likely contains detailed information on those topics even if not provided in the context.\n"
-            "15. When discussing any rheumatology condition, include details on clinical phenotypes, organ involvement, diagnosis, and treatment approaches if found in the context.\n"
-            "16. If you see even brief mentions of specific conditions in the context, prioritize these for a comprehensive answer.\n"
+            "7. IMPORTANT: Always make sure that every citation number [n] in your answer is included in the sources list you provide at the end.\n"
+            "8. CRITICAL: When you use a citation like [3] or [4] in your answer, ensure that source #3 or #4 appears in your final sources list.\n"
+            "9. Be concise and direct in your answers.\n"
+            "10. Pay equal attention to ALL document sources - both PDFs and websites. Some of your most valuable information may come from website sources.\n"
+            "11. Website sources may include multiple pages from the same domain, each containing different information - treat each page as a distinct source of knowledge.\n"
+            "12. If documents provide conflicting information, acknowledge this and present both viewpoints with citations.\n"
+            "13. If you find information from websites, especially rheumatology-focused websites, treat this as high-quality information comparable to peer-reviewed sources.\n"
+            "14. When citing website sources, include the specific page number if available, as this indicates which specific page from the domain was used.\n"
+            "15. If the documents contain website navigation elements or section headers related to the query, interpret these as indications that the website contains content on those topics.\n"
+            "16. For website content that appears to be chapter or section titles, extrapolate that the site likely contains detailed information on those topics even if not provided in the context.\n"
+            "17. When discussing any rheumatology condition, include details on clinical phenotypes, organ involvement, diagnosis, and treatment approaches if found in the context.\n"
+            "18. If you see even brief mentions of specific conditions in the context, prioritize these for a comprehensive answer.\n"
             
             "SPECIALIZED RHEUMATOLOGY GUIDELINES:\n"
             "17. You are a comprehensive rheumatology knowledge base covering ALL rheumatic conditions including:\n"
@@ -509,10 +513,16 @@ def generate_response(query, context_documents):
                     "3. When extracting information from website sources, look for ANY terms related to the question and use those as a basis for your answer. "
                     "If you see a menu item or category that matches terms in the query, consider this relevant information.\n\n"
                     
-                    "4. For questions about rheumatology conditions that appear as section titles or categories in website menus, provide a response that "
+                    "4. Provide citations for your answer using the format [n] where n is the document number.\n\n"
+                    
+                    "5. IMPORTANT: Always make sure that every citation number [n] in your answer is included in the sources list you provide at the end.\n\n"
+                    
+                    "6. CRITICAL: When you use a citation like [3] or [4] in your answer, ensure that source #3 or #4 appears in your final sources list.\n\n"
+                    
+                    "7. For questions about rheumatology conditions that appear as section titles or categories in website menus, provide a response that "
                     "acknowledges the website as a source covering that topic, even if specific details aren't in the context.\n\n"
                     
-                    "5. For navigation links, titles, or category listings, extrapolate reasonably about what content would be found there based on "
+                    "8. For navigation links, titles, or category listings, extrapolate reasonably about what content would be found there based on "
                     "standard knowledge of rheumatology.\n\n"
                     
                     "Remember that website sources, especially specialized rheumatology websites, are extremely valuable resources "
