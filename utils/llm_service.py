@@ -4,6 +4,8 @@ import json
 import numpy as np
 from openai import OpenAI
 
+from utils.doi_lookup import get_citation_from_doi
+
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -176,8 +178,14 @@ def generate_response(query, context_documents):
                             logger.debug(f"Using citation for PDF: {citation}")
                         # Check for a DOI to use in the citation
                         elif metadata.get("doi"):
-                            citation = f"{title}. https://doi.org/{metadata.get('doi')}"
-                            logger.debug(f"Using DOI-based citation for PDF: {citation}")
+                            # Try to get a complete citation from the DOI using external service
+                            success, doi_metadata = get_citation_from_doi(metadata.get("doi"))
+                            if success and doi_metadata.get("formatted_citation"):
+                                citation = doi_metadata.get("formatted_citation")
+                                logger.debug(f"Using DOI lookup service citation for PDF: {citation}")
+                            else:
+                                citation = f"{title}. https://doi.org/{metadata.get('doi')}"
+                                logger.debug(f"Using basic DOI-based citation for PDF: {citation}")
                         else:
                             # Create a better fallback citation based on the title
                             # Make sure we're not creating an "Unnamed PDF" citation
@@ -260,8 +268,14 @@ def generate_response(query, context_documents):
                             logger.debug(f"Using citation for other document: {source_info['citation']}")
                         # Check for DOI to create a citation with DOI link
                         elif metadata.get("doi"):
-                            source_info["citation"] = f"{title}. https://doi.org/{metadata.get('doi')}"
-                            logger.debug(f"Using DOI-based citation for other document: {source_info['citation']}")
+                            # Try to get a complete citation from the DOI using external service
+                            success, doi_metadata = get_citation_from_doi(metadata.get("doi"))
+                            if success and doi_metadata.get("formatted_citation"):
+                                source_info["citation"] = doi_metadata.get("formatted_citation")
+                                logger.debug(f"Using DOI lookup service citation for other document: {source_info['citation']}")
+                            else:
+                                source_info["citation"] = f"{title}. https://doi.org/{metadata.get('doi')}"
+                                logger.debug(f"Using basic DOI-based citation for other document: {source_info['citation']}")
                         else:
                             source_info["citation"] = f"{title}. (Document from Rheumatology Knowledge Base)"
                             logger.debug(f"Using fallback citation for other document: {source_info['citation']}")
@@ -353,7 +367,13 @@ def generate_response(query, context_documents):
                     if url:
                         source["citation"] = f"{title}. Retrieved from {url}"
                     elif source.get("doi"):
-                        source["citation"] = f"{title}. https://doi.org/{source.get('doi')}"
+                        # Try to get a complete citation from the DOI using external service
+                        success, doi_metadata = get_citation_from_doi(source.get("doi"))
+                        if success and doi_metadata.get("formatted_citation"):
+                            source["citation"] = doi_metadata.get("formatted_citation")
+                            logger.debug(f"Using DOI lookup service citation for final source: {source['citation']}")
+                        else:
+                            source["citation"] = f"{title}. https://doi.org/{source.get('doi')}"
                     else:
                         # Look for a properly formatted citation from our metadata before falling back
                         if "metadata" in source and source["metadata"] and "citation" in source["metadata"]:
