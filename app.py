@@ -59,6 +59,60 @@ TEMP_FOLDER = tempfile.gettempdir()
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def document_exists(filename):
+    """Check if a document with the same base filename already exists.
+    
+    This function extracts the core filename part by:
+    1. Removing any timestamp prefixes (like 20250327145551_)
+    2. Removing any descriptive prefixes (like modified_, updated_, new_)
+    3. Removing file extensions
+    
+    Args:
+        filename (str): The original filename with possible prefixes
+        
+    Returns:
+        bool: True if a document with this base filename exists, False otherwise
+    """
+    # First, remove file extension for comparison
+    base_filename = filename.rsplit('.', 1)[0] if '.' in filename else filename
+    
+    # Handle timestamp prefix (if present)
+    if '_' in base_filename and len(base_filename.split('_')[0]) == 14 and base_filename.split('_')[0].isdigit():
+        base_filename = '_'.join(base_filename.split('_')[1:])
+    
+    # Clean up common prefixes that might be added to filenames
+    common_prefixes = ['modified_', 'updated_', 'new_', 'copy_of_', 'duplicate_']
+    for prefix in common_prefixes:
+        if base_filename.startswith(prefix):
+            base_filename = base_filename[len(prefix):]
+    
+    logger.debug(f"Checking if document with base filename '{base_filename}' exists")
+    
+    # Check if any document in the database has this filename
+    # Looking for matches after removing prefixes and extensions
+    existing_docs = Document.query.filter(Document.filename.like(f"%{base_filename}%")).all()
+    
+    # Look for exact match after removing timestamp prefix
+    for doc in existing_docs:
+        doc_filename = doc.filename
+        
+        # Skip the timestamp prefix if it exists (format: YYYYMMDDHHMMSS_)
+        if '_' in doc_filename and len(doc_filename.split('_')[0]) == 14 and doc_filename.split('_')[0].isdigit():
+            doc_base = '_'.join(doc_filename.split('_')[1:])
+        else:
+            doc_base = doc_filename
+            
+        # Remove file extension for comparison
+        doc_base = doc_base.rsplit('.', 1)[0] if '.' in doc_base else doc_base
+        
+        logger.debug(f"Comparing with existing document: '{doc_base}'")
+        
+        if doc_base == base_filename:
+            logger.debug(f"Match found: '{doc_base}' == '{base_filename}'")
+            return True
+    
+    return False
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -94,6 +148,14 @@ def upload_pdf():
         if file and allowed_file(file.filename):
             filename = secure_filename(file.filename)
             logger.info(f"Processing PDF: {filename}")
+            
+            # Check if the document already exists
+            if document_exists(filename):
+                logger.warning(f"Document with filename '{filename}' already exists")
+                return jsonify({
+                    'success': False, 
+                    'message': f"Document with filename '{filename}' already exists. Please use a different filename or delete the existing document first."
+                }), 400
             
             # Check file size before saving - limit to 50MB per file
             file.seek(0, os.SEEK_END)
@@ -347,9 +409,20 @@ def bulk_upload_pdfs():
             except Exception as e:
                 logger.error(f"Error finding collection: {e}")
         
+        # Track skipped files
+        skipped_files = []
+        skipped_reasons = []
+        
         for file in valid_files:
             try:
                 filename = secure_filename(file.filename)
+                
+                # Check if the document already exists
+                if document_exists(filename):
+                    logger.warning(f"Document with filename '{filename}' already exists")
+                    skipped_files.append(filename)
+                    skipped_reasons.append(f"Document with filename '{filename}' already exists")
+                    continue  # Skip this file but continue processing others
                 
                 # Check file size - limit to 50MB per file
                 file.seek(0, os.SEEK_END)
@@ -358,6 +431,8 @@ def bulk_upload_pdfs():
                 
                 if file_size > 50 * 1024 * 1024:  # 50MB limit
                     logger.warning(f"PDF file too large: {filename} ({file_size / (1024*1024):.2f} MB)")
+                    skipped_files.append(filename)
+                    skipped_reasons.append(f"PDF file too large ({file_size / (1024*1024):.2f} MB)")
                     continue  # Skip this file but continue processing others
                 
                 # Create unique filename with timestamp
@@ -412,12 +487,31 @@ def bulk_upload_pdfs():
             if document_ids:
                 logger.info(f"Queued {len(document_ids)} documents for background processing")
                 
+                # Prepare response message including skipped files
+                success_message = f'Successfully uploaded {len(pdf_paths)} PDF files. All files have been queued for background processing.'
+                
+                # Add information about skipped files if any
+                if skipped_files:
+                    skip_details = []
+                    for i, filename in enumerate(skipped_files):
+                        if i < len(skipped_reasons):
+                            skip_details.append(f"{filename}: {skipped_reasons[i]}")
+                        else:
+                            skip_details.append(f"{filename}: Unknown reason")
+                    
+                    skip_message = f"{len(skipped_files)} files were skipped: {', '.join(skip_details[:5])}"
+                    if len(skipped_files) > 5:
+                        skip_message += f" and {len(skipped_files) - 5} more."
+                    
+                    success_message += f" Note: {skip_message}"
+                
                 # Return success
                 return jsonify({
                     'success': True,
-                    'message': f'Successfully uploaded {len(pdf_paths)} PDF files. All files have been queued for background processing.',
+                    'message': success_message,
                     'document_ids': document_ids,
                     'queued_count': len(document_ids),
+                    'skipped_files': skipped_files,
                     'pending_processing': True
                 })
             
@@ -654,14 +748,30 @@ def clear():
         
         # Optionally also clear database tables
         if request.form.get('clear_database', 'false').lower() == 'true':
-            # Delete all document chunks first (due to foreign key constraint)
-            DocumentChunk.query.delete()
-            # Delete all documents
-            Document.query.delete()
-            # Delete all collections
-            Collection.query.delete()
-            db.session.commit()
-            logger.info("Cleared all database records")
+            try:
+                # Start a transaction for all database operations
+                # We need to delete in the correct order to respect foreign key constraints
+                
+                # First, clear collection_documents junction table
+                db.session.execute(db.text("TRUNCATE collection_documents CASCADE"))
+                
+                # Delete all document chunks first (due to foreign key constraint)
+                DocumentChunk.query.delete()
+                
+                # Delete all documents
+                Document.query.delete()
+                
+                # Delete all collections
+                Collection.query.delete()
+                
+                # Commit all changes
+                db.session.commit()
+                logger.info("Cleared all database records")
+            except Exception as db_error:
+                # Rollback transaction on error
+                db.session.rollback()
+                logger.exception(f"Error clearing database: {str(db_error)}")
+                raise
             
         return jsonify({
             'success': True,
