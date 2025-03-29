@@ -32,6 +32,7 @@ async function loadBackgroundStatus() {
             
             const status = data.status;
             const unprocessedCount = data.unprocessed_documents;
+            const waitingForMoreContent = status.documents_waiting_for_more_content || 0;
             
             // Format the last run time
             let lastRunText = "Never";
@@ -60,6 +61,7 @@ async function loadBackgroundStatus() {
                                         <div><strong>Last Activity:</strong> ${lastRunText}</div>
                                         <div><strong>Documents Processed:</strong> ${status.documents_processed}</div>
                                         <div><strong>Unprocessed Documents:</strong> ${unprocessedCount}</div>
+                                        <div><strong>Documents Pending More Content:</strong> ${waitingForMoreContent}</div>
                                     </div>
                                 </div>
                             </div>
@@ -70,18 +72,18 @@ async function loadBackgroundStatus() {
                 <div class="mt-3 small text-muted">
                     <p>
                         <i class="fas fa-info-circle me-1"></i>
-                        The background processor automatically processes documents that haven't been processed yet.
-                        It processes one document at a time to avoid overloading the server.
+                        The background processor automatically processes new documents and loads additional content for documents that have more chunks available. It processes one document at a time to avoid overloading the server.
                     </p>
-                    ${unprocessedCount > 0 ? 
+                    ${unprocessedCount > 0 || waitingForMoreContent > 0 ? 
                         `<div class="alert alert-info">
                             <i class="fas fa-sync fa-spin me-2"></i>
-                            ${unprocessedCount} document(s) queued for processing.
+                            ${unprocessedCount > 0 ? `${unprocessedCount} document(s) queued for initial processing.<br>` : ''}
+                            ${waitingForMoreContent > 0 ? `${waitingForMoreContent} document(s) waiting for additional content to be loaded.<br>` : ''}
                             Processing will happen automatically in the background.
                         </div>` : 
                         `<div class="alert alert-success">
                             <i class="fas fa-check-circle me-2"></i>
-                            All documents have been processed.
+                            All documents have been fully processed.
                         </div>`
                     }
                 </div>

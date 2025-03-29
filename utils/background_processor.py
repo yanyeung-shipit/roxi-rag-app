@@ -74,7 +74,127 @@ class BackgroundProcessor:
                 # Start a new session for this iteration
                 session = Session()
                 
-                # Find unprocessed documents
+                # First, check if there are any processed website documents that have more content available
+                # These are documents where file_size > 0 and file_size > number of chunks
+                try:
+                    # Find documents with more content to load
+                    from sqlalchemy import func
+                    subquery = session.query(
+                        DocumentChunk.document_id,
+                        func.count(DocumentChunk.id).label('chunk_count')
+                    ).group_by(DocumentChunk.document_id).subquery()
+                    
+                    # Query for documents that:
+                    # 1. Are website documents (since only websites support "load more")
+                    # 2. Are already processed (so their initial content is available)
+                    # 3. Have file_size > 0 (meaning they have more content available)
+                    # 4. Have fewer chunks than file_size (the remaining content)
+                    documents_with_more_content = session.query(Document).join(
+                        subquery, 
+                        Document.id == subquery.c.document_id
+                    ).filter(
+                        Document.file_type == 'website',
+                        Document.processed == True,
+                        Document.file_size > 0,
+                        Document.file_size > subquery.c.chunk_count
+                    ).limit(self.batch_size).all()
+                    
+                    if documents_with_more_content:
+                        import urllib.parse
+                        from utils.web_scraper import create_minimal_content_for_topic
+                        
+                        for doc in documents_with_more_content:
+                            try:
+                                logger.info(f"Loading more content for document {doc.id}: {doc.title}")
+                                
+                                # Get the current number of chunks
+                                current_chunk_count = len(doc.chunks)
+                                total_possible_chunks = doc.file_size or 0
+                                
+                                # Determine how many more chunks to load (maximum 50 at a time)
+                                chunks_to_load = min(50, total_possible_chunks - current_chunk_count)
+                                logger.info(f"Attempting to load {chunks_to_load} more chunks for document {doc.id}")
+                                
+                                # Get the document URL
+                                url = doc.source_url
+                                if not url:
+                                    logger.warning(f"Document {doc.id} has no source URL, skipping")
+                                    continue
+                                
+                                # Get fresh content to ensure we have all chunks
+                                chunks = create_minimal_content_for_topic(url)
+                                
+                                if not chunks:
+                                    logger.warning(f"Failed to retrieve additional content for document {doc.id}")
+                                    continue
+                                
+                                # Skip chunks we already have and take only the next batch
+                                start_index = current_chunk_count
+                                end_index = min(start_index + chunks_to_load, len(chunks))
+                                
+                                if start_index >= len(chunks):
+                                    logger.info(f"No additional content available for document {doc.id}")
+                                    continue
+                                
+                                chunks_to_add = chunks[start_index:end_index]
+                                added_count = 0
+                                
+                                # Process each additional chunk
+                                for i, chunk in enumerate(chunks_to_add):
+                                    try:
+                                        # Update chunk index to continue from existing chunks
+                                        chunk_index = current_chunk_count + i
+                                        
+                                        # Update metadata to reflect new chunk index
+                                        chunk['metadata']['chunk_index'] = chunk_index
+                                        
+                                        # Add to vector store
+                                        vector_store.add_text(chunk['text'], chunk['metadata'])
+                                        
+                                        # Create database record
+                                        chunk_record = DocumentChunk(
+                                            document_id=doc.id,
+                                            chunk_index=chunk_index,
+                                            page_number=chunk['metadata'].get('page_number', 1),
+                                            text_content=chunk['text']
+                                        )
+                                        
+                                        session.add(chunk_record)
+                                        
+                                        added_count += 1
+                                    except Exception as e:
+                                        logger.error(f"Error adding chunk {i+start_index}: {str(e)}")
+                                
+                                # Commit changes after processing all chunks for this document
+                                session.commit()
+                                vector_store._save()
+                                
+                                logger.info(f"Added {added_count} more chunks to document {doc.id}")
+                                
+                                # Update document if we've loaded all chunks
+                                new_total = current_chunk_count + added_count
+                                if new_total >= total_possible_chunks:
+                                    logger.info(f"Document {doc.id} now has all {new_total} chunks loaded")
+                                else:
+                                    logger.info(f"Document {doc.id} now has {new_total}/{total_possible_chunks} chunks loaded")
+                                
+                                # Force Python garbage collection to free memory
+                                import gc
+                                gc.collect()
+                                
+                            except Exception as e:
+                                logger.exception(f"Error loading additional content for document {doc.id}: {str(e)}")
+                                session.rollback()
+                                
+                    # We processed some documents with more content, sleep before checking for unprocessed documents
+                    if documents_with_more_content:
+                        logger.info(f"Processed {len(documents_with_more_content)} documents with more content")
+                        time.sleep(self.sleep_time / 2)  # Sleep half the normal time before looking for unprocessed docs
+                
+                except Exception as e:
+                    logger.exception(f"Error checking for documents with more content: {str(e)}")
+                
+                # Check for unprocessed documents
                 unprocessed_docs = session.query(Document).filter_by(
                     processed=False,
                 ).limit(self.batch_size).all()
@@ -226,10 +346,45 @@ class BackgroundProcessor:
         
     def get_status(self):
         """Get the current status of the background processor."""
+        # Count how many documents have more content to load
+        try:
+            session = Session()
+            from sqlalchemy import func
+            
+            # Create subquery to get the chunk count for each document
+            subquery = session.query(
+                DocumentChunk.document_id,
+                func.count(DocumentChunk.id).label('chunk_count')
+            ).group_by(DocumentChunk.document_id).subquery()
+            
+            # Count documents waiting for more content loading
+            waiting_documents = session.query(Document).join(
+                subquery, 
+                Document.id == subquery.c.document_id
+            ).filter(
+                Document.file_type == 'website',
+                Document.processed == True,
+                Document.file_size > 0,
+                Document.file_size > subquery.c.chunk_count
+            ).count()
+            
+            # Count documents waiting for initial processing
+            unprocessed_documents = session.query(Document).filter_by(
+                processed=False
+            ).count()
+            
+            session.close()
+        except Exception as e:
+            logger.exception(f"Error getting document counts: {str(e)}")
+            waiting_documents = 0
+            unprocessed_documents = 0
+            
         return {
             'running': self.running,
             'last_run': self.last_run_time.isoformat() if self.last_run_time else None,
-            'documents_processed': self.documents_processed
+            'documents_processed': self.documents_processed,
+            'unprocessed_documents': unprocessed_documents,
+            'documents_waiting_for_more_content': waiting_documents
         }
 
 
