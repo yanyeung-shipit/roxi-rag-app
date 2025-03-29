@@ -5,10 +5,10 @@
 # Usage: ./process_multiple_chunks.sh [COUNT]
 
 # Configuration
-COUNT=${1:-5}            # Number of chunks to process (default: 5)
-TIMEOUT=25              # Timeout in seconds for chunk processing
-MAX_RETRIES=3           # Maximum number of retries for a failed chunk
-PAUSE_BETWEEN=5         # Pause between chunks in seconds
+COUNT=${1:-5}           # Number of chunks to process (default: 5)
+TIMEOUT=20              # Timeout in seconds for chunk processing (reduced for speed)
+MAX_RETRIES=2           # Maximum number of retries for a failed chunk (reduced for speed)
+PAUSE_BETWEEN=3         # Pause between chunks in seconds (reduced for speed)
 CHUNK_LIST_FILE="chunks_to_process.json"
 
 echo "=============================================="
@@ -21,7 +21,7 @@ echo "Max retries:        $MAX_RETRIES"
 echo "=============================================="
 
 # Make scripts executable
-chmod +x process_chunk.py find_unprocessed_chunks.py
+chmod +x process_chunk.py fast_process_chunk.py find_unprocessed_chunks.py
 
 # Get initial vector store size
 INITIAL_COUNT=$(python check_progress.py | grep "Vector store:" | awk '{print $3}')
@@ -61,8 +61,8 @@ for ((chunk=1; chunk<=COUNT; chunk++)); do
         echo ""
         echo "Processing attempt $i/$MAX_RETRIES for chunk $CHUNK_ID"
         
-        # Run with timeout
-        timeout $TIMEOUT python process_chunk.py $CHUNK_ID
+        # Run with timeout using faster implementation
+        timeout $TIMEOUT python fast_process_chunk.py $CHUNK_ID
         RESULT=$?
         
         # Check result

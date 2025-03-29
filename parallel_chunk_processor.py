@@ -2,352 +2,234 @@
 """
 Parallel Chunk Processor
 
-This script processes multiple chunks in parallel to rebuild the vector store
-faster while working within Replit's constraints. It uses checkpointing to
-track progress and can resume processing after timeout or interruption.
-
-Usage:
-    python parallel_chunk_processor.py [--batch-size BATCH_SIZE] [--max-chunks MAX_CHUNKS]
+Process multiple chunks at once with optimal resource utilization.
+This script is designed to efficiently process chunks in batches to
+maximize throughput while avoiding Replit resource limits.
 """
 
-import argparse
-import json
-import logging
 import os
-import random
 import sys
 import time
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union
-
-import numpy as np
-from sqlalchemy import create_engine, func, text
-from sqlalchemy.orm import sessionmaker
-
-from app import app, db
-from models import Document, DocumentChunk
-from utils.vector_store import VectorStore
+import logging
+import json
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+from typing import List, Dict, Any, Set, Union, Optional
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
 logger = logging.getLogger(__name__)
 
-# Constants
-CHECKPOINT_DIR = Path("./logs/checkpoints")
-CHECKPOINT_FILE = CHECKPOINT_DIR / "parallel_processor_checkpoint.json"
-OPENAI_API_RATE_LIMIT = 3  # seconds between embedding calls
+# Set OpenAI API key early to avoid repetitive logging
+os.environ["OPENAI_API_KEY"] = os.environ.get("OPENAI_API_KEY", "")
 
-# Initialize vector store
-vector_store = VectorStore()
+# Import app and models
+from app import app as flask_app
+from models import db, DocumentChunk
+from utils.vector_store import VectorStore
+from openai import OpenAI
 
-def setup_checkpoint_directory() -> None:
-    """Create the checkpoint directory if it doesn't exist."""
-    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+# Simple embedding service that minimizes overhead
+class EmbeddingService:
+    """Optimized embedding service with caching."""
+    
+    def __init__(self):
+        """Initialize the service."""
+        self.client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        self.model = "text-embedding-ada-002"
+        self.cache = {}  # Simple in-memory cache
+    
+    def get_embedding(self, text: str) -> List[float]:
+        """Get embedding for text with caching."""
+        # Use a hash of the text as a cache key
+        cache_key = hash(text)
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+        
+        # Generate embedding
+        response = self.client.embeddings.create(
+            input=text,
+            model=self.model
+        )
+        embedding = response.data[0].embedding
+        
+        # Cache the result
+        self.cache[cache_key] = embedding
+        return embedding
 
-def save_checkpoint(processed_chunks: Set[int], 
-                    remaining_chunks: List[int], 
-                    last_processed_time: float,
-                    successful_chunks: int, 
-                    failed_chunks: int) -> None:
+def get_unprocessed_chunks(limit: int = 10) -> List[int]:
     """
-    Save a checkpoint of processing progress.
+    Get a list of chunk IDs that need to be processed.
     
     Args:
-        processed_chunks: Set of chunk IDs that have been processed
-        remaining_chunks: List of chunk IDs still to be processed
-        last_processed_time: Timestamp of last processing
-        successful_chunks: Count of successfully processed chunks
-        failed_chunks: Count of chunks that failed to process
-    """
-    checkpoint_data = {
-        "processed_chunks": list(processed_chunks),
-        "remaining_chunks": remaining_chunks,
-        "last_processed_time": last_processed_time,
-        "successful_chunks": successful_chunks,
-        "failed_chunks": failed_chunks,
-        "timestamp": datetime.now().isoformat()
-    }
-    
-    with CHECKPOINT_FILE.open('w') as f:
-        json.dump(checkpoint_data, f)
-    
-    logger.info(f"Checkpoint saved: {successful_chunks} successful, {failed_chunks} failed")
-
-def load_checkpoint() -> Optional[Dict]:
-    """
-    Load the processing checkpoint if it exists.
-    
-    Returns:
-        Dict or None: Checkpoint data or None if no checkpoint exists
-    """
-    if not CHECKPOINT_FILE.exists():
-        logger.info("No checkpoint file found, starting fresh")
-        return None
-    
-    try:
-        with CHECKPOINT_FILE.open('r') as f:
-            checkpoint_data = json.load(f)
-            
-        logger.info(f"Loaded checkpoint from {checkpoint_data.get('timestamp')}")
-        logger.info(f"Previously processed {len(checkpoint_data.get('processed_chunks', []))} chunks")
-        return checkpoint_data
-    except Exception as e:
-        logger.error(f"Error loading checkpoint: {e}")
-        return None
-
-def get_all_chunk_ids() -> List[int]:
-    """
-    Get all chunk IDs from the database that need to be processed.
-    
+        limit: Maximum number of chunks to retrieve
+        
     Returns:
         List of chunk IDs
     """
-    with app.app_context():
-        chunks = DocumentChunk.query.order_by(DocumentChunk.id).all()
-        return [chunk.id for chunk in chunks]
+    with flask_app.app_context():
+        # Get all chunks from the database
+        chunks = db.session.query(DocumentChunk.id).order_by(DocumentChunk.id).all()
+        chunk_ids = [chunk[0] for chunk in chunks]
+        
+        # Get chunks that are already in the vector store
+        vector_store = VectorStore()
+        processed_ids = set()
+        for doc in vector_store.documents:
+            if "chunk_id" in doc.metadata:
+                processed_ids.add(doc.metadata["chunk_id"])
+        
+        # Find chunks that haven't been processed yet
+        unprocessed_ids = [cid for cid in chunk_ids if cid not in processed_ids]
+        
+        return unprocessed_ids[:limit]
 
-def get_next_chunk_batch(remaining_chunks: List[int], batch_size: int) -> List[int]:
-    """
-    Get the next batch of chunk IDs to process.
-    
-    Args:
-        remaining_chunks: List of all remaining chunk IDs
-        batch_size: Number of chunks to include in the batch
-    
-    Returns:
-        List of chunk IDs for the next batch
-    """
-    batch_size = min(batch_size, len(remaining_chunks))
-    batch = remaining_chunks[:batch_size]
-    return batch
-
-def process_chunk(chunk_id: int) -> bool:
+def process_chunk(chunk_id: int) -> Dict[str, Any]:
     """
     Process a single chunk and add it to the vector store.
     
     Args:
         chunk_id: ID of the chunk to process
-    
+        
     Returns:
-        bool: True if successful, False otherwise
+        Dictionary with processing results
     """
-    with app.app_context():
-        try:
-            # Get the chunk from the database
-            chunk = DocumentChunk.query.get(chunk_id)
+    start_time = time.time()
+    result = {
+        "chunk_id": chunk_id,
+        "success": False,
+        "time_taken": 0,
+        "error": None
+    }
+    
+    try:
+        with flask_app.app_context():
+            # Get the chunk
+            chunk = db.session.get(DocumentChunk, chunk_id)
             if not chunk:
-                logger.error(f"Chunk {chunk_id} not found in database")
-                return False
+                result["error"] = f"Chunk {chunk_id} not found"
+                return result
             
-            # Get the document the chunk belongs to
-            document = Document.query.get(chunk.document_id)
-            if not document:
-                logger.error(f"Document {chunk.document_id} not found for chunk {chunk_id}")
-                return False
+            # Get document for metadata
+            document = chunk.document
             
-            logger.info(f"Processing chunk {chunk_id} from document {chunk.document_id}: {document.filename}")
+            # Generate embedding
+            embedding_service = EmbeddingService()
+            embedding = embedding_service.get_embedding(chunk.text_content)
             
-            # Extract text and metadata
-            text = chunk.text_content
+            # Create metadata
             metadata = {
-                "chunk_id": chunk.id,
-                "document_id": document.id,
-                "filename": document.filename,
-                "page_number": chunk.page_number,
+                "document_id": chunk.document_id,
+                "chunk_id": chunk_id,
                 "chunk_index": chunk.chunk_index,
-                "doi": document.doi,
-                "authors": document.authors,
-                "journal": document.journal,
-                "publication_year": document.publication_year,
-                "formatted_citation": document.formatted_citation
+                "page_number": chunk.page_number,
+                "source_type": document.file_type,
+                "filename": document.filename,
+                "title": document.title or document.filename
             }
             
+            # Add citation if available
+            if document.formatted_citation:
+                metadata["formatted_citation"] = document.formatted_citation
+                metadata["citation"] = document.formatted_citation
+            
+            if document.doi:
+                metadata["doi"] = document.doi
+            
+            if document.source_url:
+                metadata["url"] = document.source_url
+            
             # Add to vector store
-            vector_store.add_texts([text], [metadata])
+            vector_store = VectorStore()
+            vector_store.add_embedding(
+                text=chunk.text_content,
+                metadata=metadata,
+                embedding=embedding
+            )
             vector_store.save()
             
-            # Add a small delay to avoid rate limits
-            time.sleep(random.uniform(0.5, 1.0))
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error processing chunk {chunk_id}: {e}")
-            return False
+            result["success"] = True
+    except Exception as e:
+        result["error"] = str(e)
+    
+    # Calculate time taken
+    result["time_taken"] = time.time() - start_time
+    return result
 
-def process_chunk_batch(batch: List[int], processed_chunks: Set[int]) -> Tuple[List[int], List[int]]:
+def process_chunks_batch(chunk_ids: List[int], max_workers: int = 3) -> List[Dict[str, Any]]:
     """
-    Process a batch of chunks and return the results.
+    Process a batch of chunks in parallel.
     
     Args:
-        batch: List of chunk IDs to process
-        processed_chunks: Set of already processed chunk IDs
-    
-    Returns:
-        Tuple of (successful_ids, failed_ids)
-    """
-    successful = []
-    failed = []
-    
-    for chunk_id in batch:
-        if chunk_id in processed_chunks:
-            logger.info(f"Chunk {chunk_id} already processed, skipping")
-            continue
+        chunk_ids: List of chunk IDs to process
+        max_workers: Maximum number of parallel workers
         
-        # Add a delay between chunks to avoid rate limits
-        time.sleep(OPENAI_API_RATE_LIMIT)
-        
-        success = process_chunk(chunk_id)
-        if success:
-            successful.append(chunk_id)
-            processed_chunks.add(chunk_id)
-            logger.info(f"Successfully processed chunk {chunk_id}")
-        else:
-            failed.append(chunk_id)
-            logger.error(f"Failed to process chunk {chunk_id}")
-    
-    return successful, failed
-
-def calculate_progress_stats(processed_chunks: Set[int], total_chunks: int) -> Dict:
-    """
-    Calculate and return progress statistics.
-    
-    Args:
-        processed_chunks: Set of processed chunk IDs
-        total_chunks: Total number of chunks to process
-    
     Returns:
-        Dict with progress statistics
+        List of processing results
     """
-    processed_count = len(processed_chunks)
-    percent_complete = round(processed_count / total_chunks * 100, 1) if total_chunks > 0 else 0
-    remaining = total_chunks - processed_count
-    est_time_mins = round(remaining * OPENAI_API_RATE_LIMIT / 60, 1)
+    results = []
     
-    return {
-        "processed_count": processed_count,
-        "total_chunks": total_chunks,
-        "percent_complete": percent_complete,
-        "remaining": remaining,
-        "est_time_mins": est_time_mins
-    }
-
-def print_progress_bar(percent_complete: float, width: int = 50) -> None:
-    """
-    Print a progress bar to the console.
+    # Process chunks in parallel
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(process_chunk, chunk_id) for chunk_id in chunk_ids]
+        for future in futures:
+            results.append(future.result())
     
-    Args:
-        percent_complete: Percentage complete (0-100)
-        width: Width of the progress bar in characters
-    """
-    filled_width = int(width * percent_complete / 100)
-    bar = '█' * filled_width + '░' * (width - filled_width)
-    logger.info(f"Progress: |{bar}| {percent_complete}%")
+    return results
 
 def main():
-    """Main function to process chunks in parallel"""
-    parser = argparse.ArgumentParser(description="Process chunks in parallel to rebuild vector store")
-    parser.add_argument("--batch-size", type=int, default=5, 
-                      help="Number of chunks to process in each batch")
-    parser.add_argument("--max-chunks", type=int, default=None,
-                      help="Maximum number of chunks to process in this run")
+    """Main function."""
+    parser = argparse.ArgumentParser(description="Process chunks in parallel")
+    parser.add_argument("--limit", type=int, default=5, help="Number of chunks to process")
+    parser.add_argument("--workers", type=int, default=3, help="Maximum number of parallel workers")
+    parser.add_argument("--input", type=str, help="Optional input file with chunk IDs (JSON)")
     args = parser.parse_args()
     
-    # Set up the checkpoint directory
-    setup_checkpoint_directory()
+    # Get initial vector store size
+    with flask_app.app_context():
+        vector_store = VectorStore()
+        initial_count = len(vector_store.documents)
     
-    # Load checkpoint if it exists
-    checkpoint = load_checkpoint()
-    
-    # Initialize tracking variables
-    if checkpoint:
-        processed_chunks = set(checkpoint.get("processed_chunks", []))
-        remaining_chunks = checkpoint.get("remaining_chunks", [])
-        successful_chunks = checkpoint.get("successful_chunks", 0)
-        failed_chunks = checkpoint.get("failed_chunks", 0)
-        last_processed_time = checkpoint.get("last_processed_time", time.time())
+    # Get chunk IDs to process
+    if args.input and os.path.exists(args.input):
+        with open(args.input, 'r') as f:
+            chunk_ids = json.load(f)
     else:
-        # Get all chunks that need processing
-        all_chunk_ids = get_all_chunk_ids()
-        processed_chunks = set()
-        remaining_chunks = all_chunk_ids
-        successful_chunks = 0
-        failed_chunks = 0
-        last_processed_time = time.time()
+        chunk_ids = get_unprocessed_chunks(args.limit)
     
-    total_chunks = len(processed_chunks) + len(remaining_chunks)
+    if not chunk_ids:
+        print("No unprocessed chunks found.")
+        return
     
-    logger.info(f"Starting parallel processing with batch size: {args.batch_size}")
-    logger.info(f"Total chunks to process: {total_chunks}")
-    logger.info(f"Already processed: {len(processed_chunks)} chunks")
-    logger.info(f"Remaining: {len(remaining_chunks)} chunks")
+    print(f"Processing {len(chunk_ids)} chunks with {args.workers} workers...")
     
-    # Limit the number of chunks to process if specified
-    if args.max_chunks is not None:
-        max_to_process = min(args.max_chunks, len(remaining_chunks))
-        remaining_chunks = remaining_chunks[:max_to_process]
-        logger.info(f"Limited to processing {max_to_process} chunks this run")
-    
-    batch_count = 0
+    # Process chunks
     start_time = time.time()
+    results = process_chunks_batch(chunk_ids, args.workers)
     
-    # Process chunks in batches until none are left
-    while remaining_chunks:
-        batch_count += 1
-        batch = get_next_chunk_batch(remaining_chunks, args.batch_size)
-        
-        logger.info(f"Processing batch {batch_count} with {len(batch)} chunks")
-        
-        # Process the batch
-        successful_batch, failed_batch = process_chunk_batch(batch, processed_chunks)
-        
-        # Update counts
-        successful_chunks += len(successful_batch)
-        failed_chunks += len(failed_batch)
-        
-        # Remove processed chunks from the remaining list
-        for chunk_id in batch:
-            if chunk_id in remaining_chunks:
-                remaining_chunks.remove(chunk_id)
-        
-        # Save checkpoint after each batch
-        last_processed_time = time.time()
-        save_checkpoint(processed_chunks, remaining_chunks, last_processed_time,
-                       successful_chunks, failed_chunks)
-        
-        # Calculate and display progress
-        progress_stats = calculate_progress_stats(processed_chunks, total_chunks)
-        print_progress_bar(progress_stats["percent_complete"])
-        logger.info(f"Processed {progress_stats['processed_count']}/{progress_stats['total_chunks']} "
-                   f"chunks ({progress_stats['percent_complete']}% complete)")
-        logger.info(f"Estimated time remaining: {progress_stats['est_time_mins']} minutes")
-        
-        # Check if we've processed enough chunks for this run
-        if args.max_chunks is not None and successful_chunks >= args.max_chunks:
-            logger.info(f"Reached max chunks limit ({args.max_chunks}), stopping")
-            break
+    # Print results
+    successful = [r for r in results if r["success"]]
+    failed = [r for r in results if not r["success"]]
     
-    # Final report
-    elapsed_time = time.time() - start_time
-    elapsed_mins = elapsed_time / 60
-    logger.info(f"Completed processing in {elapsed_mins:.2f} minutes")
-    logger.info(f"Successfully processed {successful_chunks} chunks")
-    logger.info(f"Failed to process {failed_chunks} chunks")
+    print("\nPROCESSING RESULTS:")
+    print(f"Total chunks:      {len(chunk_ids)}")
+    print(f"Successful:        {len(successful)}")
+    print(f"Failed:            {len(failed)}")
+    print(f"Time taken:        {time.time() - start_time:.2f} seconds")
     
-    # Calculate final progress
-    final_stats = calculate_progress_stats(processed_chunks, total_chunks)
-    logger.info(f"Overall progress: {final_stats['percent_complete']}% complete")
+    # Get final vector store size
+    with flask_app.app_context():
+        vector_store = VectorStore()
+        final_count = len(vector_store.documents)
     
-    if remaining_chunks:
-        logger.info(f"There are {len(remaining_chunks)} chunks remaining to process")
-    else:
-        logger.info("All chunks have been processed!")
+    print(f"Documents added:   {final_count - initial_count}")
+    print(f"Vector store size: {final_count} documents")
+    
+    # Print failed chunks if any
+    if failed:
+        print("\nFAILED CHUNKS:")
+        for fail in failed:
+            print(f"  - Chunk {fail['chunk_id']}: {fail['error']}")
 
 if __name__ == "__main__":
     main()

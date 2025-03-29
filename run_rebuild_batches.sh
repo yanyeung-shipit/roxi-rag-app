@@ -5,9 +5,9 @@
 # Usage: ./run_rebuild_batches.sh [BATCH_COUNT] [CHUNKS_PER_BATCH]
 
 # Configuration
-BATCH_COUNT=${1:-3}         # Number of batches to run (default: 3)
-CHUNKS_PER_BATCH=${2:-2}    # Number of chunks per batch (default: 2)
-PAUSE_BETWEEN=10            # Pause between batches in seconds
+BATCH_COUNT=${1:-10}        # Number of batches to run (default: 10)
+CHUNKS_PER_BATCH=${2:-5}    # Number of chunks per batch (default: 5)
+PAUSE_BETWEEN=5             # Pause between batches in seconds
 
 echo "=============================================="
 echo "BATCH REBUILD CONTROLLER"
