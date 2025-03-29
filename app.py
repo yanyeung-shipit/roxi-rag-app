@@ -889,34 +889,18 @@ def add_topic_pages():
                     new_document.title = chunks[0]['metadata']['title']
                     db.session.commit()
                 
-                # MEMORY OPTIMIZATION: Dynamic chunk limits based on topic importance
+                # MEMORY OPTIMIZATION: Set chunk limits based on request size
+                # NOTE: All topics are now treated equally with no priority distinction
                 
-                # Check if this is a priority topic (important rheumatology conditions)
-                priority_topics = ['rheumatoid-arthritis', 'lupus', 'systemic-sclerosis', 
-                                  'vasculitis', 'myositis', 'spondyloarthritis', 'psoriatic-arthritis']
-                
-                is_priority = any(pt in topic_slug for pt in priority_topics)
-                
-                # Set chunk limit based on priority and whether this is a single topic request
-                # NOTE: These limits have been significantly increased now that the web scraper is more efficient
-                if is_priority:
-                    if len(topics) == 1:
-                        # For single priority topics, allow many more chunks
-                        max_chunks = 80
-                        logger.info(f"Single priority topic requested: {topic}, allowing {max_chunks} chunks")
-                    else:
-                        # For multiple topics including at least one priority topic
-                        max_chunks = 50
-                        logger.info(f"Priority topic in batch: {topic}, allowing {max_chunks} chunks")
+                # Set chunk limit based on whether this is a single topic request
+                if len(topics) == 1:
+                    # For single topics, allow maximum chunks
+                    max_chunks = 125
+                    logger.info(f"Single topic requested: {topic}, allowing {max_chunks} chunks")
                 else:
-                    if len(topics) == 1:
-                        # For single regular topics
-                        max_chunks = 40
-                        logger.info(f"Regular topic requested: {topic}, allowing {max_chunks} chunks")
-                    else:
-                        # For multiple regular topics
-                        max_chunks = 25
-                        logger.info(f"Regular topic in batch: {topic}, allowing {max_chunks} chunks")
+                    # For multiple topics, reduce chunks to avoid memory issues
+                    max_chunks = 50
+                    logger.info(f"Topic in batch: {topic}, allowing {max_chunks} chunks")
                 
                 # Store the original number of chunks for later use
                 original_chunk_count = len(chunks)
