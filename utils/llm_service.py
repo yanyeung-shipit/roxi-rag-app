@@ -335,8 +335,10 @@ def generate_response(query, context_documents):
         for title, pdf_info in pdf_sources.items():
             # Skip sources with title "Health Canada Rheumatoid Arthritis Factsheet" as this was deleted
             # Also skip if the file_path contains "Health_Canada_rheumatoid-arthritis-factsheet"
+            # Also skip if the citation mentions the Health Canada document
             if ("Health Canada Rheumatoid Arthritis Factsheet" in title or 
-                (pdf_info.get("file_path") and "Health_Canada_rheumatoid-arthritis-factsheet" in pdf_info.get("file_path", ""))):
+                (pdf_info.get("file_path") and "Health_Canada_rheumatoid-arthritis-factsheet" in pdf_info.get("file_path", "")) or
+                (pdf_info.get("citation") and "Health Canada Rheumatoid Arthritis Factsheet" in pdf_info.get("citation", ""))):
                 logger.info(f"Skipping deleted document: {title}")
                 continue
                 
@@ -653,8 +655,10 @@ def generate_response(query, context_documents):
                 if doc_id in doc_id_to_source:
                     source = doc_id_to_source[doc_id]
                     
-                    # Skip Health Canada document as requested
-                    if "title" in source and "Health Canada Rheumatoid Arthritis Factsheet" in source.get("title", ""):
+                    # Skip Health Canada document as requested - check both title and citation
+                    if (("title" in source and "Health Canada Rheumatoid Arthritis Factsheet" in source.get("title", "")) or
+                        ("citation" in source and "Health Canada Rheumatoid Arthritis Factsheet" in source.get("citation", "")) or
+                        ("file_path" in source and "Health_Canada_rheumatoid-arthritis-factsheet" in source.get("file_path", ""))):
                         logger.info(f"Skipping deleted document reference: {source.get('title', '')}")
                         continue
                     
@@ -680,8 +684,9 @@ def generate_response(query, context_documents):
                         orig_doc = doc_id_mapping[doc_id]
                         metadata = orig_doc.get("metadata", {})
                         
-                        # Skip Health Canada document as requested
-                        if "title" in metadata and "Health Canada Rheumatoid Arthritis Factsheet" in metadata.get("title", ""):
+                        # Skip Health Canada document as requested - check both title and file path
+                        if (("title" in metadata and "Health Canada Rheumatoid Arthritis Factsheet" in metadata.get("title", "")) or
+                            ("file_path" in metadata and "Health_Canada_rheumatoid-arthritis-factsheet" in metadata.get("file_path", ""))):
                             logger.info(f"Skipping deleted document reference from metadata: {metadata.get('title', '')}")
                             continue
                             
@@ -787,10 +792,17 @@ def generate_response(query, context_documents):
                     answer = answer.replace(f"[{doc_id}]", "")
                     logger.info(f"Removed citation [{doc_id}] as it was filtered out")
             
-            # Add sources to the answer text
-            for i, source in enumerate(final_sources, 1):
-                citation = source.get("citation", "Rheumatology Document")
-                answer += f"\n{i}. {citation}"
+            # Remove any "Sources:" section that might be in the answer body (added by the model)
+            # This pattern matches "Sources:" followed by a list of numbered items
+            sources_pattern = r'\*\*Sources:\*\*.*?\d+\.\s.*?(?=\n\n|$)'
+            answer = re.sub(sources_pattern, '', answer, flags=re.DOTALL)
+            
+            # Also try to match other variations
+            sources_pattern2 = r'Sources:.*?\d+\.\s.*?(?=\n\n|$)'
+            answer = re.sub(sources_pattern2, '', answer, flags=re.DOTALL)
+            
+            # Clean up any double newlines that might result
+            answer = re.sub(r'\n{3,}', '\n\n', answer)
             
             # Return only the sources that were actually referenced
             return answer, final_sources
