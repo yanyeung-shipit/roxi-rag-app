@@ -30,9 +30,12 @@ async function loadBackgroundStatus() {
         if (data.success) {
             console.log("Background status:", data);
             
-            const status = data.status;
-            const unprocessedCount = data.unprocessed_documents;
-            const waitingForMoreContent = status.documents_waiting_for_more_content || 0;
+            // Use status key for backward compatibility, fallback to processor_status
+            const status = data.status || data.processor_status;
+            // Use the dedicated unprocessed_documents count
+            const unprocessedCount = data.unprocessed_documents || data.total_unprocessed_count || 0;
+            // Get count of documents waiting for more content
+            const waitingForMoreContent = status ? (status.documents_waiting_for_more_content || 0) : 0;
             
             // Format the last run time
             let lastRunText = "Never";

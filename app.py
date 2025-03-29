@@ -1847,10 +1847,13 @@ def get_background_status():
         except Exception:
             unprocessed_count = len(unprocessed_docs)
         
+        # Return JSON response with consistent key names that match frontend expectations
         return jsonify({
             'success': True, 
+            'status': processor_status,  # For backward compatibility
             'processor_status': processor_status,
-            'unprocessed_documents': unprocessed_docs,
+            'unprocessed_documents': unprocessed_count,  # Return the count, not the detailed objects
+            'unprocessed_document_details': unprocessed_docs,  # Detailed object list
             'total_unprocessed_count': unprocessed_count,
             'has_pending_work': len(unprocessed_docs) > 0 or unprocessed_count > 0
         })
