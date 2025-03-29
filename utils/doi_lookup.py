@@ -250,6 +250,7 @@ def format_citation(metadata: Dict[str, Any]) -> str:
 def extract_doi_from_text(text: str) -> Optional[str]:
     """
     Extract DOI from text using regex pattern matching.
+    Enhanced version that handles more cases and is more aggressive in finding DOIs.
     
     Args:
         text (str): The text to search for DOIs.
@@ -264,30 +265,111 @@ def extract_doi_from_text(text: str) -> Optional[str]:
     # 1. Full URL: https://doi.org/10.xxxx/yyyy
     # 2. Prefixed: doi:10.xxxx/yyyy
     # 3. Plain: 10.xxxx/yyyy
+    # 4. DOI in parentheses: (doi: 10.xxxx/yyyy) or (10.xxxx/yyyy)
+    # 5. DOI with text: DOI 10.xxxx/yyyy or Digital Object Identifier: 10.xxxx/yyyy
     
-    # Regex pattern to match DOIs
+    # Regex pattern to match DOIs - ordered by specificity
     doi_patterns = [
-        r'https?://doi\.org/10\.\d+/[^\s"\'<>]+',  # URL format
-        r'doi:10\.\d+/[^\s"\'<>]+',                # doi: prefix
-        r'10\.\d+/[^\s"\'<>]+'                    # plain format
+        # URL formats
+        r'https?://doi\.org/10\.\d+/[^\s"\'<>)]+',  # URL format
+        
+        # Explicit DOI labels
+        r'(?:doi|DOI)[\s:=]+10\.\d+/[^\s"\'<>)]+',  # doi: prefix or DOI: prefix
+        r'(?:Digital Object Identifier|D\.O\.I\.)[\s:=]+10\.\d+/[^\s"\'<>)]+',  # Full label
+        
+        # Parenthesized formats
+        r'\(doi[\s:]*10\.\d+/[^\s"\'<>)]+\)',  # (doi: 10.xxxx/yyyy)
+        r'\(10\.\d+/[^\s"\'<>)]+\)',  # (10.xxxx/yyyy)
+        
+        # Plain DOI format - most generic, should be last
+        r'10\.\d+/[^\s"\'<>)]+'  # plain format
     ]
     
-    found_doi = None
-    
+    # First try patterns in order (most specific first)
     for pattern in doi_patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             found_doi = match.group(0)
             # Clean up the DOI
-            if found_doi.lower().startswith('https://doi.org/'):
-                found_doi = found_doi[16:]
-            elif found_doi.lower().startswith('doi:'):
-                found_doi = found_doi[4:]
-            
-            logger.debug(f"Extracted DOI from text: {found_doi}")
+            found_doi = clean_doi(found_doi)
+            logger.debug(f"Extracted DOI from text (first pass): {found_doi}")
             return found_doi
     
+    # If that didn't work, try a more aggressive search by looking for "10." followed by digits and slash
+    # This is more prone to false positives but helps with difficult cases
+    # Look near typical DOI markers
+    doi_markers = [
+        "doi", "DOI", "https://doi", "object identifier", 
+        "citation", "reference", "article", "journal"
+    ]
+    
+    # For each marker, look nearby (within 100 chars) for a potential DOI
+    for marker in doi_markers:
+        marker_pos = text.lower().find(marker)
+        if marker_pos >= 0:
+            # Get surrounding text (50 chars before, 100 chars after marker)
+            start = max(0, marker_pos - 50)
+            end = min(len(text), marker_pos + 100)
+            context = text[start:end]
+            
+            # Look for "10." followed by digits and slash in this context
+            match = re.search(r'10\.\d+/[^\s"\'<>)]+', context)
+            if match:
+                found_doi = match.group(0)
+                found_doi = clean_doi(found_doi)
+                logger.debug(f"Extracted DOI from text near '{marker}': {found_doi}")
+                return found_doi
+    
+    # Final attempt: check if there's a PubMed or PMC ID, which we could potentially use for lookup
+    # (not implemented yet, just flagging the possibility)
+    pubmed_match = re.search(r'(?:PMID|pubmed)[\s:]*(\d+)', text, re.IGNORECASE)
+    if pubmed_match:
+        logger.debug(f"Found PubMed ID but no DOI: {pubmed_match.group(1)}")
+        # In the future, we could implement PubMed ID to DOI conversion
+    
     return None
+
+def clean_doi(doi_text: str) -> str:
+    """
+    Clean a DOI string by removing prefixes and extra characters.
+    
+    Args:
+        doi_text (str): The DOI string to clean.
+        
+    Returns:
+        str: The cleaned DOI.
+    """
+    # Remove common prefixes
+    prefixes = [
+        'https://doi.org/', 'http://doi.org/', 
+        'doi:', 'DOI:', 'doi ', 'DOI ', 
+        'Digital Object Identifier:', 'D.O.I.:',
+        'Digital Object Identifier ', 'D.O.I. '
+    ]
+    
+    result = doi_text.strip()
+    
+    # Handle parenthesized DOIs
+    if result.startswith('(') and result.endswith(')'):
+        result = result[1:-1].strip()
+    
+    # Remove prefixes
+    for prefix in prefixes:
+        if result.lower().startswith(prefix.lower()):
+            result = result[len(prefix):].strip()
+            break
+    
+    # Remove any trailing punctuation or problematic characters
+    result = re.sub(r'[,.;:"\'<>)\s]+$', '', result)
+    
+    # Ensure it starts with 10.
+    if not result.startswith('10.'):
+        # Try to find 10. in the string
+        match = re.search(r'10\.\d+/[^\s"\'<>)]+', result)
+        if match:
+            result = match.group(0)
+    
+    return result
 
 def get_citation_from_doi(doi: str) -> Tuple[bool, Dict[str, Any]]:
     """

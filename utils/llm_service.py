@@ -722,11 +722,41 @@ def generate_response(query, context_documents):
                                 citation = f"{title}. https://doi.org/{metadata.get('doi')}"
                                 logger.info(f"Using basic DOI-based citation after error: {citation}")
                         else:
-                            # Try to extract DOI from the text
-                            # Get text from the original document and try extracting DOI
+                            # Try to extract DOI from the text - more aggressive approach
+                            # Get text from the original document or any chunks we can find
+                            text = ""
                             
-                            # Get text from the original document if available
-                            text = orig_doc.get("text", "")
+                            # First try document text
+                            if orig_doc.get("text"):
+                                text = orig_doc.get("text", "")
+                                
+                            # If no text or too short, try to get text from all chunks with the same doc_id
+                            if len(text) < 1000 and isinstance(doc_id_mapping, dict):
+                                all_chunks_text = []
+                                for doc_key, doc_value in doc_id_mapping.items():
+                                    # If document belongs to same PDF based on filename pattern
+                                    if doc_value.get("metadata") and doc_value.get("metadata").get("file_path") and metadata.get("file_path"):
+                                        doc_filename = os.path.basename(doc_value.get("metadata").get("file_path", ""))
+                                        current_filename = os.path.basename(metadata.get("file_path", ""))
+                                        
+                                        # Try to match filenames ignoring timestamp prefixes
+                                        if len(doc_filename) > 15 and doc_filename[:8].isdigit() and doc_filename[8:15].isdigit() and doc_filename[15] == '_':
+                                            doc_filename = doc_filename[16:]
+                                        if len(current_filename) > 15 and current_filename[:8].isdigit() and current_filename[8:15].isdigit() and current_filename[15] == '_':
+                                            current_filename = current_filename[16:]
+                                            
+                                        if doc_filename == current_filename:
+                                            if doc_value.get("text"):
+                                                all_chunks_text.append(doc_value.get("text", ""))
+                                
+                                # Combine all chunks text
+                                if all_chunks_text:
+                                    combined_text = "\n".join(all_chunks_text)
+                                    # Use combined text if it's longer than the current text
+                                    if len(combined_text) > len(text):
+                                        text = combined_text
+                                        logger.info(f"Using combined text from multiple chunks: {len(text)} characters")
+                            
                             if text:
                                 # Try to extract DOI
                                 doi = extract_doi_from_text(text)
@@ -738,6 +768,11 @@ def generate_response(query, context_documents):
                                         logger.info(f"Got citation from extracted DOI: {citation}")
                                     else:
                                         logger.info(f"DOI extraction succeeded but citation lookup failed")
+                                        # Even if lookup failed, we can still use the DOI for a basic citation
+                                        citation = f"{title}. https://doi.org/{doi}"
+                                        logger.info(f"Using basic DOI-based citation: {citation}")
+                                else:
+                                    logger.info(f"Could not extract DOI from {len(text)} characters of text")
                             
                             # If we still don't have a citation, try to get a better title from filename
                             if not citation and metadata.get("file_path"):
