@@ -124,6 +124,58 @@ class VectorStore:
                         pass
             # Note: we deliberately don't raise the exception to avoid crashing the server
     
+    def save(self):
+        """Public method to explicitly save the vector store to disk."""
+        self._save()
+        
+    def add_embedding(self, text, embedding, metadata=None):
+        """
+        Add text with a pre-computed embedding to the vector store.
+        
+        Args:
+            text (str): Text content to add
+            embedding (list): Pre-computed embedding vector
+            metadata (dict): Metadata associated with the text
+            
+        Returns:
+            str: Document ID if successful
+            
+        Raises:
+            Exception: If an error occurs
+        """
+        try:
+            # Skip empty or very short text
+            if not text or len(text) < 10:
+                logger.warning("Skipped adding very short or empty text")
+                return None
+            
+            # Create a unique ID for this document
+            doc_id = str(uuid.uuid4())
+            
+            # Store text and metadata
+            self.documents[doc_id] = {
+                "text": text,
+                "metadata": metadata or {}
+            }
+            
+            # Convert embedding to numpy array
+            embedding_array = np.array([embedding], dtype=np.float32)
+            
+            # Add to index
+            faiss.normalize_L2(embedding_array)
+            self.index.add(embedding_array)
+            
+            # Update document type counts
+            doc_type = metadata.get("source_type", "unknown") if metadata else "unknown"
+            self.document_counts[doc_type] += 1
+            
+            # Return the document ID
+            return doc_id
+            
+        except Exception as e:
+            logger.error(f"Error adding embedding: {e}")
+            return None
+        
     def add_text(self, text, metadata=None):
         """
         Add text to the vector store.

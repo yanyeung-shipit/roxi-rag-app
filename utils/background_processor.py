@@ -25,6 +25,36 @@ Session = scoped_session(session_factory)
 # Initialize vector store
 vector_store = VectorStore()
 
+# Global background processor instance
+_background_processor = None
+
+def initialize_background_processor(batch_size=1, sleep_time=5):
+    """
+    Initialize and start the background processor.
+    This function is called from main.py to start the background processor.
+    
+    Args:
+        batch_size (int): Number of documents to process in each batch
+        sleep_time (int): Time to sleep between batches in seconds
+    
+    Returns:
+        BackgroundProcessor: The background processor instance
+    """
+    global _background_processor
+    
+    # If already initialized, just return the existing instance
+    if _background_processor is not None:
+        logger.info("Background processor already initialized")
+        return _background_processor
+    
+    # Create a new background processor
+    _background_processor = BackgroundProcessor(batch_size=batch_size, sleep_time=sleep_time)
+    
+    # Start the background processor
+    _background_processor.start()
+    
+    return _background_processor
+
 class BackgroundProcessor:
     """
     Background processor for handling document processing.
