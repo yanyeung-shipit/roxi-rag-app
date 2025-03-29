@@ -258,18 +258,21 @@ def _process_page(url, page_queue, visited, results, max_pages):
             logger.info(f"Using enhanced extraction for topic page: {url}")
             
             # Try multiple approaches for topic pages since they're critical content
-            # First, try trafilatura's extraction with optimized parameters
+            # First, try trafilatura's extraction with maximized parameters for maximum content
             text = trafilatura.extract(
                 downloaded, 
-                include_links=True, 
-                include_images=False, 
-                include_tables=True, 
-                deduplicate=True, 
-                no_fallback=False,
-                favor_recall=True,  # Better for disease pages to get more content
-                include_comments=True,  # Include comments which may have useful info
-                include_formatting=True,  # Preserve more formatting for disease pages
-                target_language="en"     # Ensure English content
+                include_links=True,        # Include links to capture references
+                include_images=True,       # Include image captions which may contain useful text
+                include_tables=True,       # Tables often contain important disease information
+                deduplicate=False,         # Don't deduplicate to ensure we get all content
+                no_fallback=False,         # Always use fallback methods if needed
+                favor_recall=True,         # Prioritize getting more content over precision
+                include_comments=True,     # Include comments which may have useful info
+                include_formatting=True,   # Preserve formatting which can provide structure
+                target_language="en",      # Ensure English content
+                include_anchors=True,      # Include anchor texts which are often navigation items
+                include_headings=True,     # Ensure headers are captured as they organize content
+                include_footnotes=True     # Footnotes may contain valuable references
             )
             
             # If trafilatura extraction fails, use BeautifulSoup as a backup
@@ -355,15 +358,21 @@ This is a specialized page about {topic_name} in rheumatology.
 The page appears to contain information about this specific condition or topic,
 but full content extraction was not possible."""
         else:
+            # Use the same enhanced parameters for all pages to maximize content extraction
             text = trafilatura.extract(
                 downloaded, 
-                include_links=True, 
-                include_images=False, 
-                include_tables=True, 
-                deduplicate=True, 
-                no_fallback=False,
-                favor_precision=False,
-                include_comments=True  # Include comments which may have useful info
+                include_links=True,        # Include links to capture references
+                include_images=True,       # Include image captions which may contain useful text
+                include_tables=True,       # Tables often contain important disease information
+                deduplicate=False,         # Don't deduplicate to ensure we get all content
+                no_fallback=False,         # Always use fallback methods if needed
+                favor_recall=True,         # Prioritize getting more content over precision
+                include_comments=True,     # Include comments which may have useful info
+                include_formatting=True,   # Preserve formatting which can provide structure
+                target_language="en",      # Ensure English content
+                include_anchors=True,      # Include anchor texts which are often navigation items
+                include_headings=True,     # Ensure headers are captured as they organize content
+                include_footnotes=True     # Footnotes may contain valuable references
             )
         
         # Try alternate extraction if needed
@@ -471,9 +480,9 @@ but full content extraction was not possible."""
         # Get page number for metadata
         page_num = len(visited) + 1
         
-        # Process content
+        # Process content with larger chunk sizes
         chunks = []
-        text_chunks = chunk_text(text, max_length=800, overlap=200)
+        text_chunks = chunk_text(text, max_length=1000, overlap=250)
         
         for i, chunk in enumerate(text_chunks):
             chunks.append({
@@ -927,8 +936,8 @@ def create_minimal_content_for_topic(url):
                 for chunk in response.iter_content(chunk_size=1024 * 8, decode_unicode=True):
                     if chunk:
                         html_content += chunk
-                        # Safety limit to avoid memory issues - stop at 100KB
-                        if len(html_content) > 100 * 1024:
+                        # Safety limit to avoid memory issues, but make it much larger
+                        if len(html_content) > 1000 * 1024:  # 1MB limit instead of 100KB
                             logger.warning(f"Reached HTML content size limit for {url}, truncating")
                             break
                 
@@ -978,8 +987,9 @@ def create_minimal_content_for_topic(url):
         
         # Create content
         if content_text and len(content_text) > 200:
-            # Format with title and content, but limit size
-            text = f"{title}\n\n{content_text[:20000]}"  # Limit to 20000 chars to get more content
+            # Format with title and content - extract as much content as possible
+            # Greatly increase size to allow all content
+            text = f"{title}\n\n{content_text[:100000]}"  # Limit to 100000 chars to get all content
             logger.info(f"Created content with actual extracted text (limited to {len(text)} chars)")
         else:
             # Create minimal fallback
@@ -997,12 +1007,11 @@ The page appears to contain information about this specific condition or topic."
         # Use our standard chunking function with better parameters
         text_chunks = chunk_text(text, max_length=1000, overlap=150)
         
-        # Default chunk limit with priority levels
-        default_max_chunks = 15
+        # No chunk limit - process all content
+        # All topics are equally important and should have maximum chunks
         
-        # Check URL for priority topics that deserve more chunks
-        priority_topics = ['rheumatoid-arthritis', 'lupus', 'systemic-sclerosis', 
-                           'vasculitis', 'myositis', 'spondyloarthritis', 'psoriatic-arthritis']
+        # Extremely high maximum to effectively disable the limit
+        max_chunks = 1000
         
         parsed_url = urllib.parse.urlparse(url)
         path_parts = parsed_url.path.strip('/').split('/')
@@ -1010,12 +1019,7 @@ The page appears to contain information about this specific condition or topic."
         # Extract topic from URL
         current_topic = path_parts[-1] if path_parts else ""
         
-        # Set chunk limit based on topic priority
-        if any(priority in current_topic for priority in priority_topics):
-            max_chunks = 30  # Higher limit for priority topics
-            logger.info(f"Priority topic detected: {current_topic}, allowing up to {max_chunks} chunks")
-        else:
-            max_chunks = default_max_chunks
+        logger.info(f"Processing topic {current_topic} with no chunk limit")
         
         # Apply chunk limit if needed
         if len(text_chunks) > max_chunks:
@@ -1193,8 +1197,8 @@ def _scrape_single_page(url):
         # Generate citation
         citation = generate_website_citation(title, url)
         
-        # Chunk content
-        text_chunks = chunk_text(text, max_length=800, overlap=200)
+        # Chunk content with larger chunk size and more overlap for better context
+        text_chunks = chunk_text(text, max_length=1000, overlap=250)
         
         # Create chunks with metadata
         chunks = []
