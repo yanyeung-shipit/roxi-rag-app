@@ -1,75 +1,119 @@
-# Batch Processing Guide for Vector Store Rebuilding
+# Batch Processing Guide
 
-This guide explains how to use the batch processing tools to gradually rebuild the vector store without running into Replit resource limitations.
+This guide explains how to use the batch processing tools to process chunks incrementally and add them to the vector store.
 
-## Overview
+## Background
 
-The system has 1,261 total document chunks in the database, but only a portion of them (approximately 35% as of March 29, 2025) have been added to the vector store with embeddings. The batch processing tools allow you to gradually process more chunks without waiting for all of them to complete at once, which would exceed Replit's resource limits.
+The vector store needs to be populated with embeddings for all the chunks in the database. This is a time-consuming process, but it can be done incrementally. The scripts in this guide are designed to process chunks in a reliable way, avoiding timeouts and errors.
 
-## Available Tools
+## Quick Start
 
-### 1. Single Batch Processor
-
-The `process_next_batch.sh` script processes a specific number of chunks in one execution:
-
-```bash
-./process_next_batch.sh [batch_size]
+Process chunks one at a time (most reliable method):
+```
+./process_single_chunk.sh 6683  # Replace with the next chunk ID to process
 ```
 
-- `batch_size`: Optional. Number of chunks to process in one batch (default: 8)
-
-Example: `./process_next_batch.sh 5` to process 5 chunks
-
-### 2. Continuous Processor
-
-The `run_continuous_processor.sh` script attempts to continuously process batches of chunks until completion or until reaching a maximum number of batches:
-
-```bash
-./run_continuous_processor.sh [batch_size] [max_batches]
+Process a small batch of chunks (5 by default):
+```
+./process_multiple_chunks.sh 6682 5  # Replace first number with the last processed chunk ID
 ```
 
-- `batch_size`: Optional. Number of chunks per batch (default: 5)
-- `max_batches`: Optional. Maximum number of batches to process (default: 100)
+Get the next chunks that need to be processed:
+```
+python get_next_chunks.py 6682 --limit 10  # Replace with the last processed chunk ID
+```
 
-Example: `./run_continuous_processor.sh 8 10` to process 10 batches of 8 chunks each
-
-### 3. Progress Checker
-
-Check the current progress at any time:
-
-```bash
+Check the current progress:
+```
 python check_progress.py
 ```
 
-## Recommended Usage
+## Script Details
 
-### For Manual Processing
+### `process_single_chunk.sh`
 
-1. Run `./process_next_batch.sh 5` to process 5 chunks at a time
-2. Check progress with `python check_progress.py`
-3. Repeat as needed until all chunks are processed
+This script processes a single chunk and adds it to the vector store.
 
-### For Semi-Automatic Processing
+**Usage:**
+```
+./process_single_chunk.sh CHUNK_ID
+```
 
-1. Run `./run_continuous_processor.sh 5 20` to process up to 20 batches of 5 chunks each
-2. If it times out, simply run it again to continue processing
+**Example:**
+```
+./process_single_chunk.sh 6683
+```
 
-## Logs and Monitoring
+### `process_multiple_chunks.sh`
 
-- Batch processing logs are stored in `logs/batch_processing/`
-- Each log file is named with a timestamp (e.g., `batch_20250329_214143.log`)
-- These logs contain detailed information about each batch processing run
+This script processes multiple chunks in sequence, one at a time. It's designed to be more reliable than batch processing by handling each chunk individually.
 
-## Processing Speed and Performance
+**Usage:**
+```
+./process_multiple_chunks.sh LAST_ID BATCH_SIZE
+```
 
-- Each chunk takes approximately 0.4-0.8 seconds to process
-- Batch processing is significantly more efficient than processing chunks one at a time
-- The system automatically handles errors and timeouts gracefully
-- Estimated completion time for all chunks is displayed after each progress check
+**Example:**
+```
+./process_multiple_chunks.sh 6682 10
+```
 
-## Background Information
+### `get_next_chunks.py`
 
-- The vector store contains embeddings for document chunks, which are used for semantic search
-- Each chunk must exist in both the database AND the vector store to be searchable
-- The batch processing ensures that chunks are properly added to the vector store with embeddings
-- Once all chunks are processed, the system will have complete searchability across all documents
+This script gets the next chunks to process after a given ID.
+
+**Usage:**
+```
+python get_next_chunks.py LAST_ID [--limit LIMIT]
+```
+
+**Example:**
+```
+python get_next_chunks.py 6682 --limit 5
+```
+
+### `check_progress.py`
+
+This script checks the current progress of rebuilding the vector store.
+
+**Usage:**
+```
+python check_progress.py
+```
+
+## Workflow
+
+A typical workflow would be:
+
+1. Check the current progress to see which chunks are already processed:
+   ```
+   python check_progress.py
+   ```
+
+2. Get the next batch of chunks to process:
+   ```
+   python get_next_chunks.py LAST_ID --limit 10
+   ```
+
+3. Process each chunk one at a time:
+   ```
+   ./process_single_chunk.sh CHUNK_ID
+   ```
+   
+   Or process a small batch at once:
+   ```
+   ./process_multiple_chunks.sh LAST_ID 5
+   ```
+
+4. Check the progress again to confirm the chunks were added:
+   ```
+   python check_progress.py
+   ```
+
+## Tips
+
+- Processing one chunk at a time is the most reliable method in the Replit environment
+- Each chunk takes approximately 1-1.5 seconds to process
+- Logs are stored in the `logs/batch_processing` directory
+- If a script times out, you can safely run it again with the next chunk ID
+- Don't run multiple processing scripts at the same time to avoid conflicts

@@ -1,130 +1,74 @@
 #!/bin/bash
-
-# process_multiple_chunks.sh
-# Process multiple chunks one by one with high reliability
-# Usage: ./process_multiple_chunks.sh [COUNT]
+# Process multiple chunks in sequence, one at a time
+# This script is designed to be more reliable by processing chunks individually
 
 # Configuration
-COUNT=${1:-5}           # Number of chunks to process (default: 5)
-TIMEOUT=20              # Timeout in seconds for chunk processing (reduced for speed)
-MAX_RETRIES=2           # Maximum number of retries for a failed chunk (reduced for speed)
-PAUSE_BETWEEN=3         # Pause between chunks in seconds (reduced for speed)
-CHUNK_LIST_FILE="chunks_to_process.json"
+LAST_ID=${1:-6681}  # Default to last ID we processed
+BATCH_SIZE=${2:-10}  # Default to 10 chunks per batch
+LOG_DIR="logs/batch_processing"
+LOG_PREFIX="chunks_sequential_$(date +%Y%m%d_%H%M%S)"
+MASTER_LOG="$LOG_DIR/${LOG_PREFIX}_master.log"
 
-echo "=============================================="
-echo "SEQUENTIAL MULTI-CHUNK PROCESSOR"
-echo "=============================================="
-echo "Starting at:        $(date)"
-echo "Target chunks:      $COUNT"
-echo "Timeout:            $TIMEOUT seconds"
-echo "Max retries:        $MAX_RETRIES"
-echo "=============================================="
+# Create log directory if it doesn't exist
+mkdir -p "$LOG_DIR"
 
-# Make scripts executable
-chmod +x process_chunk.py fast_process_chunk.py find_unprocessed_chunks.py
+# Log the start
+echo "======================================================" | tee -a "$MASTER_LOG"
+echo "SEQUENTIAL PROCESSING START: $(date +%Y%m%d_%H%M%S)" | tee -a "$MASTER_LOG"
+echo "Last processed ID: $LAST_ID" | tee -a "$MASTER_LOG"
+echo "Batch size: $BATCH_SIZE" | tee -a "$MASTER_LOG"
+echo "======================================================" | tee -a "$MASTER_LOG"
 
-# Get initial vector store size
-INITIAL_COUNT=$(python check_progress.py | grep "Vector store:" | awk '{print $3}')
-echo "Initial vector store size: $INITIAL_COUNT chunks"
+# Check initial state
+echo "Initial state:" | tee -a "$MASTER_LOG"
+python check_progress.py | tee -a "$MASTER_LOG"
+echo "" | tee -a "$MASTER_LOG"
 
-# Track overall success/failure
-SUCCESSFUL=0
-FAILED=0
+# Get the next chunks to process
+echo "Getting next chunks to process after ID $LAST_ID..." | tee -a "$MASTER_LOG"
+NEXT_CHUNKS=$(python get_next_chunks.py $LAST_ID --limit $BATCH_SIZE)
 
-# Process each chunk
-for ((chunk=1; chunk<=COUNT; chunk++)); do
-    echo ""
-    echo "=============================================="
-    echo "PROCESSING CHUNK $chunk of $COUNT"
-    echo "=============================================="
+# Count how many chunks we got
+CHUNK_COUNT=$(echo "$NEXT_CHUNKS" | wc -l)
+echo "Found $CHUNK_COUNT chunks to process" | tee -a "$MASTER_LOG"
+
+# Process each chunk one at a time
+if [ -n "$NEXT_CHUNKS" ]; then
+    echo "Processing $CHUNK_COUNT chunks..." | tee -a "$MASTER_LOG"
+    success_count=0
+    failure_count=0
     
-    # Get the next unprocessed chunk ID
-    echo "Finding next unprocessed chunk..."
-    python find_unprocessed_chunks.py --limit 1 --output $CHUNK_LIST_FILE
-    if [ ! -f "$CHUNK_LIST_FILE" ]; then
-        echo "Error: Failed to generate list of unprocessed chunks"
-        break
-    fi
-    
-    # Get the chunk ID
-    CHUNK_ID=$(cat $CHUNK_LIST_FILE | tr -d '[]')
-    if [ -z "$CHUNK_ID" ]; then
-        echo "No more chunks to process!"
-        break
-    fi
-    
-    echo "Selected chunk ID: $CHUNK_ID"
-    
-    # Try to process the chunk with retries
-    CHUNK_SUCCESS=false
-    for ((i=1; i<=MAX_RETRIES; i++)); do
-        echo ""
-        echo "Processing attempt $i/$MAX_RETRIES for chunk $CHUNK_ID"
+    echo "$NEXT_CHUNKS" | while read -r chunk_id; do
+        echo "Processing chunk $chunk_id..." | tee -a "$MASTER_LOG"
         
-        # Run with timeout using faster implementation
-        timeout $TIMEOUT python fast_process_chunk.py $CHUNK_ID
-        RESULT=$?
-        
-        # Check result
-        if [ $RESULT -eq 0 ]; then
-            echo "✅ Successfully processed chunk $CHUNK_ID"
-            CHUNK_SUCCESS=true
-            SUCCESSFUL=$((SUCCESSFUL+1))
-            break
-        elif [ $RESULT -eq 124 ]; then
-            echo "⚠️ Chunk $CHUNK_ID processing timed out (attempt $i/$MAX_RETRIES)"
+        # Process this chunk
+        if ./process_single_chunk.sh $chunk_id; then
+            echo "Successfully processed chunk $chunk_id" | tee -a "$MASTER_LOG"
+            ((success_count++))
+            # Update the last processed ID
+            LAST_ID=$chunk_id
         else
-            echo "❌ Failed to process chunk $CHUNK_ID with error $RESULT (attempt $i/$MAX_RETRIES)"
+            echo "Failed to process chunk $chunk_id" | tee -a "$MASTER_LOG"
+            ((failure_count++))
         fi
         
-        # If this was the last retry, record as failed
-        if [ $i -eq $MAX_RETRIES ] && [ "$CHUNK_SUCCESS" = false ]; then
-            echo "❌ Maximum retries reached for chunk $CHUNK_ID"
-            FAILED=$((FAILED+1))
-        fi
-        
-        # Pause briefly before retrying
-        if [ $i -lt $MAX_RETRIES ]; then
-            sleep 2
-        fi
+        # Wait a moment between chunks (to avoid overloading the system)
+        sleep 1
     done
     
-    # Clean up chunk list file
-    rm -f $CHUNK_LIST_FILE
-    
-    # Check current progress
-    CURRENT_COUNT=$(python check_progress.py | grep "Vector store:" | awk '{print $3}')
-    PROGRESS=$(python check_progress.py | grep "Progress:" -A 1 | tail -n 1 | awk '{print $2}')
-    
-    echo ""
-    echo "--- Progress Update ---"
-    echo "Processed chunks:  $chunk/$COUNT"
-    echo "Successful:        $SUCCESSFUL chunks"
-    echo "Failed:            $FAILED chunks"
-    echo "Current count:     $CURRENT_COUNT chunks"
-    echo "Progress:          $PROGRESS"
-    echo "----------------------"
-    
-    # Pause between chunks
-    if [ $chunk -lt $COUNT ]; then
-        echo "Pausing for $PAUSE_BETWEEN seconds before next chunk..."
-        sleep $PAUSE_BETWEEN
-    fi
-done
+    echo "Processed $success_count chunks successfully, $failure_count failures" | tee -a "$MASTER_LOG"
+else
+    echo "No chunks found to process" | tee -a "$MASTER_LOG"
+fi
 
-# Final report
-FINAL_COUNT=$(python check_progress.py | grep "Vector store:" | awk '{print $3}')
-ADDED=$((FINAL_COUNT - INITIAL_COUNT))
-ACTUAL_COUNT=$((SUCCESSFUL + FAILED))
+# Check final state
+echo "" | tee -a "$MASTER_LOG"
+echo "Final state:" | tee -a "$MASTER_LOG"
+python check_progress.py | tee -a "$MASTER_LOG"
 
-echo ""
-echo "=============================================="
-echo "BATCH PROCESSING COMPLETE"
-echo "=============================================="
-echo "Initial count:      $INITIAL_COUNT chunks"
-echo "Final count:        $FINAL_COUNT chunks"
-echo "Chunks added:       $ADDED chunks"
-echo "Chunks attempted:   $ACTUAL_COUNT chunks"
-echo "Success rate:       $SUCCESSFUL/$ACTUAL_COUNT chunks ($(( (SUCCESSFUL*100)/ACTUAL_COUNT ))%)"
-echo "Completed at:       $(date)"
-echo "=============================================="
+echo "Sequential processing completed at $(date)" | tee -a "$MASTER_LOG"
+echo "Log file: $MASTER_LOG"
+echo "Last processed ID: $LAST_ID"
+
+# Output the last processed ID for the next run
+echo $LAST_ID

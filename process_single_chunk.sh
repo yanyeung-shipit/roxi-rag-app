@@ -1,57 +1,43 @@
 #!/bin/bash
+# Process just a single chunk quickly to avoid timeouts
+# This script takes the chunk ID to process
 
-# process_single_chunk.sh
-# Process a single chunk with minimal overhead
-# This script is designed for maximum reliability in the Replit environment
+# Configuration
+CHUNK_ID=${1}
+LOG_FILE="logs/batch_processing/chunk_$(date +%Y%m%d_%H%M%S)_${CHUNK_ID}.log"
 
-# Usage: ./process_single_chunk.sh [CHUNK_ID]
+# Create log directory if it doesn't exist
+mkdir -p "logs/batch_processing"
 
-# Get a chunk ID to process
-if [ $# -eq 1 ]; then
-    # Use the provided chunk ID
-    CHUNK_ID=$1
-else
-    # Find the next unprocessed chunk
-    echo "Finding next unprocessed chunk..."
-    CHUNK_FILE="single_chunk.json"
-    python find_unprocessed_chunks.py --limit 1 --output $CHUNK_FILE
-    
-    if [ ! -f "$CHUNK_FILE" ]; then
-        echo "Error: Failed to find an unprocessed chunk"
-        exit 1
-    fi
-    
-    CHUNK_ID=$(cat $CHUNK_FILE | tr -d '[]' | tr -d ' ')
-    rm -f $CHUNK_FILE
-    
-    if [ -z "$CHUNK_ID" ]; then
-        echo "No unprocessed chunks found!"
-        exit 0
-    fi
-fi
+# Log the start
+echo "======================================================" | tee -a "$LOG_FILE"
+echo "SINGLE CHUNK PROCESSING START: $(date +%Y%m%d_%H%M%S)" | tee -a "$LOG_FILE"
+echo "Chunk ID: $CHUNK_ID" | tee -a "$LOG_FILE"
+echo "======================================================" | tee -a "$LOG_FILE"
 
-echo "=============================================="
-echo "PROCESSING CHUNK ID: $CHUNK_ID"
-echo "=============================================="
-echo "Starting at: $(date)"
-echo "=============================================="
-
-# Make the direct processor executable
-chmod +x direct_process_chunk.py
+# Check initial state
+echo "Initial state:" | tee -a "$LOG_FILE"
+python check_progress.py | grep "Vector store:" | tee -a "$LOG_FILE"
+echo "" | tee -a "$LOG_FILE"
 
 # Process the chunk
-python direct_process_chunk.py $CHUNK_ID
-RESULT=$?
+echo "Processing chunk $CHUNK_ID..." | tee -a "$LOG_FILE"
+python direct_process_chunk.py $CHUNK_ID | tee -a "$LOG_FILE"
 
-# Check result
-if [ $RESULT -eq 0 ]; then
-    echo "✅ Successfully processed chunk $CHUNK_ID"
+# Check final state
+echo "" | tee -a "$LOG_FILE"
+echo "Final state:" | tee -a "$LOG_FILE"
+python check_progress.py | grep "Vector store:" | tee -a "$LOG_FILE"
+
+echo "Chunk processing completed at $(date)" | tee -a "$LOG_FILE"
+echo "Log file: $LOG_FILE"
+
+# Echo success or failure
+SUCCESS=$(tail -n 20 "$LOG_FILE" | grep -c "Processed chunk $CHUNK_ID")
+if [ $SUCCESS -gt 0 ]; then
+    echo "SUCCESS: Processed chunk $CHUNK_ID"
+    exit 0
 else
-    echo "❌ Failed to process chunk $CHUNK_ID with error $RESULT"
+    echo "FAILURE: Failed to process chunk $CHUNK_ID"
+    exit 1
 fi
-
-# Check progress
-python check_progress.py
-
-echo "Completed at: $(date)"
-echo "=============================================="
