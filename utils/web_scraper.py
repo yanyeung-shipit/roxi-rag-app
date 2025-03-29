@@ -898,9 +898,9 @@ This is a specialized page about {topic_name} in rheumatology."""
 
 def create_minimal_content_for_topic(url):
     """
-    Create minimal content for topic pages when other methods fail.
-    This is a robust direct method that bypasses trafilatura for better reliability with topic pages.
-    Memory-optimized version to prevent OOM errors.
+    Create comprehensive content for topic pages.
+    This is an enhanced method that extracts maximum content from topic pages.
+    Optimized to produce many high-quality chunks rather than a few minimal chunks.
     
     Args:
         url (str): URL of the topic page
@@ -1297,6 +1297,130 @@ def generate_website_citation(title, url):
     
     # Generate the citation
     return f"{organization}. ({current_date.year}). {title}. Retrieved {retrieval_date}, from {url}"
+
+def extract_website_direct(url):
+    """
+    Extract content from a website using a direct, intensive approach.
+    This method focuses on maximum content extraction from a single page.
+    
+    Args:
+        url (str): URL to extract content from
+        
+    Returns:
+        list: List of dictionaries containing text chunks and metadata
+    """
+    logger.info(f"Extracting website content directly from: {url}")
+    
+    try:
+        # Setup headers for the request
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        # Get the page content
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            logger.warning(f"Failed to fetch URL: {url}, status code: {response.status_code}")
+            return []
+        
+        html_content = response.text
+        
+        # Extract title
+        title = extract_title(html_content, url)
+        
+        # Extract text with trafilatura - maximum extraction parameters
+        text = trafilatura.extract(
+            html_content, 
+            include_links=True,        # Include links to capture references
+            include_images=True,       # Include image captions which may contain useful text
+            include_tables=True,       # Tables often contain important disease information
+            deduplicate=False,         # Don't deduplicate to ensure we get all content
+            no_fallback=False,         # Always use fallback methods if needed
+            favor_recall=True,         # Prioritize getting more content over precision
+            include_comments=True,     # Include comments which may have useful info
+            include_formatting=True,   # Preserve formatting which can provide structure
+            target_language="en",      # Ensure English content
+            include_anchors=True,      # Include anchor texts which are often navigation items
+            include_headings=True,     # Ensure headers are captured as they organize content
+            include_footnotes=True     # Footnotes may contain valuable references
+        )
+        
+        # If trafilatura fails, try BeautifulSoup extraction
+        if not text or len(text.strip()) < 200:
+            logger.info(f"Trafilatura extraction failed for {url}, trying BeautifulSoup")
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # Try to extract content from article or main content areas
+            content_selectors = ['article', 'main', '.main-content', '.content', '.post-content', 
+                            '.entry-content', '#content', '.page-content', '.article-content',
+                            '.body-content', '[role="main"]', '.page', '.document']
+            
+            extracted_text = ""
+            for selector in content_selectors:
+                elements = []
+                if selector.startswith('.'):
+                    elements = soup.find_all(class_=selector[1:])
+                elif selector.startswith('#'):
+                    element = soup.find(id=selector[1:])
+                    if element:
+                        elements = [element]
+                elif selector.startswith('['):
+                    attr_name = selector.split('=')[0][1:]
+                    attr_value = selector.split('=')[1].strip('"[]')
+                    elements = soup.find_all(attrs={attr_name: attr_value})
+                else:
+                    elements = soup.find_all(selector)
+                
+                for element in elements:
+                    # Get text with spacing between elements
+                    element_text = element.get_text(separator=' ', strip=True)
+                    if len(element_text) > len(extracted_text):
+                        extracted_text = element_text
+                        logger.info(f"Found better content with selector {selector}: {len(extracted_text)} chars")
+            
+            # If we found content, use it
+            if extracted_text and len(extracted_text) > 200:
+                text = extracted_text
+                logger.info(f"Using BeautifulSoup extracted content: {len(text)} chars")
+            else:
+                # Final fallback: get all text from body with minimal processing
+                body = soup.find('body')
+                if body:
+                    text = body.get_text(separator=' ', strip=True)
+                    logger.info(f"Using full body content: {len(text)} chars")
+        
+        if not text or len(text.strip()) < 100:
+            logger.warning(f"Failed to extract any meaningful content from {url}")
+            return []
+        
+        # Generate citation
+        citation = generate_website_citation(title, url)
+        
+        # Create chunks with large chunk size and overlap for better context
+        text_chunks = chunk_text(text, max_length=1000, overlap=250)
+        logger.info(f"Created {len(text_chunks)} chunks from {url}")
+        
+        # Create result objects
+        chunks = []
+        for i, chunk in enumerate(text_chunks):
+            chunks.append({
+                "text": chunk,
+                "metadata": {
+                    "source_type": "website",
+                    "title": title,
+                    "url": url,
+                    "chunk_index": i,
+                    "page_number": 1,  # All from same page
+                    "citation": citation,
+                    "date_scraped": datetime.now().isoformat()
+                }
+            })
+        
+        return chunks
+    
+    except Exception as e:
+        logger.exception(f"Error in direct website extraction: {str(e)}")
+        return []
 
 def chunk_text(text, max_length=1000, overlap=200):
     """
