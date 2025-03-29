@@ -116,7 +116,41 @@ def generate_response(query, context_documents):
             
             # Handle different source types
             if source_type == "pdf":
-                title = metadata.get("title", "Unnamed PDF")
+                # Try different ways to get a meaningful title
+                title = None
+                
+                # First try direct title
+                if metadata.get("title") and metadata.get("title").strip():
+                    title = metadata.get("title")
+                    logger.debug(f"Using direct title: {title}")
+                
+                # If no title, try to extract from filename
+                if not title and metadata.get("file_path"):
+                    import os
+                    filename = os.path.basename(metadata.get("file_path"))
+                    # Remove timestamp pattern if present (like 20250328202349_)
+                    if len(filename) > 15 and filename[:8].isdigit() and filename[8:15].isdigit() and filename[15] == '_':
+                        filename = filename[16:]
+                    
+                    # Remove extension and format
+                    file_title = os.path.splitext(filename)[0].replace("_", " ").replace("-", " ").title()
+                    if file_title:
+                        title = file_title
+                        logger.debug(f"Using filename-derived title: {title}")
+                
+                # If no title from direct or filename, try to get first part of citation
+                if not title and metadata.get("formatted_citation"):
+                    # Extract the title part (usually before the first period)
+                    citation_parts = metadata.get("formatted_citation").split(".", 1)
+                    if len(citation_parts) > 0 and citation_parts[0].strip():
+                        title = citation_parts[0].strip()
+                        logger.debug(f"Using citation-derived title: {title}")
+                
+                # Last resort fallback
+                if not title:
+                    title = "Rheumatology Document"
+                    logger.debug("Using fallback title: Rheumatology Document")
+                
                 page = metadata.get("page", "unknown")
                 source_info["title"] = title
                 source_info["page"] = page
@@ -146,6 +180,7 @@ def generate_response(query, context_documents):
                             logger.debug(f"Using DOI-based citation for PDF: {citation}")
                         else:
                             # Create a better fallback citation based on the title
+                            # Make sure we're not creating an "Unnamed PDF" citation
                             citation = f"{title}. (Rheumatology Document)"
                             logger.debug(f"Using fallback citation for PDF: {citation}")
                     
@@ -192,16 +227,16 @@ def generate_response(query, context_documents):
                         # Remove extension and format
                         title = os.path.splitext(filename)[0].replace("_", " ").replace("-", " ").title()
                 
-                source_info["title"] = title or "Unnamed Source"
+                source_info["title"] = title or "Rheumatology Document"
                 source_info["url"] = metadata.get("url", "#")
                 
                 # If no citation exists, create one
                 if "citation" not in source_info or not source_info["citation"]:
-                    title = metadata.get("title", "Unnamed Source")
+                    title = metadata.get("title", "Rheumatology Document")
                     url = metadata.get("url", None)
                     
                     # Format the filename to be more user-friendly
-                    if title == "Unnamed Source" and "file_path" in metadata:
+                    if title == "Rheumatology Document" and "file_path" in metadata:
                         # Try to extract a better title from the file_path
                         file_path = metadata.get("file_path", "")
                         if file_path:
@@ -276,7 +311,7 @@ def generate_response(query, context_documents):
                 
                 if source_key not in website_sources:
                     website_sources[source_key] = source
-                    logger.info(f"Adding website source to final results: {source.get('title', 'Unnamed')} - {url}" + 
+                    logger.info(f"Adding website source to final results: {source.get('title', 'Website Source')} - {url}" + 
                                (f" (Page {page_number})" if page_number is not None else ""))
                     
                     # Log full source details for debugging
@@ -301,11 +336,11 @@ def generate_response(query, context_documents):
                 # Make sure we have a valid citation
                 if "citation" not in source or not source["citation"]:
                     # Create a default citation if none exists
-                    title = source.get("title", "Unnamed Source")
+                    title = source.get("title", "Rheumatology Document")
                     url = source.get("url", None)
                     
                     # Try to extract a better title if we have a file_path
-                    if title == "Unnamed Source" and "file_path" in source:
+                    if title == "Rheumatology Document" and "file_path" in source:
                         # Try to extract a better title from the file_path
                         file_path = source.get("file_path", "")
                         if file_path:
@@ -330,7 +365,7 @@ def generate_response(query, context_documents):
                 
                 # Make sure we have required fields
                 if "title" not in source or not source["title"]:
-                    source["title"] = "Unnamed Source"
+                    source["title"] = "Rheumatology Document"
                 
                 # Add the source
                 sources.append(source)
