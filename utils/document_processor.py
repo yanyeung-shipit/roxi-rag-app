@@ -278,21 +278,34 @@ def process_pdf(file_path, file_name, extract_citation=True):
                         
                     # Get citation from document metadata if available
                     citation_info = document_metadata.get('formatted_citation', None)
+                    logger.debug(f"PDF chunk citation from document metadata: {citation_info}")
+                    
                     if not citation_info:
                         # Call our own extract_citation_info function
                         citation_info = extract_citation_info(file_name)
+                        logger.debug(f"PDF chunk citation from extract_citation_info fallback: {citation_info}")
                     
+                    # Create a comprehensive chunk metadata with all citation information
+                    chunk_metadata = {
+                        "source_type": "pdf",
+                        "title": document_metadata.get('title', file_name),
+                        "page": page_data["page"],
+                        "chunk_index": i,
+                        "total_pages": num_pages,
+                        "doi": document_metadata.get('doi'),
+                        "formatted_citation": citation_info,  # Always store the citation as formatted_citation
+                        "citation": citation_info  # Also store as citation for backward compatibility
+                    }
+                    
+                    # Log the full metadata we're using for this chunk
+                    logger.debug(f"PDF chunk metadata: doi={chunk_metadata.get('doi')}, " +
+                                f"formatted_citation={chunk_metadata.get('formatted_citation')}, " +
+                                f"citation={chunk_metadata.get('citation')}")
+                        
+                    # Add the chunk with complete metadata
                     chunks.append({
                         "text": chunk,
-                        "metadata": {
-                            "source_type": "pdf",
-                            "title": document_metadata.get('title', file_name),
-                            "page": page_data["page"],
-                            "chunk_index": i,
-                            "total_pages": num_pages,
-                            "citation": citation_info,
-                            "doi": document_metadata.get('doi', None)
-                        }
+                        "metadata": chunk_metadata
                     })
                     chunk_count += 1
             except Exception as chunk_error:

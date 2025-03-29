@@ -345,7 +345,11 @@ class BackgroundProcessor:
                                 'chunk_index': i,
                                 'page_number': chunk.get('metadata', {}).get('page_number', None),
                                 'document_title': doc.title or doc.filename,
-                                'file_type': doc.file_type
+                                'file_type': doc.file_type,
+                                'doi': doc.doi,
+                                'formatted_citation': doc.formatted_citation,
+                                'source_url': doc.source_url,
+                                'citation': chunk.get('metadata', {}).get('citation', doc.formatted_citation)
                             }
                             
                             # Add to vector store

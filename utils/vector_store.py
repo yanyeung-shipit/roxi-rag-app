@@ -160,6 +160,14 @@ class VectorStore:
             self.index.add(np.array([embedding], dtype=np.float32))
             
             # Store document data
+            if metadata and 'formatted_citation' in metadata:
+                logger.debug(f"Adding document to vector store with formatted_citation: {metadata['formatted_citation']}")
+            else:
+                if metadata:
+                    logger.debug(f"Adding document to vector store WITHOUT formatted_citation, metadata keys: {list(metadata.keys())}")
+                else:
+                    logger.debug("Adding document to vector store with NO metadata")
+                
             self.documents[doc_id] = {
                 'text': text,
                 'metadata': metadata or {}

@@ -73,6 +73,10 @@ def generate_response(query, context_documents):
             
             # Extract metadata for debugging
             metadata = doc["metadata"]
+            
+            # Log the full document metadata for debugging
+            logger.info(f"Document {i+1} full metadata: {json.dumps(metadata, default=str)}")
+            
             source_type = metadata.get("source_type", "unknown")
             
             # Log detailed source info for debugging
@@ -80,6 +84,8 @@ def generate_response(query, context_documents):
                 logger.debug(f"Website source {i+1}: URL={metadata.get('url', 'unknown')}, Title={metadata.get('title', 'unknown')}")
             elif source_type == "pdf":
                 logger.debug(f"PDF source {i+1}: Title={metadata.get('title', 'unknown')}, Page={metadata.get('page', 'unknown')}")
+                # Add more detailed debugging for citation info
+                logger.debug(f"PDF citation details: formatted_citation={metadata.get('formatted_citation', 'None')}, citation={metadata.get('citation', 'None')}, doi={metadata.get('doi', 'None')}")
             
             # Prepare source information for citation
             source_info = {
@@ -106,19 +112,26 @@ def generate_response(query, context_documents):
                     # We'll still add this to all_sources for context tracking
                 else:
                     # Create a new PDF entry with a fallback citation if none exists
-                    citation = source_info.get("citation", "") 
+                    citation = source_info.get("citation", "")
                     
                     # Check for a citation in the metadata as well
                     if not citation or citation.strip() == "":
-                        # Check metadata for formatted_citation
+                        # PRIORITY CHANGE: Check formatted_citation FIRST as it's the most complete citation
                         if metadata.get("formatted_citation"):
                             citation = metadata.get("formatted_citation")
+                            logger.debug(f"Using formatted_citation for PDF: {citation}")
+                        # Then check for direct citation in metadata
+                        elif metadata.get("citation"):
+                            citation = metadata.get("citation")
+                            logger.debug(f"Using citation for PDF: {citation}")
                         # Check for a DOI to use in the citation
                         elif metadata.get("doi"):
                             citation = f"{title}. https://doi.org/{metadata.get('doi')}"
+                            logger.debug(f"Using DOI-based citation for PDF: {citation}")
                         else:
                             # Create a better fallback citation based on the title
                             citation = f"{title}. (Rheumatology Document)"
+                            logger.debug(f"Using fallback citation for PDF: {citation}")
                     
                     pdf_sources[title] = {
                         "title": title,
@@ -169,14 +182,21 @@ def generate_response(query, context_documents):
                         source_info["citation"] = f"{title}. Retrieved from {url}"
                     else:
                         # More descriptive citation when URL is not available
-                        # Check for formatted_citation in metadata
+                        # PRIORITY CHANGE: Check formatted_citation FIRST as it's the most complete citation
                         if metadata.get("formatted_citation"):
                             source_info["citation"] = metadata.get("formatted_citation")
+                            logger.debug(f"Using formatted_citation for other document: {source_info['citation']}")
+                        # Then check for direct citation in metadata
+                        elif metadata.get("citation"):
+                            source_info["citation"] = metadata.get("citation")
+                            logger.debug(f"Using citation for other document: {source_info['citation']}")
                         # Check for DOI to create a citation with DOI link
                         elif metadata.get("doi"):
                             source_info["citation"] = f"{title}. https://doi.org/{metadata.get('doi')}"
+                            logger.debug(f"Using DOI-based citation for other document: {source_info['citation']}")
                         else:
                             source_info["citation"] = f"{title}. (Document from Rheumatology Knowledge Base)"
+                            logger.debug(f"Using fallback citation for other document: {source_info['citation']}")
             
             all_sources.append(source_info)
             
@@ -268,7 +288,9 @@ def generate_response(query, context_documents):
                         source["citation"] = f"{title}. https://doi.org/{source.get('doi')}"
                     else:
                         # Look for a properly formatted citation from our metadata before falling back
-                        if "metadata" in source and source["metadata"] and "formatted_citation" in source["metadata"]:
+                        if "metadata" in source and source["metadata"] and "citation" in source["metadata"]:
+                            source["citation"] = source["metadata"]["citation"]
+                        elif "metadata" in source and source["metadata"] and "formatted_citation" in source["metadata"]:
                             source["citation"] = source["metadata"]["formatted_citation"]
                         else:
                             source["citation"] = f"{title}. (Document from Rheumatology Knowledge Base)"

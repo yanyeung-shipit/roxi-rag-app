@@ -366,14 +366,17 @@ def extract_citation_info(filename: str, pdf_path: Optional[str] = None) -> Tupl
                 # If we got metadata, format the citation
                 if metadata:
                     citation = format_citation_apa(metadata)
-                    logger.debug(f"Generated citation: {citation}")
+                    logger.debug(f"Generated formatted citation from DOI: {citation}")
                     return citation, metadata
+                else:
+                    logger.debug(f"Found DOI {doi} but could not retrieve metadata from CrossRef or PubMed")
         
         except Exception as e:
             logger.error(f"Error during citation extraction: {str(e)}")
     
     # If we couldn't extract citation info, create a fallback citation from the filename
     # Do not import from document_processor to avoid circular reference
+    logger.debug(f"Using fallback citation extraction for {filename} since DOI extraction failed")
     
     # Remove file extension if present
     base_name = os.path.splitext(filename)[0].lower()
@@ -399,6 +402,7 @@ def extract_citation_info(filename: str, pdf_path: Optional[str] = None) -> Tupl
         
         # Format in APA 7th edition style
         citation = f"{author}, {author[0].upper()}. ({year}). {title}. Retrieved {formatted_date}."
+        logger.debug(f"Created author-year pattern citation: '{citation}'")
         return citation, metadata
     
     # Try to handle filenames with underscores as title elements (e.g., "cancer_research_2020.pdf")
@@ -409,6 +413,7 @@ def extract_citation_info(filename: str, pdf_path: Optional[str] = None) -> Tupl
         
         # Format as APA citation with title and year
         citation = f"{title} ({year}). Retrieved {formatted_date}."
+        logger.debug(f"Created title-year pattern citation: '{citation}'")
         return citation, metadata
     
     # Clean the filename to create a better title
@@ -417,6 +422,7 @@ def extract_citation_info(filename: str, pdf_path: Optional[str] = None) -> Tupl
     # Default APA format for document with unknown year and author
     citation = f"{title} (n.d.). Retrieved {formatted_date}."
     
+    logger.debug(f"Created fallback citation: '{citation}'")
     return citation, metadata
 
 def bulk_process_citation_batch(pdf_paths: List[Tuple[str, str]], batch_size: int = 10) -> List[Tuple[str, Dict, str]]:
