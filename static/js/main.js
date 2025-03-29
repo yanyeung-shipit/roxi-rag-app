@@ -180,26 +180,36 @@ document.addEventListener('DOMContentLoaded', () => {
                             citationText = source.citation;
                         } else if (source.source_type === 'pdf') {
                             // Fallback for PDF without citation
+                            const title = source.title || "Unnamed PDF Document";
                             if (source.pages && source.pages.length > 0) {
                                 // Use the pages array if available
                                 const pageText = source.pages.length === 1 ? 'page' : 'pages';
-                                citationText = `${source.title} (${pageText} ${source.pages.join(', ')})`;
+                                citationText = `${title} (${pageText} ${source.pages.join(', ')})`;
                             } else {
                                 // Fallback to single page if no pages array
-                                citationText = `${source.title} (page ${source.page})`;
+                                const page = source.page || "unknown";
+                                citationText = `${title} (page ${page})`;
                             }
                         } else {
                             // Fallback for website without citation
-                            citationText = `${source.title}. Retrieved from ${source.url}`;
+                            const title = source.title || "Unnamed Source";
+                            const url = source.url || "#";
+                            citationText = `${title}. Retrieved from ${url}`;
                         }
                         
+                        // Get safe source title
+                        const safeTitle = source.title || (source.source_type === 'pdf' ? 'PDF Document' : 'Website');
+                        const sourceType = source.source_type || 'unknown';
+                        
+                        // Build and set the HTML
                         sourceItem.innerHTML = `
                             <div class="source-title">
                                 <span class="badge bg-info me-2">${index + 1}</span>
-                                ${source.source_type === 'pdf' ? 
+                                ${sourceType === 'pdf' ? 
                                     `<i class="fas fa-file-pdf me-1"></i>` : 
                                     `<i class="fas fa-globe me-1"></i>`
                                 }
+                                ${safeTitle}
                             </div>
                             <div class="source-citation">${citationText}</div>
                         `;

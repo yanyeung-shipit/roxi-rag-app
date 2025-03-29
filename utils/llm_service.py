@@ -131,9 +131,18 @@ def generate_response(query, context_documents):
                 
                 logger.debug(f"Added website source {i+1} with citation: {source_info.get('citation', 'No citation')}")
             else:
+                # For other source types, ensure we have fallbacks for all properties
                 source_info["title"] = metadata.get("title", "Unnamed Source")
-                if metadata.get("url"):
-                    source_info["url"] = metadata.get("url")
+                source_info["url"] = metadata.get("url", "#")
+                
+                # If no citation exists, create one
+                if "citation" not in source_info or not source_info["citation"]:
+                    title = metadata.get("title", "Unnamed Source")
+                    url = metadata.get("url", None)
+                    if url:
+                        source_info["citation"] = f"{title}. Retrieved from {url}"
+                    else:
+                        source_info["citation"] = f"{title}. (No source URL available)"
             
             all_sources.append(source_info)
             
@@ -202,6 +211,21 @@ def generate_response(query, context_documents):
         # Add any other non-PDF, non-website sources
         for source in all_sources:
             if source["source_type"] != "pdf" and source["source_type"] != "website":
+                # Make sure we have a valid citation
+                if "citation" not in source or not source["citation"]:
+                    # Create a default citation if none exists
+                    title = source.get("title", "Unnamed Source")
+                    url = source.get("url", None)
+                    if url:
+                        source["citation"] = f"{title}. Retrieved from {url}"
+                    else:
+                        source["citation"] = f"{title}. (Document with unknown source)"
+                
+                # Make sure we have required fields
+                if "title" not in source or not source["title"]:
+                    source["title"] = "Unnamed Source"
+                
+                # Add the source
                 sources.append(source)
         
         # Log the query and context for debugging
