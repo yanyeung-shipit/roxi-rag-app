@@ -979,7 +979,7 @@ def create_minimal_content_for_topic(url):
         # Create content
         if content_text and len(content_text) > 200:
             # Format with title and content, but limit size
-            text = f"{title}\n\n{content_text[:8000]}"  # Limit to 8000 chars
+            text = f"{title}\n\n{content_text[:20000]}"  # Limit to 20000 chars to get more content
             logger.info(f"Created content with actual extracted text (limited to {len(text)} chars)")
         else:
             # Create minimal fallback
@@ -994,15 +994,15 @@ The page appears to contain information about this specific condition or topic."
         citation = generate_website_citation(title, url)
         chunks = []
         
-        # Use our standard chunking function but with smaller chunks
-        text_chunks = chunk_text(text, max_length=600, overlap=100)
+        # Use our standard chunking function with better parameters
+        text_chunks = chunk_text(text, max_length=1000, overlap=150)
         
         # Default chunk limit with priority levels
-        default_max_chunks = 6
+        default_max_chunks = 15
         
         # Check URL for priority topics that deserve more chunks
         priority_topics = ['rheumatoid-arthritis', 'lupus', 'systemic-sclerosis', 
-                           'vasculitis', 'myositis', 'spondyloarthritis']
+                           'vasculitis', 'myositis', 'spondyloarthritis', 'psoriatic-arthritis']
         
         parsed_url = urllib.parse.urlparse(url)
         path_parts = parsed_url.path.strip('/').split('/')
@@ -1012,7 +1012,7 @@ The page appears to contain information about this specific condition or topic."
         
         # Set chunk limit based on topic priority
         if any(priority in current_topic for priority in priority_topics):
-            max_chunks = 15  # Higher limit for priority topics
+            max_chunks = 30  # Higher limit for priority topics
             logger.info(f"Priority topic detected: {current_topic}, allowing up to {max_chunks} chunks")
         else:
             max_chunks = default_max_chunks
