@@ -1302,6 +1302,7 @@ def extract_website_direct(url):
     """
     Extract content from a website using a direct, intensive approach.
     This method focuses on maximum content extraction from a single page.
+    Specialized to overcome the 8-chunk limitation by using multiple extraction methods.
     
     Args:
         url (str): URL to extract content from
@@ -1309,7 +1310,7 @@ def extract_website_direct(url):
     Returns:
         list: List of dictionaries containing text chunks and metadata
     """
-    logger.info(f"Extracting website content directly from: {url}")
+    logger.info(f"Extracting website content directly from: {url} (DEBUG MODE)")
     
     try:
         # Setup headers for the request
@@ -1324,38 +1325,69 @@ def extract_website_direct(url):
             return []
         
         html_content = response.text
+        logger.info(f"Downloaded HTML content: {len(html_content)} bytes")
         
         # Extract title
         title = extract_title(html_content, url)
         
-        # Extract text with trafilatura - maximum extraction parameters
-        text = trafilatura.extract(
-            html_content, 
-            include_links=True,        # Include links to capture references
-            include_images=True,       # Include image captions which may contain useful text
-            include_tables=True,       # Tables often contain important disease information
-            deduplicate=False,         # Don't deduplicate to ensure we get all content
-            no_fallback=False,         # Always use fallback methods if needed
-            favor_recall=True,         # Prioritize getting more content over precision
-            include_comments=True,     # Include comments which may have useful info
-            include_formatting=True,   # Preserve formatting which can provide structure
-            target_language="en",      # Ensure English content
-            include_anchors=True,      # Include anchor texts which are often navigation items
-            include_headings=True,     # Ensure headers are captured as they organize content
-            include_footnotes=True     # Footnotes may contain valuable references
-        )
+        # ----- Try all extraction methods in parallel and use the one with most content -----
+        all_extracted_texts = []
         
-        # If trafilatura fails, try BeautifulSoup extraction
-        if not text or len(text.strip()) < 200:
-            logger.info(f"Trafilatura extraction failed for {url}, trying BeautifulSoup")
+        # Method 1: Trafilatura with maximum parameters
+        try:
+            text1 = trafilatura.extract(
+                html_content, 
+                include_links=True,        # Include links to capture references
+                include_images=True,       # Include image captions which may contain useful text
+                include_tables=True,       # Tables often contain important disease information
+                deduplicate=False,         # Don't deduplicate to ensure we get all content
+                no_fallback=False,         # Always use fallback methods if needed
+                favor_recall=True,         # Prioritize getting more content over precision
+                include_comments=True,     # Include comments which may have useful info
+                include_formatting=True,   # Preserve formatting which can provide structure
+                target_language="en",      # Ensure English content
+                include_anchors=True,      # Include anchor texts which are often navigation items
+                include_headings=True,     # Ensure headers are captured as they organize content
+                include_footnotes=True     # Footnotes may contain valuable references
+            )
+            if text1:
+                logger.info(f"Method 1 - Trafilatura (full params): {len(text1)} chars")
+                all_extracted_texts.append((text1, "Trafilatura (full params)"))
+        except Exception as e:
+            logger.warning(f"Method 1 failed: {str(e)}")
+        
+        # Method 2: Simple Trafilatura
+        try:
+            text2 = trafilatura.extract(html_content, favor_recall=True, include_comments=False)
+            if text2:
+                logger.info(f"Method 2 - Trafilatura (simple): {len(text2)} chars")
+                all_extracted_texts.append((text2, "Trafilatura (simple)"))
+        except Exception as e:
+            logger.warning(f"Method 2 failed: {str(e)}")
+            
+        # Method 3: BeautifulSoup - article extraction
+        try:
             soup = BeautifulSoup(html_content, 'html.parser')
+            text3 = ""
+            article = soup.find('article')
+            if article:
+                text3 = article.get_text(separator=' ', strip=True)
+                if text3:
+                    logger.info(f"Method 3 - BeautifulSoup (article): {len(text3)} chars")
+                    all_extracted_texts.append((text3, "BeautifulSoup (article)"))
+        except Exception as e:
+            logger.warning(f"Method 3 failed: {str(e)}")
             
-            # Try to extract content from article or main content areas
-            content_selectors = ['article', 'main', '.main-content', '.content', '.post-content', 
-                            '.entry-content', '#content', '.page-content', '.article-content',
-                            '.body-content', '[role="main"]', '.page', '.document']
+        # Method 4: BeautifulSoup - main content selectors
+        try:
+            if not soup:
+                soup = BeautifulSoup(html_content, 'html.parser')
+                
+            # Try to extract content from common content containers
+            content_selectors = ['main', '.main-content', '.content', '.post-content', 
+                           '.entry-content', '#content', '.page-content', '.article-content',
+                           '.body-content', '[role="main"]', '.page', '.document']
             
-            extracted_text = ""
             for selector in content_selectors:
                 elements = []
                 if selector.startswith('.'):
@@ -1372,33 +1404,107 @@ def extract_website_direct(url):
                     elements = soup.find_all(selector)
                 
                 for element in elements:
-                    # Get text with spacing between elements
                     element_text = element.get_text(separator=' ', strip=True)
-                    if len(element_text) > len(extracted_text):
-                        extracted_text = element_text
-                        logger.info(f"Found better content with selector {selector}: {len(extracted_text)} chars")
+                    if element_text and len(element_text) > 200:
+                        logger.info(f"Method 4 - BeautifulSoup ({selector}): {len(element_text)} chars")
+                        all_extracted_texts.append((element_text, f"BeautifulSoup ({selector})"))
+        except Exception as e:
+            logger.warning(f"Method 4 failed: {str(e)}")
             
-            # If we found content, use it
-            if extracted_text and len(extracted_text) > 200:
-                text = extracted_text
-                logger.info(f"Using BeautifulSoup extracted content: {len(text)} chars")
-            else:
-                # Final fallback: get all text from body with minimal processing
-                body = soup.find('body')
-                if body:
-                    text = body.get_text(separator=' ', strip=True)
-                    logger.info(f"Using full body content: {len(text)} chars")
+        # Method 5: Full body extraction
+        try:
+            if not soup:
+                soup = BeautifulSoup(html_content, 'html.parser')
+                
+            body = soup.find('body')
+            if body:
+                body_text = body.get_text(separator=' ', strip=True)
+                if body_text:
+                    logger.info(f"Method 5 - BeautifulSoup (body): {len(body_text)} chars")
+                    all_extracted_texts.append((body_text, "BeautifulSoup (body)"))
+        except Exception as e:
+            logger.warning(f"Method 5 failed: {str(e)}")
         
-        if not text or len(text.strip()) < 100:
-            logger.warning(f"Failed to extract any meaningful content from {url}")
+        # Method 6: All text from each paragraph
+        try:
+            if not soup:
+                soup = BeautifulSoup(html_content, 'html.parser')
+                
+            paragraphs = soup.find_all('p')
+            if paragraphs:
+                paragraphs_text = "\n\n".join([p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)])
+                if paragraphs_text:
+                    logger.info(f"Method 6 - BeautifulSoup (all paragraphs): {len(paragraphs_text)} chars")
+                    all_extracted_texts.append((paragraphs_text, "BeautifulSoup (all paragraphs)"))
+        except Exception as e:
+            logger.warning(f"Method 6 failed: {str(e)}")
+            
+        # Method 7: Headings and paragraphs with hierarchy preserved
+        try:
+            if not soup:
+                soup = BeautifulSoup(html_content, 'html.parser')
+                
+            # Get all headings and paragraphs
+            elements = soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p'])
+            structured_text = []
+            for element in elements:
+                if element.name.startswith('h'):
+                    # Add multiple newlines before headings to create section breaks
+                    text = element.get_text(strip=True)
+                    level = int(element.name[1])  # h1 = 1, h2 = 2, etc.
+                    prefix = '#' * level + ' '  # Use Markdown-style headings
+                    if text:
+                        structured_text.append(f"\n\n{prefix}{text}\n")
+                elif element.name == 'p':
+                    text = element.get_text(strip=True)
+                    if text:
+                        structured_text.append(text)
+            
+            if structured_text:
+                headings_text = "\n".join(structured_text)
+                logger.info(f"Method 7 - BeautifulSoup (headers + paragraphs): {len(headings_text)} chars")
+                all_extracted_texts.append((headings_text, "BeautifulSoup (headers + paragraphs)"))
+        except Exception as e:
+            logger.warning(f"Method 7 failed: {str(e)}")
+            
+        # ----- Select the best extraction result -----
+        if not all_extracted_texts:
+            logger.warning(f"All extraction methods failed for {url}")
             return []
+            
+        # Sort by content length and use the longest
+        all_extracted_texts.sort(key=lambda x: len(x[0]), reverse=True)
+        text, method = all_extracted_texts[0]
+        logger.info(f"Selected {method} as the best extraction method with {len(text)} chars")
         
         # Generate citation
         citation = generate_website_citation(title, url)
         
-        # Create chunks with large chunk size and overlap for better context
-        text_chunks = chunk_text(text, max_length=1000, overlap=250)
+        # Create chunks with small chunk size to get more chunks
+        text_chunks = chunk_text(text, max_length=800, overlap=300)
         logger.info(f"Created {len(text_chunks)} chunks from {url}")
+        
+        # Ensure minimum of 20 chunks by creating single-paragraph chunks if needed
+        if len(text_chunks) < 20 and len(text) > 2000:
+            logger.info(f"Not enough chunks created, trying paragraph-based chunking")
+            paragraphs = text.split('\n\n')
+            if len(paragraphs) > 1:
+                final_chunks = []
+                
+                # First add the original chunks (which maintain more context)
+                for chunk in text_chunks:
+                    final_chunks.append(chunk)
+                
+                # Then add individual paragraphs if they're substantial
+                for para in paragraphs:
+                    if len(para.strip()) > 100 and para not in final_chunks:
+                        final_chunks.append(para)
+                
+                text_chunks = final_chunks
+                logger.info(f"Paragraph chunking created {len(text_chunks)} chunks")
+        
+        # Log the number of chunks
+        logger.info(f"Final chunk count: {len(text_chunks)}")
         
         # Create result objects
         chunks = []
@@ -1412,7 +1518,8 @@ def extract_website_direct(url):
                     "chunk_index": i,
                     "page_number": 1,  # All from same page
                     "citation": citation,
-                    "date_scraped": datetime.now().isoformat()
+                    "date_scraped": datetime.now().isoformat(),
+                    "extraction_method": method
                 }
             })
         
