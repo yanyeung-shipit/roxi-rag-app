@@ -4,7 +4,7 @@ import json
 import numpy as np
 from openai import OpenAI
 
-from utils.doi_lookup import get_citation_from_doi
+from utils.doi_lookup import get_citation_from_doi, extract_doi_from_text, extract_and_get_citation
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -187,10 +187,21 @@ def generate_response(query, context_documents):
                                 citation = f"{title}. https://doi.org/{metadata.get('doi')}"
                                 logger.debug(f"Using basic DOI-based citation for PDF: {citation}")
                         else:
-                            # Create a better fallback citation based on the title
-                            # Make sure we're not creating an "Unnamed PDF" citation
-                            citation = f"{title}. (Rheumatology Document)"
-                            logger.debug(f"Using fallback citation for PDF: {citation}")
+                            # Try to extract a DOI directly from the text
+                            text = doc.get("text", "")
+                            if text:
+                                success, extracted_metadata = extract_and_get_citation(text)
+                                if success and extracted_metadata.get("formatted_citation"):
+                                    citation = extracted_metadata.get("formatted_citation")
+                                    logger.debug(f"Using text-extracted DOI citation for PDF: {citation}")
+                                else:
+                                    # Create a better fallback citation based on the title
+                                    citation = f"{title}. (Rheumatology Document)"
+                                    logger.debug(f"Using fallback citation for PDF: {citation}")
+                            else:
+                                # Create a better fallback citation based on the title
+                                citation = f"{title}. (Rheumatology Document)"
+                                logger.debug(f"Using fallback citation for PDF: {citation}")
                     
                     pdf_sources[title] = {
                         "title": title,
@@ -277,8 +288,19 @@ def generate_response(query, context_documents):
                                 source_info["citation"] = f"{title}. https://doi.org/{metadata.get('doi')}"
                                 logger.debug(f"Using basic DOI-based citation for other document: {source_info['citation']}")
                         else:
-                            source_info["citation"] = f"{title}. (Document from Rheumatology Knowledge Base)"
-                            logger.debug(f"Using fallback citation for other document: {source_info['citation']}")
+                            # Try to extract a DOI directly from the document text
+                            text = doc.get("text", "")
+                            if text:
+                                success, extracted_metadata = extract_and_get_citation(text)
+                                if success and extracted_metadata.get("formatted_citation"):
+                                    source_info["citation"] = extracted_metadata.get("formatted_citation")
+                                    logger.debug(f"Using text-extracted DOI citation for other document: {source_info['citation']}")
+                                else:
+                                    source_info["citation"] = f"{title}. (Document from Rheumatology Knowledge Base)"
+                                    logger.debug(f"Using fallback citation for other document: {source_info['citation']}")
+                            else:
+                                source_info["citation"] = f"{title}. (Document from Rheumatology Knowledge Base)"
+                                logger.debug(f"Using fallback citation for other document: {source_info['citation']}")
             
             all_sources.append(source_info)
             

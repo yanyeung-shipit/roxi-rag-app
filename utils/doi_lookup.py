@@ -1,8 +1,12 @@
 """
-Utility functions for looking up DOI information from external APIs.
+Utility functions for looking up DOI information from external APIs and
+extracting DOIs from document text.
+
 This can be used to enhance citation information when a DOI is available
 but other metadata is missing.
 """
+
+import re
 
 import logging
 import requests
@@ -243,6 +247,48 @@ def format_citation(metadata: Dict[str, Any]) -> str:
     
     return citation
 
+def extract_doi_from_text(text: str) -> Optional[str]:
+    """
+    Extract DOI from text using regex pattern matching.
+    
+    Args:
+        text (str): The text to search for DOIs.
+        
+    Returns:
+        Optional[str]: The first DOI found, or None if no DOI is found.
+    """
+    if not text:
+        return None
+    
+    # Common DOI patterns:
+    # 1. Full URL: https://doi.org/10.xxxx/yyyy
+    # 2. Prefixed: doi:10.xxxx/yyyy
+    # 3. Plain: 10.xxxx/yyyy
+    
+    # Regex pattern to match DOIs
+    doi_patterns = [
+        r'https?://doi\.org/10\.\d+/[^\s"\'<>]+',  # URL format
+        r'doi:10\.\d+/[^\s"\'<>]+',                # doi: prefix
+        r'10\.\d+/[^\s"\'<>]+'                    # plain format
+    ]
+    
+    found_doi = None
+    
+    for pattern in doi_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            found_doi = match.group(0)
+            # Clean up the DOI
+            if found_doi.lower().startswith('https://doi.org/'):
+                found_doi = found_doi[16:]
+            elif found_doi.lower().startswith('doi:'):
+                found_doi = found_doi[4:]
+            
+            logger.debug(f"Extracted DOI from text: {found_doi}")
+            return found_doi
+    
+    return None
+
 def get_citation_from_doi(doi: str) -> Tuple[bool, Dict[str, Any]]:
     """
     Get citation information from a DOI.
@@ -268,3 +314,21 @@ def get_citation_from_doi(doi: str) -> Tuple[bool, Dict[str, Any]]:
         metadata["doi"] = doi
     
     return True, metadata
+
+def extract_and_get_citation(text: str) -> Tuple[bool, Dict[str, Any]]:
+    """
+    Extract DOI from text and then get citation information.
+    
+    Args:
+        text (str): The text to search for DOIs.
+        
+    Returns:
+        Tuple[bool, Dict[str, Any]]: A tuple containing:
+            - bool: True if the extraction and lookup were successful, False otherwise.
+            - Dict[str, Any]: The citation information, or an empty dict if not found.
+    """
+    doi = extract_doi_from_text(text)
+    if not doi:
+        return False, {}
+    
+    return get_citation_from_doi(doi)
