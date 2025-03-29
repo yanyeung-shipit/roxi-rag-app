@@ -1,0 +1,158 @@
+{
+  "timestamp": "2025-03-29T20:23:58.855616",
+  "db_stats": {
+    "total_docs": 23,
+    "processed_docs": 23,
+    "unprocessed_docs": 0,
+    "total_chunks": 1261,
+    "chunks_per_doc": [
+      {
+        "document_id": 191,
+        "chunk_count": 96
+      },
+      {
+        "document_id": 189,
+        "chunk_count": 29
+      },
+      {
+        "document_id": 186,
+        "chunk_count": 75
+      },
+      {
+        "document_id": 188,
+        "chunk_count": 92
+      },
+      {
+        "document_id": 205,
+        "chunk_count": 30
+      },
+      {
+        "document_id": 198,
+        "chunk_count": 41
+      },
+      {
+        "document_id": 190,
+        "chunk_count": 23
+      },
+      {
+        "document_id": 201,
+        "chunk_count": 42
+      },
+      {
+        "document_id": 202,
+        "chunk_count": 81
+      },
+      {
+        "document_id": 197,
+        "chunk_count": 86
+      },
+      {
+        "document_id": 204,
+        "chunk_count": 123
+      },
+      {
+        "document_id": 196,
+        "chunk_count": 62
+      },
+      {
+        "document_id": 195,
+        "chunk_count": 33
+      },
+      {
+        "document_id": 207,
+        "chunk_count": 83
+      },
+      {
+        "document_id": 199,
+        "chunk_count": 26
+      },
+      {
+        "document_id": 193,
+        "chunk_count": 56
+      },
+      {
+        "document_id": 187,
+        "chunk_count": 71
+      },
+      {
+        "document_id": 208,
+        "chunk_count": 44
+      },
+      {
+        "document_id": 203,
+        "chunk_count": 28
+      },
+      {
+        "document_id": 194,
+        "chunk_count": 38
+      },
+      {
+        "document_id": 200,
+        "chunk_count": 34
+      },
+      {
+        "document_id": 192,
+        "chunk_count": 68
+      }
+    ],
+    "recent_docs": [
+      {
+        "id": 208,
+        "filename": "McGonagle2018_-_mechanistic_immunological_classification.pdf",
+        "processed": true,
+        "updated_at": "2025-03-29T19:49:07.739879",
+        "chunk_count": 44
+      },
+      {
+        "id": 207,
+        "filename": "Buch2020_-_persistent_RA_mechanisms.pdf",
+        "processed": true,
+        "updated_at": "2025-03-29T19:48:29.174137",
+        "chunk_count": 83
+      },
+      {
+        "id": 206,
+        "filename": "wysham2022_-_osteoporosis_in_RA.pdf",
+        "processed": true,
+        "updated_at": "2025-03-29T19:48:18.379588",
+        "chunk_count": 0
+      },
+      {
+        "id": 205,
+        "filename": "widdifield2014_-_epidemiology_ontario.pdf",
+        "processed": true,
+        "updated_at": "2025-03-29T19:47:58.602525",
+        "chunk_count": 30
+      },
+      {
+        "id": 204,
+        "filename": "smolen2018_-_nature_review_primer.pdf",
+        "processed": true,
+        "updated_at": "2025-03-29T19:47:18.454881",
+        "chunk_count": 123
+      }
+    ]
+  },
+  "vector_stats": {
+    "total_documents": 289,
+    "chunks": 289,
+    "websites": 0,
+    "pdfs": 5
+  },
+  "progress": {
+    "progress_percent": 22.918318794607455,
+    "vector_chunks": 289,
+    "db_chunks": 1261,
+    "chunks_remaining": 972,
+    "processing_rate": 0,
+    "estimated_seconds_remaining": 0,
+    "estimated_completion_time": null
+  },
+  "bottlenecks": [],
+  "errors_count": 0,
+  "monitoring_info": {
+    "total_checks": 1,
+    "start_time": "2025-03-29T20:23:57.650443",
+    "running_time": 1.20518
+  }
+}

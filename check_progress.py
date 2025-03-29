@@ -59,11 +59,11 @@ def check_progress(json_output=False):
             # Prepare structured data
             result = {
                 "timestamp": datetime.now().isoformat(),
-                "vector_chunks": vector_stats['total_documents'],
-                "db_chunks": db_chunk_count,
-                "db_docs": db_doc_count,
-                "progress_percent": chunk_progress,
-                "chunks_remaining": chunks_remaining,
+                "vector_count": vector_stats['total_documents'],
+                "db_count": db_chunk_count,
+                "doc_count": db_doc_count,
+                "progress_pct": chunk_progress,
+                "remaining": chunks_remaining,
                 "docs_with_chunks": doc_with_chunks_count,
                 "docs_unprocessed": docs_unprocessed,
                 "vector_stats": vector_stats,

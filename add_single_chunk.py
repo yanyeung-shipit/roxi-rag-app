@@ -246,15 +246,71 @@ def add_next_chunk() -> Union[Dict[str, Any], bool]:
             "traceback": error_traceback
         }
 
-if __name__ == "__main__":
-    # Process the next chunk
-    result = add_next_chunk()
+def process_multiple_chunks(max_chunks=1):
+    """
+    Process multiple chunks in sequence.
     
-    # Print result summary
-    if isinstance(result, dict):
+    Args:
+        max_chunks (int): Maximum number of chunks to process
+        
+    Returns:
+        dict: Summary of processing results
+    """
+    chunks_processed = 0
+    chunks_succeeded = 0
+    processing_complete = False
+    
+    for i in range(max_chunks):
+        result = add_next_chunk()
+        
+        if not result:
+            processing_complete = True
+            logger.info("No more chunks to process")
+            break
+            
+        chunks_processed += 1
+        
         if result.get("success"):
-            print(f"Successfully processed chunk {result.get('chunk_id')}")
+            chunks_succeeded += 1
+            logger.info(f"Successfully processed chunk {result.get('chunk_id')} ({chunks_processed} of {max_chunks})")
         else:
-            print(f"Failed to process chunk: {result.get('error')}")
+            logger.error(f"Failed to process chunk: {result.get('error')}")
+            
+        if result.get("processing_complete"):
+            processing_complete = True
+            logger.info("All chunks have been processed")
+            break
+    
+    return {
+        "chunks_processed": chunks_processed,
+        "chunks_succeeded": chunks_succeeded,
+        "processing_complete": processing_complete
+    }
+
+if __name__ == "__main__":
+    import argparse
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Process chunks from documents and add them to the vector store")
+    parser.add_argument("--max-chunks", type=int, default=1, help="Maximum number of chunks to process")
+    
+    args = parser.parse_args()
+    
+    # Process chunks
+    if args.max_chunks > 1:
+        summary = process_multiple_chunks(args.max_chunks)
+        print(f"Processed {summary['chunks_processed']} chunks ({summary['chunks_succeeded']} succeeded)")
+        if summary['processing_complete']:
+            print("All chunks have been processed")
     else:
-        print("No more chunks to process")
+        # Process the next chunk
+        result = add_next_chunk()
+        
+        # Print result summary
+        if isinstance(result, dict):
+            if result.get("success"):
+                print(f"Successfully processed chunk {result.get('chunk_id')}")
+            else:
+                print(f"Failed to process chunk: {result.get('error')}")
+        else:
+            print("No more chunks to process")
