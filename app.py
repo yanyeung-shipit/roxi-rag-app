@@ -971,10 +971,17 @@ def add_topic_pages():
                 if success_count > 0:
                     new_document.processed = True
                     db.session.commit()
+                    
+                    # Re-query document to get the most up-to-date chunk count
+                    # This ensures we report the accurate number of chunks
+                    db.session.refresh(new_document)
+                    actual_chunk_count = len(new_document.chunks)
+                    
                     processed_topics.append({
                         "topic": topic,
                         "url": url,
-                        "chunks": success_count,
+                        "chunks": actual_chunk_count,
+                        "chunks_processed": success_count,  # Include initial processing count for debugging
                         "document_id": new_document.id
                     })
                 else:
@@ -1000,9 +1007,18 @@ def add_topic_pages():
             gc.collect()
         
         if processed_topics:
+            # Create more descriptive success message showing exact chunk counts
+            topic_chunks_info = []
+            for topic in processed_topics:
+                chunk_info = f"{topic['topic']} - {topic['chunks']} chunks"
+                topic_chunks_info.append(chunk_info)
+            
+            topic_details = ", ".join(topic_chunks_info)
+            success_message = f"Successfully processed topics: {topic_details}"
+            
             return jsonify({
                 'success': True,
-                'message': f'Successfully processed {len(processed_topics)} topic pages with memory optimization',
+                'message': success_message,
                 'processed': processed_topics,
                 'failed': failed_topics
             })
