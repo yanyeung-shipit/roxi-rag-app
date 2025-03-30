@@ -1,94 +1,95 @@
 #!/usr/bin/env python3
 """
-Enhanced Process to 50% Target
+Enhanced Processing to 50 Percent
 
-This script uses the enhanced batch processor to process chunks
-until 50% of all chunks are processed, with improved error handling
-and database connection management.
+This script processes chunks until 50% of them are in the vector store,
+with enhanced error handling, better checkpointing, and robust database connections.
+It's designed to be more resilient to PostgreSQL SSL connection errors.
 """
 
 import os
 import sys
-import logging
-import datetime
-import traceback
 import time
-import shutil
+import json
+import logging
+import traceback
+import random
+from datetime import datetime
+import argparse
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("enhanced_process_to_50_percent.log"),
+        logging.FileHandler("enhanced_50percent.log"),
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger("enhanced_process_to_50_percent")
-
-# Add the current directory to the path so we can import our modules
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-try:
-    from enhanced_batch_processor import EnhancedBatchProcessor
-except ImportError as e:
-    logger.error(f"Failed to import modules: {str(e)}")
-    sys.exit(1)
+logger = logging.getLogger("Enhanced50PercentProcessor")
 
 # Constants
 TARGET_PERCENTAGE = 50.0
-BATCH_SIZE = 5  # Smaller batch size for better reliability
-VECTOR_STORE_FILE = "faiss_index.bin"
-DOCUMENT_DATA_FILE = "document_data.pkl"
-BACKUP_DIR = "backups"
+CHECKPOINT_FILE = "enhanced_50percent_checkpoint.json"
+BATCH_SIZE = 3
 
-
-def create_backup():
-    """Create a backup of the vector store files."""
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Backup vector store files
-    for file_path in [VECTOR_STORE_FILE, DOCUMENT_DATA_FILE]:
-        if os.path.exists(file_path):
-            backup_path = os.path.join(BACKUP_DIR, f"{os.path.basename(file_path)}.{timestamp}")
-            shutil.copy2(file_path, backup_path)
-    
-    logger.info("Created vector store backup")
-    return True
-
-
-def main():
-    """Main function to run the enhanced batch processing to 50%."""
+def run_enhanced_processor():
+    """
+    Main function to run the enhanced processor to 50%.
+    """
     try:
-        logger.info(f"Starting enhanced processing to {TARGET_PERCENTAGE}% target")
+        # Import the enhanced batch processor
+        from enhanced_batch_processor import EnhancedBatchProcessor
         
-        # Create backup
-        create_backup()
+        # Create processor with target of 50%
+        processor = EnhancedBatchProcessor(
+            batch_size=BATCH_SIZE,
+            target_percentage=TARGET_PERCENTAGE
+        )
         
-        # Create and run enhanced batch processor
-        processor = EnhancedBatchProcessor(batch_size=BATCH_SIZE, target_percentage=TARGET_PERCENTAGE)
+        # Run until target
+        logger.info(f"Starting enhanced processing to {TARGET_PERCENTAGE}%")
+        result = processor.run_until_target()
         
-        # Start processing
-        start_time = time.time()
-        summary = processor.run_until_target()
-        end_time = time.time()
+        # Log the results
+        logger.info(f"Processing complete!")
+        logger.info(f"Initial progress: {result['initial_progress']['percentage_completed']:.2f}%")
+        logger.info(f"Final progress: {result['final_progress']['percentage_completed']:.2f}%")
+        logger.info(f"Elapsed time: {result['elapsed_time_seconds']/60:.2f} minutes")
+        logger.info(f"Processed {result['total_chunks_processed']} chunks in {result['batches_processed']} batches")
         
-        # Log final results
-        elapsed_time = end_time - start_time
-        minutes, seconds = divmod(int(elapsed_time), 60)
-        hours, minutes = divmod(minutes, 60)
-        
-        logger.info(f"Processing completed in {hours}h {minutes}m {seconds}s")
-        logger.info(f"Processed {summary['chunks_processed']} chunks in {summary['batches_processed']} batches")
-        logger.info(f"Start: {summary['start_percentage']}%, Final: {summary['final_percentage']}%")
+        # Print success message
+        print("\n== PROCESSING COMPLETE ==")
+        print(f"Successfully processed chunks to {result['final_progress']['percentage_completed']:.2f}% completion")
+        print(f"Target was: {TARGET_PERCENTAGE}%")
+        print(f"Total time: {result['elapsed_time_seconds']/60:.2f} minutes")
         
         return 0
+        
+    except ImportError as e:
+        logger.error(f"Error importing EnhancedBatchProcessor: {str(e)}")
+        print(f"Error: Could not import the EnhancedBatchProcessor.")
+        print(f"Please ensure enhanced_batch_processor.py is available in the current directory.")
+        return 1
+        
+    except KeyboardInterrupt:
+        logger.info("Processing interrupted by user")
+        print("\nProcessing interrupted by user.")
+        return 130
+        
     except Exception as e:
-        logger.error(f"Error in processing: {str(e)}")
-        logger.error(traceback.format_exc())
+        logger.error(f"Unhandled exception: {str(e)}")
+        traceback.print_exc()
+        print(f"\nError: {str(e)}")
+        print("Check enhanced_50percent.log for details.")
         return 1
 
-
 if __name__ == "__main__":
-    sys.exit(main())
+    parser = argparse.ArgumentParser(description="Enhanced chunk processor to 50% completion")
+    parser.add_argument('--batch-size', type=int, default=BATCH_SIZE,
+                        help=f"Batch size (default: {BATCH_SIZE})")
+    
+    args = parser.parse_args()
+    BATCH_SIZE = args.batch_size
+    
+    sys.exit(run_enhanced_processor())

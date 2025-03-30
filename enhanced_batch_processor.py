@@ -1,60 +1,69 @@
 #!/usr/bin/env python3
 """
-Enhanced Batch Processor
+Enhanced Batch Processor with Robust Database Connection Handling
 
-This module provides an improved version of the BatchProcessor class
-with more robust error handling, especially for database connection issues.
+This script processes chunks in batches with improved error handling
+for PostgreSQL SSL connection issues and other database connection problems.
+It implements exponential backoff and transaction management to ensure 
+robust operation even in environments with intermittent connection issues.
 """
 
 import os
 import sys
 import time
-import json
 import logging
-import datetime
+import json
+import random
+import pickle
+import traceback
+from typing import Dict, List, Set, Tuple, Any, Optional, Union
+from datetime import datetime
+from contextlib import contextmanager
+
 import sqlalchemy.exc
-from typing import Dict, Any, List, Set, Optional
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(f"logs/batch_processing/enhanced_batch_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"),
+        logging.FileHandler("enhanced_batch.log"),
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger(__name__)
-
-# Add the current directory to the path so we can import our modules
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from app import app, db
-from models import DocumentChunk
-from utils.vector_store import VectorStore
-from utils.llm_service import get_embedding
+logger = logging.getLogger("EnhancedBatchProcessor")
 
 # Constants
-CHECKPOINT_DIR = "logs/checkpoints"
-DEFAULT_TARGET_PERCENTAGE = 50.0
-DEFAULT_BATCH_SIZE = 5  # Smaller batches for stability
-MAX_RETRIES = 3
-RETRY_DELAY = 5  # seconds
-DB_MAX_RETRIES = 3
-DB_RETRY_DELAY = 10  # seconds
+DEFAULT_BATCH_SIZE = 5
+DEFAULT_TARGET_PERCENTAGE = 50.0  # Process up to 50% by default
+MAX_RETRY_ATTEMPTS = 5
+VECTOR_STORE_PATH = "document_data.pkl"
+FAISS_INDEX_PATH = "faiss_index.bin"
+CHECKPOINT_FILE = "enhanced_batch_checkpoint.json"
 
-# Ensure directories exist
-os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-os.makedirs("logs/batch_processing", exist_ok=True)
+# Custom exceptions
+class DatabaseConnectionError(Exception):
+    """Exception raised for persistent database connection issues."""
+    pass
 
+class ProcessingError(Exception):
+    """Exception raised for processing errors."""
+    pass
 
-class EnhancedBatchProcessor:
+class BatchProcessor:
     """
-    Enhanced version of the BatchProcessor class with better error handling.
-    Processes document chunks in batches and adds them to the vector store.
+    Enhanced batch processor with robust database connection handling.
+    
+    This processor implements:
+    1. Connection pooling with retries for database connection issues
+    2. Checkpoint-based progress tracking to resume interrupted processing
+    3. Transaction management to ensure database consistency
+    4. Detailed logging and error handling
     """
-
-    def __init__(self, batch_size: int = DEFAULT_BATCH_SIZE, target_percentage: float = DEFAULT_TARGET_PERCENTAGE):
+    
+    def __init__(self, batch_size: int = DEFAULT_BATCH_SIZE, 
+                 target_percentage: float = DEFAULT_TARGET_PERCENTAGE):
         """
         Initialize the batch processor.
         
@@ -64,84 +73,123 @@ class EnhancedBatchProcessor:
         """
         self.batch_size = batch_size
         self.target_percentage = target_percentage
-        self.vector_store = VectorStore()
-        self.processed_chunk_ids = self._get_processed_chunk_ids()
-        self.start_time = time.time()
-        self.chunks_processed = 0
-        self.db_error_count = 0
+        self.processed_chunk_ids = set()
         
+        # Statistics tracking
+        self.total_processed = 0
+        self.total_errors = 0
+        self.start_time = datetime.now()
+        
+        logger.info(f"Initializing enhanced batch processor with batch size {batch_size} "
+                   f"and target percentage {target_percentage}%")
+    
     def _get_processed_chunk_ids(self) -> Set[int]:
         """
-        Get IDs of chunks that have already been processed.
+        Get IDs of chunks that have already been processed from the vector store.
         
         Returns:
             Set of chunk IDs that are already in the vector store
         """
-        # Use the VectorStore's method directly to get processed chunk IDs
-        processed_ids = self.vector_store.get_processed_chunk_ids()
-        
-        logger.info(f"Found {len(processed_ids)} processed chunk IDs in vector store")
-        return processed_ids
-    
-    def _execute_db_query(self, query_func, *args, **kwargs):
-        """
-        Execute a database query with retry logic.
-        
-        Args:
-            query_func: Function to execute
+        if not os.path.exists(VECTOR_STORE_PATH):
+            logger.warning(f"Vector store file {VECTOR_STORE_PATH} does not exist")
+            return set()
             
-        Returns:
-            Result of the query or None if failed
-        """
-        for attempt in range(DB_MAX_RETRIES):
-            try:
-                with app.app_context():
-                    result = query_func(*args, **kwargs)
-                    self.db_error_count = 0  # Reset error count on success
-                    return result
-            except sqlalchemy.exc.OperationalError as e:
-                self.db_error_count += 1
-                logger.error(f"Database operational error (attempt {attempt+1}/{DB_MAX_RETRIES}): {str(e)}")
-                try:
-                    db.session.rollback()
-                    logger.info("Session rolled back")
-                except Exception:
-                    logger.error("Failed to rollback session")
+        try:
+            # Load the vector store
+            with open(VECTOR_STORE_PATH, 'rb') as f:
+                vector_store_data = pickle.load(f)
                 
-                if attempt < DB_MAX_RETRIES - 1:
-                    wait_time = DB_RETRY_DELAY * (attempt + 1)  # Exponential backoff
-                    logger.info(f"Waiting {wait_time} seconds before database retry...")
-                    time.sleep(wait_time)
-            except sqlalchemy.exc.DatabaseError as e:
-                self.db_error_count += 1
-                logger.error(f"Database error (attempt {attempt+1}/{DB_MAX_RETRIES}): {str(e)}")
-                try:
-                    db.session.rollback()
-                    logger.info("Session rolled back")
-                except Exception:
-                    logger.error("Failed to rollback session")
-                
-                if attempt < DB_MAX_RETRIES - 1:
-                    wait_time = DB_RETRY_DELAY * (attempt + 1)
-                    logger.info(f"Waiting {wait_time} seconds before database retry...")
-                    time.sleep(wait_time)
-            except Exception as e:
-                self.db_error_count += 1
-                logger.error(f"Unexpected error during database query (attempt {attempt+1}/{DB_MAX_RETRIES}): {str(e)}")
-                try:
-                    db.session.rollback()
-                    logger.info("Session rolled back")
-                except Exception:
-                    logger.error("Failed to rollback session")
-                
-                if attempt < DB_MAX_RETRIES - 1:
-                    wait_time = DB_RETRY_DELAY * (attempt + 1)
-                    logger.info(f"Waiting {wait_time} seconds before database retry...")
-                    time.sleep(wait_time)
-        
-        logger.error(f"Failed to execute database query after {DB_MAX_RETRIES} attempts")
-        return None
+            # Get chunk IDs from vector store
+            chunk_ids = set()
+            if 'documents' in vector_store_data and vector_store_data['documents']:
+                for doc_id, doc_data in vector_store_data['documents'].items():
+                    if 'chunks' in doc_data:
+                        for chunk_id in doc_data['chunks']:
+                            chunk_ids.add(chunk_id)
+            
+            logger.info(f"Found {len(chunk_ids)} already processed chunks in vector store")
+            return chunk_ids
+            
+        except Exception as e:
+            logger.error(f"Error loading vector store: {str(e)}")
+            return set()
     
+    def _get_db_engine(self):
+        """
+        Get a SQLAlchemy database engine with proper connection settings.
+        
+        Returns:
+            SQLAlchemy Engine with configured connection pool
+        """
+        from sqlalchemy import create_engine
+        from sqlalchemy.pool import QueuePool
+
+        # Get database URL from environment
+        database_url = os.environ.get("DATABASE_URL")
+        if not database_url:
+            raise ValueError("DATABASE_URL environment variable not set")
+
+        # Create custom connection arguments for PostgreSQL SSL issues
+        connect_args = {
+            "connect_timeout": 30,
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 5
+        }
+        
+        # Create engine with connection pooling
+        engine = create_engine(
+            database_url,
+            connect_args=connect_args,
+            pool_size=5,
+            max_overflow=10,
+            pool_recycle=300,  # Recycle connections after 5 minutes
+            pool_pre_ping=True,  # Test connections before using them
+            poolclass=QueuePool
+        )
+        
+        return engine
+        
+    @contextmanager
+    def _db_session(self):
+        """
+        Context manager for database sessions with robust error handling.
+        """
+        from sqlalchemy.orm import sessionmaker
+
+        # Create a new engine for this session
+        engine = self._get_db_engine()
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        
+        try:
+            yield session
+            session.commit()
+        except sqlalchemy.exc.OperationalError as e:
+            session.rollback()
+            logger.error(f"Database operational error: {str(e)}")
+            raise DatabaseConnectionError(f"Database connection error: {str(e)}")
+        except sqlalchemy.exc.SQLAlchemyError as e:
+            session.rollback()
+            logger.error(f"SQLAlchemy error: {str(e)}")
+            raise
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Unexpected error in database session: {str(e)}")
+            raise
+        finally:
+            session.close()
+            engine.dispose()
+    
+    @retry(
+        retry=retry_if_exception_type(DatabaseConnectionError),
+        stop=stop_after_attempt(MAX_RETRY_ATTEMPTS),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        before_sleep=lambda retry_state: logger.warning(
+            f"Retry attempt {retry_state.attempt_number}/{MAX_RETRY_ATTEMPTS} "
+            f"after database connection error. Waiting...")
+    )
     def get_progress(self) -> Dict[str, Any]:
         """
         Get the current progress of vector store rebuilding.
@@ -149,99 +197,157 @@ class EnhancedBatchProcessor:
         Returns:
             Dictionary with progress information
         """
-        def query_total_chunks():
-            return db.session.query(DocumentChunk).count()
-        
-        # Execute with retry logic
-        total_chunks = self._execute_db_query(query_total_chunks)
-        
-        if total_chunks is None:
-            logger.warning("Could not get total chunk count, using cached data")
-            # Use last known values or defaults
-            processed_chunks = len(self.vector_store.documents)
-            total_chunks = max(processed_chunks, 1261)  # Use known total or default
-        else:
-            processed_chunks = len(self.vector_store.documents)
-        
-        percentage = (processed_chunks / total_chunks) * 100 if total_chunks else 0
-        
-        # Calculate rate and ETA
-        elapsed_time = max(1, time.time() - self.start_time)
-        rate = self.chunks_processed / elapsed_time if elapsed_time > 0 else 0
-        
-        remaining_chunks = total_chunks - processed_chunks
-        estimated_seconds_remaining = remaining_chunks / rate if rate > 0 else 0
-        
-        # Format time remaining
-        hours, remainder = divmod(int(estimated_seconds_remaining), 3600)
-        minutes, seconds = divmod(remainder, 60)
-        time_remaining = f"{hours}h {minutes}m {seconds}s"
-        
-        return {
-            "processed_chunks": processed_chunks,
-            "total_chunks": total_chunks,
-            "percentage": percentage,
-            "rate_chunks_per_second": round(rate, 3),
-            "elapsed_time": elapsed_time,
-            "estimated_time_remaining": time_remaining
+        # Initialize with default values in case of error
+        progress = {
+            "total_chunks": 0,
+            "processed_chunks": 0,
+            "percentage_completed": 0,
+            "target_percentage": self.target_percentage,
+            "target_chunks": 0,
+            "remaining_to_target": 0,
+            "estimated_time_remaining": "Unknown"
         }
+        
+        try:
+            # Load already processed chunks if not loaded
+            if not self.processed_chunk_ids:
+                self.processed_chunk_ids = self._get_processed_chunk_ids()
+                
+            # Get total chunks from database
+            with self._db_session() as session:
+                # Import here to avoid circular imports
+                from sqlalchemy import func, text
+                
+                # Get total chunks count
+                result = session.execute(text("SELECT COUNT(*) FROM document_chunks"))
+                total_chunks = result.scalar() or 0
+                
+                # Calculate progress
+                processed_chunks = len(self.processed_chunk_ids)
+                percentage_completed = (processed_chunks / total_chunks * 100) if total_chunks > 0 else 0
+                target_chunks = int(total_chunks * self.target_percentage / 100)
+                remaining_to_target = max(0, target_chunks - processed_chunks)
+                
+                # Calculate estimated time
+                elapsed_time = (datetime.now() - self.start_time).total_seconds()
+                if processed_chunks > 0 and remaining_to_target > 0:
+                    time_per_chunk = elapsed_time / processed_chunks
+                    estimated_seconds = time_per_chunk * remaining_to_target
+                    estimated_time = f"{estimated_seconds/60:.1f} minutes" if estimated_seconds < 3600 else f"{estimated_seconds/3600:.1f} hours"
+                else:
+                    estimated_time = "Unknown"
+                
+                progress = {
+                    "total_chunks": total_chunks,
+                    "processed_chunks": processed_chunks,
+                    "percentage_completed": percentage_completed,
+                    "target_percentage": self.target_percentage,
+                    "target_chunks": target_chunks,
+                    "remaining_to_target": remaining_to_target,
+                    "estimated_time_remaining": estimated_time
+                }
+                
+            logger.info(f"Progress: {progress['percentage_completed']:.2f}% "
+                       f"({progress['processed_chunks']}/{progress['total_chunks']} chunks processed)")
+            
+            return progress
+            
+        except DatabaseConnectionError:
+            # Let the retry decorator handle this
+            raise
+        except Exception as e:
+            logger.error(f"Error checking progress: {str(e)}")
+            return progress
     
-    def get_next_chunk_batch(self) -> List[DocumentChunk]:
+    @retry(
+        retry=retry_if_exception_type(DatabaseConnectionError),
+        stop=stop_after_attempt(MAX_RETRY_ATTEMPTS),
+        wait=wait_exponential(multiplier=1, min=4, max=60)
+    )
+    def get_next_chunk_batch(self) -> List:
         """
         Get the next batch of chunks to process.
         
         Returns:
             List of DocumentChunk objects
         """
-        def query_chunks():
-            # Query for chunks that haven't been processed yet
-            return (db.session.query(DocumentChunk)
-                .filter(~DocumentChunk.id.in_(self.processed_chunk_ids))
-                .order_by(DocumentChunk.id)
-                .limit(self.batch_size)
-                .all())
+        from sqlalchemy import text
         
-        # Execute with retry logic
-        chunks = self._execute_db_query(query_chunks)
+        # Ensure we have the processed chunk IDs
+        if not self.processed_chunk_ids:
+            self.processed_chunk_ids = self._get_processed_chunk_ids()
         
-        if chunks is None:
-            logger.error("Failed to retrieve next chunk batch")
-            return []
+        try:
+            chunks = []
+            with self._db_session() as session:
+                # Construct query to exclude already processed chunks
+                if self.processed_chunk_ids:
+                    format_strings = ','.join(['%s' % id for id in self.processed_chunk_ids])
+                    query = text(f"""
+                        SELECT dc.id, dc.document_id, dc.chunk_index, dc.text, dc.embedding,
+                               d.url, d.title, d.source_type, d.upload_date
+                        FROM document_chunks dc
+                        JOIN documents d ON dc.document_id = d.id
+                        WHERE dc.id NOT IN ({format_strings})
+                        ORDER BY dc.document_id, dc.chunk_index
+                        LIMIT :limit
+                    """)
+                else:
+                    query = text("""
+                        SELECT dc.id, dc.document_id, dc.chunk_index, dc.text, dc.embedding,
+                               d.url, d.title, d.source_type, d.upload_date
+                        FROM document_chunks dc
+                        JOIN documents d ON dc.document_id = d.id
+                        ORDER BY dc.document_id, dc.chunk_index
+                        LIMIT :limit
+                    """)
+                
+                # Execute query with batch size
+                result = session.execute(query, {"limit": self.batch_size})
+                
+                # Convert to list of dictionaries
+                for row in result:
+                    chunk = {
+                        "id": row.id,
+                        "document_id": row.document_id,
+                        "chunk_index": row.chunk_index,
+                        "text": row.text,
+                        "embedding": row.embedding,
+                        "metadata": {
+                            "url": row.url,
+                            "title": row.title,
+                            "source_type": row.source_type,
+                            "upload_date": row.upload_date
+                        }
+                    }
+                    chunks.append(chunk)
+                
+            logger.info(f"Retrieved {len(chunks)} chunks for processing")
+            return chunks
             
-        return chunks
+        except DatabaseConnectionError:
+            # Let the retry decorator handle this
+            raise
+        except Exception as e:
+            logger.error(f"Error getting next chunk batch: {str(e)}")
+            traceback.print_exc()
+            raise
     
     def save_checkpoint(self) -> None:
         """Save the current state of processed chunk IDs."""
         try:
-            checkpoint_path = os.path.join(
-                CHECKPOINT_DIR, 
-                f"checkpoint_{datetime.datetime.now().isoformat()}.json"
-            )
-            
-            progress = self.get_progress()
-            
-            data = {
-                "timestamp": datetime.datetime.now().isoformat(),
+            checkpoint_data = {
                 "processed_chunk_ids": list(self.processed_chunk_ids),
-                "progress": progress
+                "total_processed": self.total_processed,
+                "total_errors": self.total_errors,
+                "timestamp": datetime.now().isoformat()
             }
             
-            with open(checkpoint_path, 'w') as f:
-                json.dump(data, f, indent=2)
+            with open(CHECKPOINT_FILE, 'w') as f:
+                json.dump(checkpoint_data, f)
                 
-            logger.info(f"Saved checkpoint with {len(self.processed_chunk_ids)} processed chunk IDs")
+            logger.info(f"Saved checkpoint with {len(self.processed_chunk_ids)} processed chunks")
             
-            # Keep only the 5 most recent checkpoints
-            checkpoints = sorted([
-                os.path.join(CHECKPOINT_DIR, f) 
-                for f in os.listdir(CHECKPOINT_DIR) 
-                if f.startswith("checkpoint_")
-            ], key=os.path.getmtime, reverse=True)
-            
-            for old_checkpoint in checkpoints[5:]:
-                os.remove(old_checkpoint)
-                logger.debug(f"Removed old checkpoint: {old_checkpoint}")
-                
         except Exception as e:
             logger.error(f"Error saving checkpoint: {str(e)}")
     
@@ -252,172 +358,135 @@ class EnhancedBatchProcessor:
         Returns:
             True if checkpoint was loaded, False otherwise
         """
-        try:
-            checkpoints = sorted([
-                os.path.join(CHECKPOINT_DIR, f) 
-                for f in os.listdir(CHECKPOINT_DIR) 
-                if f.startswith("checkpoint_")
-            ], key=os.path.getmtime, reverse=True)
+        if not os.path.exists(CHECKPOINT_FILE):
+            logger.info("No checkpoint file found")
+            return False
             
-            if not checkpoints:
-                logger.info("No checkpoint found")
-                return False
-                
-            with open(checkpoints[0], 'r') as f:
+        try:
+            with open(CHECKPOINT_FILE, 'r') as f:
                 checkpoint_data = json.load(f)
                 
-            # Update processed chunk IDs
             self.processed_chunk_ids = set(checkpoint_data.get("processed_chunk_ids", []))
+            self.total_processed = checkpoint_data.get("total_processed", 0)
+            self.total_errors = checkpoint_data.get("total_errors", 0)
             
-            logger.info(f"Loaded checkpoint from {checkpoint_data.get('timestamp', 'unknown')}")
-            logger.info(f"Checkpoint contains {len(self.processed_chunk_ids)} processed chunk IDs")
-            
-            if "progress" in checkpoint_data:
-                progress = checkpoint_data["progress"]
-                logger.info(f"Checkpoint progress: {progress.get('percentage', 0)}% "
-                           f"({progress.get('processed_chunks', 0)}/{progress.get('total_chunks', 0)} chunks)")
-            
+            logger.info(f"Loaded checkpoint with {len(self.processed_chunk_ids)} processed chunks")
             return True
+            
         except Exception as e:
             logger.error(f"Error loading checkpoint: {str(e)}")
             return False
     
-    def process_chunk(self, chunk: DocumentChunk) -> bool:
+    def process_chunk(self, chunk: Dict[str, Any]) -> bool:
         """
         Process a single chunk and add it to the vector store.
         
         Args:
-            chunk: The DocumentChunk object to process
+            chunk: The document chunk to process
             
         Returns:
             True if successful, False otherwise
         """
         try:
-            # We'll create a safe version of the metadata outside the session context
-            # to avoid any detached object issues
-            chunk_id = chunk.id
-            document_id = chunk.document_id
-            chunk_index = chunk.chunk_index
-            text_content = chunk.text_content
+            from utils.vector_store import VectorStore
             
-            # Safe document properties
-            document_filename = ""
-            document_title = ""
-            formatted_citation = None
-            document_doi = None
+            # Load vector store
+            vector_store = VectorStore()
+            vector_store.load_from_disk()
             
-            # Extract document properties safely
-            if hasattr(chunk, 'document') and chunk.document:
-                document = chunk.document
-                document_filename = document.filename or ""
-                document_title = document.title or ""
-                
-                if hasattr(document, 'formatted_citation'):
-                    formatted_citation = document.formatted_citation
-                    
-                if hasattr(document, 'doi'):
-                    document_doi = document.doi
+            # Process the chunk
+            chunk_id = chunk["id"]
+            document_id = chunk["document_id"]
             
-            # Create metadata
-            metadata = {
-                "chunk_id": chunk_id,
-                "db_id": chunk_id,
-                "document_id": document_id,
-                "chunk_index": chunk_index,
-                "filename": document_filename,
-                "title": document_title
-            }
+            # Add the document to vector store
+            metadata = chunk["metadata"]
+            metadata["chunk_index"] = chunk["chunk_index"]
             
-            # Add citation information if available
-            if formatted_citation:
-                metadata["formatted_citation"] = formatted_citation
-                
-            if document_doi:
-                metadata["doi"] = document_doi
-            
-            # Get text embedding
-            embedding = get_embedding(text_content)
-            
-            if not embedding:
-                logger.error(f"Failed to get embedding for chunk {chunk_id}")
-                return False
-            
-            # Add to vector store
-            self.vector_store.add_document(
-                document_id=f"chunk_{chunk_id}",
-                text=text_content,
-                metadata=metadata,
-                embedding=embedding
+            vector_store.add_document(
+                document_id=str(document_id),
+                chunk_id=chunk_id,
+                text=chunk["text"],
+                embedding=chunk["embedding"],
+                metadata=metadata
             )
             
-            # Update processed IDs
-            self.processed_chunk_ids.add(chunk_id)
-            self.chunks_processed += 1
+            # Save the vector store
+            vector_store.save_to_disk()
             
+            # Update the processed chunk IDs
+            self.processed_chunk_ids.add(chunk_id)
+            
+            logger.info(f"Successfully processed chunk {chunk_id} for document {document_id}")
             return True
             
         except Exception as e:
-            logger.error(f"Error processing chunk {chunk.id}: {str(e)}")
+            logger.error(f"Error processing chunk {chunk.get('id')}: {str(e)}")
+            traceback.print_exc()
             return False
     
-    def process_batch(self, chunks: List[DocumentChunk]) -> Dict[str, Any]:
+    def process_batch(self, chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Process a batch of chunks.
         
         Args:
-            chunks: List of DocumentChunk objects to process
+            chunks: List of chunks to process
             
         Returns:
             Dictionary with processing results
         """
-        results = {
-            "total": len(chunks),
+        start_time = time.time()
+        batch_results = {
             "successful": 0,
             "failed": 0,
-            "chunk_ids_processed": [],
-            "failed_chunk_ids": []
+            "skipped": 0,
+            "chunk_ids": [],
+            "error_messages": []
         }
         
+        if not chunks:
+            logger.info("No chunks to process in this batch")
+            return batch_results
+        
+        logger.info(f"Processing batch of {len(chunks)} chunks")
+        
+        # Process each chunk
         for chunk in chunks:
-            logger.info(f"Processing chunk {chunk.id}")
+            chunk_id = chunk.get("id")
             
             # Skip already processed chunks
-            if chunk.id in self.processed_chunk_ids:
-                logger.info(f"Chunk {chunk.id} already processed, skipping")
+            if chunk_id in self.processed_chunk_ids:
+                logger.debug(f"Skipping already processed chunk {chunk_id}")
+                batch_results["skipped"] += 1
                 continue
                 
-            # Attempt processing with retries
-            success = False
-            attempts = 0
-            
-            while not success and attempts < MAX_RETRIES:
-                attempts += 1
-                if attempts > 1:
-                    logger.info(f"Retry {attempts}/{MAX_RETRIES} for chunk {chunk.id}")
-                    time.sleep(RETRY_DELAY)
-                
-                success = self.process_chunk(chunk)
-            
-            if success:
-                results["successful"] += 1
-                results["chunk_ids_processed"].append(chunk.id)
-                logger.info(f"Successfully processed chunk {chunk.id}")
-            else:
-                results["failed"] += 1
-                results["failed_chunk_ids"].append(chunk.id)
-                logger.error(f"Failed to process chunk {chunk.id} after {MAX_RETRIES} attempts")
+            # Process the chunk
+            try:
+                if self.process_chunk(chunk):
+                    batch_results["successful"] += 1
+                    batch_results["chunk_ids"].append(chunk_id)
+                    self.total_processed += 1
+                else:
+                    batch_results["failed"] += 1
+                    batch_results["error_messages"].append(f"Failed to process chunk {chunk_id}")
+                    self.total_errors += 1
+            except Exception as e:
+                batch_results["failed"] += 1
+                batch_results["error_messages"].append(f"Exception processing chunk {chunk_id}: {str(e)}")
+                self.total_errors += 1
+        
+        # Calculate processing time
+        elapsed_time = time.time() - start_time
+        batch_results["elapsed_time"] = elapsed_time
+        batch_results["chunks_per_second"] = len(chunks) / elapsed_time if elapsed_time > 0 else 0
+        
+        logger.info(f"Batch processing completed: {batch_results['successful']} successful, "
+                   f"{batch_results['failed']} failed, {batch_results['skipped']} skipped "
+                   f"in {elapsed_time:.2f} seconds")
         
         # Save checkpoint after each batch
         self.save_checkpoint()
         
-        # Save vector store to disk after each batch
-        try:
-            self.vector_store.save_to_disk()
-            logger.info("Saved vector store to disk")
-        except Exception as e:
-            logger.error(f"Error saving vector store to disk: {str(e)}")
-        
-        return results
+        return batch_results
     
     def run_until_target(self) -> Dict[str, Any]:
         """
@@ -426,120 +495,120 @@ class EnhancedBatchProcessor:
         Returns:
             Dictionary with processing summary
         """
+        logger.info(f"Starting batch processing until {self.target_percentage}% completion")
+        
+        # Load checkpoint if available
+        if not self.load_checkpoint():
+            self.processed_chunk_ids = self._get_processed_chunk_ids()
+        
+        # Initial progress check
+        progress = self.get_progress()
+        
+        # Main processing loop
+        batches_processed = 0
+        total_chunks_processed = 0
+        
+        try:
+            while progress["percentage_completed"] < self.target_percentage:
+                logger.info(f"Current progress: {progress['percentage_completed']:.2f}% "
+                           f"(Target: {self.target_percentage}%)")
+                
+                # Get next batch of chunks
+                chunks = self.get_next_chunk_batch()
+                
+                # If no more chunks to process, we're done
+                if not chunks:
+                    logger.info("No more chunks to process")
+                    break
+                
+                # Process the batch
+                batch_results = self.process_batch(chunks)
+                
+                # Increment counters
+                batches_processed += 1
+                total_chunks_processed += batch_results["successful"]
+                
+                # Update progress
+                progress = self.get_progress()
+                
+                # Save a checkpoint
+                self.save_checkpoint()
+                
+                # Add a small random sleep to avoid overwhelming the database
+                sleep_time = random.uniform(0.5, 2.0)
+                logger.info(f"Sleeping for {sleep_time:.2f} seconds before next batch")
+                time.sleep(sleep_time)
+        
+        except KeyboardInterrupt:
+            logger.info("Processing interrupted by user")
+        except Exception as e:
+            logger.error(f"Error during batch processing: {str(e)}")
+            traceback.print_exc()
+        
+        # Final progress check
+        final_progress = self.get_progress()
+        
+        # Generate summary
+        end_time = datetime.now()
+        elapsed_time = (end_time - self.start_time).total_seconds()
+        
         summary = {
-            "batches_processed": 0,
-            "chunks_processed": 0,
-            "chunks_failed": 0,
-            "start_percentage": 0,
-            "final_percentage": 0,
-            "reached_target": False
+            "start_time": self.start_time.isoformat(),
+            "end_time": end_time.isoformat(),
+            "elapsed_time_seconds": elapsed_time,
+            "batches_processed": batches_processed,
+            "total_chunks_processed": total_chunks_processed,
+            "total_errors": self.total_errors,
+            "initial_progress": progress,
+            "final_progress": final_progress
         }
         
-        # Load checkpoint
-        self.load_checkpoint()
-        
-        # Get initial progress
-        progress = self.get_progress()
-        summary["start_percentage"] = progress["percentage"]
-        
-        logger.info(f"Starting batch processing to reach {self.target_percentage}% completion")
-        logger.info(f"Initial progress: {progress['percentage']}% "
-                   f"({progress['processed_chunks']}/{progress['total_chunks']} chunks)")
-        
-        # Process batches until target reached
-        consecutive_db_errors = 0
-        max_consecutive_db_errors = 3
-        
-        while progress["percentage"] < self.target_percentage:
-            # If database errors persist, pause processing
-            if self.db_error_count > 0:
-                consecutive_db_errors += 1
-                if consecutive_db_errors >= max_consecutive_db_errors:
-                    logger.error(f"Too many consecutive database errors ({consecutive_db_errors}), pausing processing for recovery")
-                    time.sleep(60)  # Wait for a minute
-                    consecutive_db_errors = 0
-            else:
-                consecutive_db_errors = 0
-            
-            # Get next batch
-            chunks = self.get_next_chunk_batch()
-            
-            if not chunks:
-                logger.info("No more chunks to process")
-                break
-            
-            # Process the batch
-            logger.info(f"Processing batch of {len(chunks)} chunks")
-            results = self.process_batch(chunks)
-            
-            # Update summary
-            summary["batches_processed"] += 1
-            summary["chunks_processed"] += results["successful"]
-            summary["chunks_failed"] += results["failed"]
-            
-            # Update progress
-            progress = self.get_progress()
-            
-            # Log progress
-            logger.info(f"Batch {summary['batches_processed']} completed: "
-                      f"{results['successful']}/{results['total']} chunks successful")
-            logger.info(f"Progress: {progress['percentage']}% "
-                      f"({progress['processed_chunks']}/{progress['total_chunks']} chunks)")
-            logger.info(f"Processing rate: {progress['rate_chunks_per_second']} chunks/sec, "
-                      f"Estimated time remaining: {progress['estimated_time_remaining']}")
-            
-            # Check if target reached
-            if progress["percentage"] >= self.target_percentage:
-                logger.info(f"Target percentage of {self.target_percentage}% reached!")
-                summary["reached_target"] = True
-                break
-            
-            # Short pause between batches to reduce resource usage
-            time.sleep(1)
-        
-        # Final progress
-        progress = self.get_progress()
-        summary["final_percentage"] = progress["percentage"]
-        
-        logger.info(f"Batch processing completed")
-        logger.info(f"Final progress: {progress['percentage']}% "
-                   f"({progress['processed_chunks']}/{progress['total_chunks']} chunks)")
-        logger.info(f"Estimated time remaining: {progress['estimated_time_remaining']}")
-        logger.info(f"Processed {summary['chunks_processed']} chunks in {summary['batches_processed']} batches")
+        logger.info("Batch processing complete")
+        logger.info(f"Processed {total_chunks_processed} chunks in {batches_processed} batches")
+        logger.info(f"Initial progress: {progress['percentage_completed']:.2f}%, "
+                   f"Final progress: {final_progress['percentage_completed']:.2f}%")
+        logger.info(f"Total elapsed time: {elapsed_time:.2f} seconds")
         
         return summary
-
 
 def main():
     """Main function to run the batch processor."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="Enhanced batch processing for vector store rebuilding")
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="Batch size")
-    parser.add_argument("--target", type=float, default=DEFAULT_TARGET_PERCENTAGE, help="Target percentage")
+    parser = argparse.ArgumentParser(description="Enhanced batch processor for vector store rebuilding")
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, 
+                        help=f"Batch size (default: {DEFAULT_BATCH_SIZE})")
+    parser.add_argument("--target", type=float, default=DEFAULT_TARGET_PERCENTAGE,
+                        help=f"Target percentage (default: {DEFAULT_TARGET_PERCENTAGE}%)")
     
     args = parser.parse_args()
     
+    # Create and run batch processor
+    processor = BatchProcessor(batch_size=args.batch_size, target_percentage=args.target)
+    
     try:
-        # Initialize processor
-        processor = EnhancedBatchProcessor(
-            batch_size=args.batch_size,
-            target_percentage=args.target
-        )
-        
-        # Run until target
         summary = processor.run_until_target()
         
-        logger.info(f"Processing completed: {summary['final_percentage']}% reached")
-        logger.info(f"Processed {summary['chunks_processed']} chunks in {summary['batches_processed']} batches")
+        # Print summary
+        print("\n=== Processing Summary ===")
+        print(f"Started: {summary['start_time']}")
+        print(f"Ended: {summary['end_time']}")
+        print(f"Elapsed time: {summary['elapsed_time_seconds']/60:.2f} minutes")
+        print(f"Batches processed: {summary['batches_processed']}")
+        print(f"Chunks processed: {summary['total_chunks_processed']}")
+        print(f"Errors encountered: {summary['total_errors']}")
+        print(f"Initial progress: {summary['initial_progress']['percentage_completed']:.2f}%")
+        print(f"Final progress: {summary['final_progress']['percentage_completed']:.2f}%")
+        
+        # Save summary to file
+        with open("enhanced_batch_summary.json", "w") as f:
+            json.dump(summary, f, indent=2)
         
         return 0
     except Exception as e:
-        logger.error(f"Error in batch processing: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.error(f"Fatal error: {str(e)}")
+        traceback.print_exc()
         return 1
-
 
 if __name__ == "__main__":
     sys.exit(main())
