@@ -3,34 +3,50 @@ import time
 import random
 import logging
 import threading
-import urllib.parse
 import gc
 import psutil
+import sys
 from datetime import datetime, timedelta
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, scoped_session
 from models import Document, DocumentChunk
-from utils.document_processor import process_pdf
-from utils.vector_store import VectorStore
-from utils.citation_manager import extract_citation_info
-from utils.web_scraper import scrape_website, chunk_text
-from utils.resource_monitor import get_resource_data, determine_processing_mode, get_system_resources, set_processing_status
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Initialize database connection
+# Lazy loading system for imports
+def _lazy_import(module_name):
+    """Lazily import a module only when it's needed."""
+    return __import__(module_name, fromlist=['*'])
+
+# Global variables
 DATABASE_URL = os.environ.get("DATABASE_URL")
-engine = create_engine(DATABASE_URL)
-session_factory = sessionmaker(bind=engine)
-Session = scoped_session(session_factory)
-
-# Initialize vector store
-vector_store = VectorStore()
-
-# Global background processor instance
+_engine = None
+_Session = None
+_vector_store = None
 _background_processor = None
+
+# Lazy initialization functions
+def get_engine():
+    global _engine
+    if _engine is None:
+        sqlalchemy = _lazy_import('sqlalchemy')
+        _engine = sqlalchemy.create_engine(DATABASE_URL)
+    return _engine
+
+def get_session_factory():
+    global _Session
+    if _Session is None:
+        sqlalchemy_orm = _lazy_import('sqlalchemy.orm')
+        session_factory = sqlalchemy_orm.sessionmaker(bind=get_engine())
+        _Session = sqlalchemy_orm.scoped_session(session_factory)
+    return _Session
+
+def get_vector_store():
+    global _vector_store
+    if _vector_store is None:
+        vector_store_module = _lazy_import('utils.vector_store')
+        _vector_store = vector_store_module.VectorStore()
+    return _vector_store
 
 # Pre-configured singleton instance, will be set at the end of the file
 background_processor = None
@@ -146,13 +162,17 @@ def force_deep_sleep():
         # Now that we're in deep sleep, set a more aggressive cache cleaning approach
         try:
             from utils.llm_service import _CACHE_TTL, _CACHE_CLEANUP_INTERVAL
-            import sys
             # If available, override with more aggressive settings during deep sleep
-            sys.modules['utils.llm_service']._CACHE_TTL = 30  # 30 seconds TTL (more aggressive)
-            sys.modules['utils.llm_service']._CACHE_CLEANUP_INTERVAL = 15  # Clean up every 15 seconds
+            # Use safer dict-based access to modify module variables
+            llm_service_module = _lazy_import('utils.llm_service')
+            if hasattr(llm_service_module, '_CACHE_TTL'):
+                llm_service_module._CACHE_TTL = 30  # 30 seconds TTL (more aggressive)
+            if hasattr(llm_service_module, '_CACHE_CLEANUP_INTERVAL'):
+                llm_service_module._CACHE_CLEANUP_INTERVAL = 15  # Clean up every 15 seconds
             # Also reduce max cache size during deep sleep
-            sys.modules['utils.llm_service']._MAX_CACHE_SIZE = 25  # Very small cache during deep sleep
-            logger.info(f"Set aggressive cache timeout during deep sleep: TTL={60 * 1}s, Cleanup={30}s")
+            if hasattr(llm_service_module, '_MAX_CACHE_SIZE'):
+                llm_service_module._MAX_CACHE_SIZE = 25  # Very small cache during deep sleep
+            logger.info(f"Set aggressive cache timeout during deep sleep: TTL=30s, Cleanup=15s")
         except Exception as e:
             logger.warning(f"Failed to update cache settings: {str(e)}")
         
@@ -161,7 +181,8 @@ def force_deep_sleep():
         logger.info(f"Memory usage reduced by {memory_stats['saved_mb']}MB to {memory_stats['after_mb']}MB")
         
         # Pass 0.0 as rate when manually activating deep sleep
-        set_processing_status("deep_sleep", 0.0)
+        resource_monitor = _lazy_import('utils.resource_monitor')
+        resource_monitor.set_processing_status("deep_sleep", 0.0)
         return True
     except Exception as e:
         logger.error(f"Error forcing deep sleep mode: {str(e)}")
@@ -212,12 +233,14 @@ def exit_deep_sleep():
         
         # Reset cache settings to normal values when exiting deep sleep
         try:
-            import sys
             # Reset to default values for normal operation
-            sys.modules['utils.llm_service']._CACHE_TTL = 60 * 3  # 3 minutes TTL
-            sys.modules['utils.llm_service']._CACHE_CLEANUP_INTERVAL = 60 * 1  # Clean up every minute
-            # Also reset max cache size
-            sys.modules['utils.llm_service']._MAX_CACHE_SIZE = 75  # Normal cache size (matches the new reduced value)
+            llm_service_module = _lazy_import('utils.llm_service')
+            if hasattr(llm_service_module, '_CACHE_TTL'):
+                llm_service_module._CACHE_TTL = 60 * 3  # 3 minutes TTL
+            if hasattr(llm_service_module, '_CACHE_CLEANUP_INTERVAL'):
+                llm_service_module._CACHE_CLEANUP_INTERVAL = 60 * 1  # Clean up every minute
+            if hasattr(llm_service_module, '_MAX_CACHE_SIZE'):
+                llm_service_module._MAX_CACHE_SIZE = 75  # Normal cache size
             logger.info(f"Reset cache settings to normal: TTL={60 * 3}s, Cleanup={60 * 1}s, Cache Size=75")
         except Exception as e:
             logger.warning(f"Failed to reset cache settings: {str(e)}")
@@ -225,7 +248,9 @@ def exit_deep_sleep():
         logger.info(f"Deep sleep mode exited. Sleep time reset to {_background_processor.sleep_time}s")
         logger.info(f"Memory status after exit: {memory_stats['after_mb']}MB (released {memory_stats['saved_mb']}MB)")
         
-        set_processing_status("active", 0.0)  # Reset status to active
+        # Reset status to active
+        resource_monitor = _lazy_import('utils.resource_monitor')
+        resource_monitor.set_processing_status("active", 0.0)
         return True
     except Exception as e:
         logger.error(f"Error exiting deep sleep mode: {str(e)}")
@@ -302,12 +327,15 @@ class BackgroundProcessor:
         self.last_work_found_time = time.time()  # Track when we last found work
         self.vector_store_unloaded = False  # Track if vector store has been unloaded
         
-        # Create SQLAlchemy engine and session
-        self.engine = create_engine(DATABASE_URL)
-        self.Session = scoped_session(sessionmaker(bind=self.engine))
+        # Lazily create SQLAlchemy engine and session
+        sqlalchemy = _lazy_import('sqlalchemy')
+        sqlalchemy_orm = _lazy_import('sqlalchemy.orm')
+        self.engine = sqlalchemy.create_engine(DATABASE_URL)
+        self.Session = sqlalchemy_orm.scoped_session(sqlalchemy_orm.sessionmaker(bind=self.engine))
         
         # Init vector store
-        self.vector_store = VectorStore()
+        vector_store_module = _lazy_import('utils.vector_store')
+        self.vector_store = vector_store_module.VectorStore()
         
         # Since we're starting in deep sleep mode, unload the vector store to save memory
         self.vector_store_unloaded = True
@@ -336,7 +364,8 @@ class BackgroundProcessor:
         except Exception as e:
             logger.exception(f"Error creating session: {str(e)}")
             # If we can't create a session through the scoped session, try direct creation
-            return sessionmaker(bind=self.engine)()
+            sqlalchemy_orm = _lazy_import('sqlalchemy.orm')
+            return sqlalchemy_orm.sessionmaker(bind=self.engine)()
         
     def start(self, start_in_deep_sleep=True):
         """
@@ -618,6 +647,10 @@ class BackgroundProcessor:
                 if self.in_deep_sleep:
                     self.in_deep_sleep = False
                     logger.info(f"Exiting deep sleep mode, work found!")
+                    
+                    # Make sure to load the vector store if it was unloaded during deep sleep
+                    if self.vector_store_unloaded:
+                        self.ensure_vector_store_loaded()
                 
                 logger.debug(f"Found work to do, resetting sleep time to {self.sleep_time}s")
                 
@@ -704,6 +737,13 @@ class BackgroundProcessor:
                         doc.updated_at = datetime.utcnow()
                         
                         # Add chunks to database and vector store
+                        # Ensure the vector store is loaded before using it
+                        if self.vector_store_unloaded:
+                            self.ensure_vector_store_loaded()
+                        
+                        # Import vector store to use for adding chunks
+                        from utils.vector_store import vector_store
+                        
                         for i, chunk in enumerate(chunks):
                             # Create metadata for the chunk
                             chunk_metadata = {
@@ -766,14 +806,17 @@ class BackgroundProcessor:
         
     def get_status(self):
         """Get the current status of the background processor with resource information."""
+        # Lazily import resource monitor functions
+        resource_monitor = _lazy_import('utils.resource_monitor')
+        
         # Get current resource information
-        resource_data = get_resource_data()
+        resource_data = resource_monitor.get_resource_data()
         
         # Get system resources for real-time data
-        system_resources = get_system_resources()
+        system_resources = resource_monitor.get_system_resources()
         
         # Determine optimal processing mode based on resources
-        proc_mode, batch_size, resource_limited = determine_processing_mode(system_resources)
+        proc_mode, batch_size, resource_limited = resource_monitor.determine_processing_mode(system_resources)
         
         # Count how many documents have more content to load
         try:
@@ -806,6 +849,10 @@ class BackgroundProcessor:
             total_documents = session.query(Document).count()
             total_chunks = session.query(DocumentChunk).count()
             
+            # Ensure vector store is loaded before using it
+            if self.vector_store_unloaded:
+                self.ensure_vector_store_loaded()
+                
             # Count processed chunks in vector store
             processed_chunks = len(self.vector_store.get_processed_chunk_ids())
             
@@ -854,8 +901,10 @@ class BackgroundProcessor:
         # Respect deep sleep mode when set manually
         if self.in_deep_sleep:
             current_mode = "deep_sleep"
-            
-        set_processing_status(current_mode, resource_data.get('processing_rate', 0))
+        
+        # Lazily import resource monitor for setting status
+        resource_monitor = _lazy_import('utils.resource_monitor')    
+        resource_monitor.set_processing_status(current_mode, resource_data.get('processing_rate', 0))
         
         # Create status object with comprehensive information
         return {
