@@ -404,7 +404,7 @@
         <div class="card bg-dark border-info">
             <div class="card-header bg-dark text-light d-flex justify-content-between align-items-center">
                 <h4><i class="fas fa-chart-line me-2"></i>Processing Metrics</h4>
-                <button class="btn btn-sm btn-outline-info" onclick="refreshProcessingMetrics()">
+                <button class="btn btn-sm btn-outline-info" id="refresh-processing-metrics">
                     <i class="fas fa-sync-alt"></i> Refresh
                 </button>
             </div>
@@ -428,7 +428,7 @@
         <div class="card bg-dark border-secondary">
             <div class="card-header bg-dark text-light d-flex justify-content-between align-items-center">
                 <h4><i class="fas fa-server me-2"></i>System Resources</h4>
-                <button class="btn btn-sm btn-outline-secondary" onclick="refreshSystemResources()">
+                <button class="btn btn-sm btn-outline-secondary" id="refresh-system-resources">
                     <i class="fas fa-sync-alt"></i> Refresh
                 </button>
             </div>
@@ -456,7 +456,7 @@
                     <button id="deep-sleep-btn" class="btn btn-sm btn-outline-info me-2" onclick="activateDeepSleep()">
                         <i class="fas fa-moon"></i> Sleep Mode
                     </button>
-                    <button class="btn btn-sm btn-outline-secondary" onclick="refreshBackgroundStatus()">
+                    <button class="btn btn-sm btn-outline-secondary" id="refresh-background-status">
                         <i class="fas fa-sync-alt"></i> Refresh
                     </button>
                 </div>
@@ -540,24 +540,18 @@
         });
     }
 
-    // Load all metrics and status when the page loads
+    // We're now using the centralized logic in background-processor.js
+    // This code is kept only to preserve existing functionality
+    // that may depend on these local functions.
     document.addEventListener('DOMContentLoaded', function() {
-        refreshProcessingMetrics();
-        refreshSystemResources();
-        refreshBackgroundStatus();
-        
-        // Auto-refresh every 30 seconds
-        setInterval(refreshProcessingMetrics, 30000);
-        setInterval(refreshSystemResources, 30000);
-        setInterval(refreshBackgroundStatus, 30000);
-        
-        // Check for element existence every 5 seconds
-        // This ensures we can recover if elements are removed from the DOM
+        // Element existence checking is still important for robustness
         setInterval(function() {
             ensureProcessingMetricsElement();
             ensureSystemResourcesElement();
             ensureBackgroundStatusElement();
         }, 5000);
+        
+        // Note: Initial loading and refresh timers are now handled by background-processor.js
     });
     
     // Function to ensure the system-resources-content element exists
@@ -707,7 +701,7 @@
                                     <button id="deep-sleep-btn" class="btn btn-sm btn-outline-info me-2" onclick="activateDeepSleep()">
                                         <i class="fas fa-moon"></i> Sleep Mode
                                     </button>
-                                    <button class="btn btn-sm btn-outline-secondary" onclick="refreshBackgroundStatus()">
+                                    <button class="btn btn-sm btn-outline-secondary" id="refresh-background-status">
                                         <i class="fas fa-sync-alt"></i> Refresh
                                     </button>
                                 </div>
@@ -718,7 +712,7 @@
                                 <button id="deep-sleep-btn" class="btn btn-sm btn-outline-info me-2" onclick="activateDeepSleep()">
                                     <i class="fas fa-moon"></i> Sleep Mode
                                 </button>
-                                <button class="btn btn-sm btn-outline-secondary" onclick="refreshBackgroundStatus()">
+                                <button class="btn btn-sm btn-outline-secondary" id="refresh-background-status">
                                     <i class="fas fa-sync-alt"></i> Refresh
                                 </button>
                             `;
