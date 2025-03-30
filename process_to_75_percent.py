@@ -31,28 +31,19 @@ DEFAULT_DELAY_SECONDS = 3
 DOCUMENT_DATA_FILE = "document_data.pkl"
 
 def get_processed_chunk_ids() -> Set[int]:
-    """Get the IDs of chunks that have already been processed."""
-    processed_ids = set()
-    
+    """Get the IDs of chunks that have already been processed using VectorStore."""
     try:
-        if os.path.exists(DOCUMENT_DATA_FILE):
-            with open(DOCUMENT_DATA_FILE, 'rb') as f:
-                loaded_data = pickle.load(f)
-                documents = loaded_data.get('documents', {})
-                
-                # Extract chunk IDs from metadata
-                for doc_id, doc_info in documents.items():
-                    metadata = doc_info.get('metadata', {})
-                    if 'chunk_id' in metadata and metadata['chunk_id'] is not None:
-                        try:
-                            chunk_id = int(metadata['chunk_id'])
-                            processed_ids.add(chunk_id)
-                        except (ValueError, TypeError):
-                            pass
+        # Import our utility function from the Utils module
+        # This avoids code duplication and ensures consistent results
+        from utils.vector_store import VectorStore
+        
+        # Initialize VectorStore and use its get_processed_chunk_ids method
+        vector_store = VectorStore()
+        processed_ids = vector_store.get_processed_chunk_ids()
+        return processed_ids
     except Exception as e:
         logger.error(f"Error getting processed chunk IDs: {e}")
-    
-    return processed_ids
+        return set()
 
 def get_progress() -> Dict[str, Any]:
     """Get current progress information."""

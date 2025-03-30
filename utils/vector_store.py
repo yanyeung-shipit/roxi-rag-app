@@ -578,6 +578,29 @@ class VectorStore:
             logger.exception(f"Error searching vector store: {str(e)}")
             raise
     
+    def get_processed_chunk_ids(self):
+        """
+        Get the set of chunk IDs that have been processed and added to the vector store.
+        
+        Returns:
+            set: Set of processed chunk IDs
+        """
+        processed_ids = set()
+        
+        for doc_id, doc in self.documents.items():
+            metadata = doc.get('metadata', {})
+            if 'chunk_id' in metadata and metadata['chunk_id'] is not None:
+                # Ensure it's an integer
+                try:
+                    chunk_id = int(metadata['chunk_id'])
+                    processed_ids.add(chunk_id)
+                except (ValueError, TypeError):
+                    # Skip invalid chunk IDs
+                    pass
+                    
+        logger.info(f"Found {len(processed_ids)} processed chunk IDs in vector store")
+        return processed_ids
+    
     def get_stats(self):
         """
         Get statistics about the vector store.

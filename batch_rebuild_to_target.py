@@ -77,29 +77,9 @@ class BatchProcessor:
         Returns:
             Set of chunk IDs that are already in the vector store
         """
-        processed_ids = set()
+        # Use the VectorStore's method directly to get processed chunk IDs
+        processed_ids = self.vector_store.get_processed_chunk_ids()
         
-        # Extract chunk IDs from the metadata
-        for doc_id, doc in self.vector_store.documents.items():
-            try:
-                # Check if document has chunk_id in metadata
-                if isinstance(doc, dict) and 'metadata' in doc and isinstance(doc['metadata'], dict):
-                    if 'chunk_id' in doc['metadata']:
-                        try:
-                            chunk_id = int(doc['metadata']['chunk_id'])
-                            processed_ids.add(chunk_id)
-                        except (ValueError, TypeError):
-                            pass
-                    # Alternative methods to identify chunks
-                    elif 'db_id' in doc['metadata']:
-                        try:
-                            db_id = int(doc['metadata']['db_id'])
-                            processed_ids.add(db_id)
-                        except (ValueError, TypeError):
-                            pass
-            except Exception as e:
-                logger.error(f"Error extracting chunk_id from document {doc_id}: {str(e)}")
-                
         logger.info(f"Found {len(processed_ids)} processed chunk IDs in vector store")
         return processed_ids
     
