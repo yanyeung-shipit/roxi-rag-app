@@ -3,10 +3,36 @@
  * Handles fetching and displaying the status of the background processing service.
  */
 
+// Function to create the status element if it doesn't exist
+function ensureBackgroundProcessorStatus() {
+    // Check if we already have the element that will store our deep sleep status
+    if (!document.getElementById('background-processor-status')) {
+        // Create a new div to hold the status data attributes
+        const statusDiv = document.createElement('div');
+        statusDiv.id = 'background-processor-status';
+        statusDiv.style.display = 'none'; // Hidden element for data only
+        statusDiv.dataset.deepSleep = 'false'; // Default value
+        statusDiv.dataset.vectorUnloaded = 'false'; // Default value
+        
+        // Add it to the body or better, near the content
+        const contentElement = document.getElementById('background-status-content');
+        if (contentElement && contentElement.parentNode) {
+            contentElement.parentNode.insertBefore(statusDiv, contentElement);
+            console.log("Created background-processor-status element for status tracking");
+        } else {
+            document.body.appendChild(statusDiv);
+            console.log("Added background-processor-status to body (fallback)");
+        }
+    }
+}
+
 // Load background processing status
 async function loadBackgroundStatus() {
     try {
         console.log("Loading background processing status...");
+        
+        // Ensure we have the status tracking element
+        ensureBackgroundProcessorStatus();
         
         const backgroundStatusContent = document.getElementById('background-status-content');
         if (!backgroundStatusContent) {
@@ -46,7 +72,13 @@ async function loadBackgroundStatus() {
             
             // Create card with status information
             // Add a data attribute to the parent element for the refresh timer to detect deep sleep
-            document.getElementById('background-processor-status').dataset.deepSleep = status.in_deep_sleep ? 'true' : 'false';
+            const statusElement = document.getElementById('background-processor-status');
+            if (statusElement) {
+                statusElement.dataset.deepSleep = status.in_deep_sleep ? 'true' : 'false';
+                statusElement.dataset.vectorUnloaded = status.vector_store_unloaded ? 'true' : 'false';
+            } else {
+                console.warn("background-processor-status element not found, cannot update deep sleep attribute");
+            }
             
             backgroundStatusContent.innerHTML = `
                 <div class="card bg-dark border-secondary">
@@ -72,6 +104,9 @@ async function loadBackgroundStatus() {
                                         ${status.in_deep_sleep ? 
                                           `<div class="text-warning"><strong>Deep Sleep Mode:</strong> Active</div>` : 
                                           ``}
+                                        ${status.vector_store_unloaded ? 
+                                          `<div class="text-info"><strong>Vector Store:</strong> Unloaded (Memory-Saving Mode)</div>` : 
+                                          ``}
                                     </div>
                                 </div>
                             </div>
@@ -95,7 +130,7 @@ async function loadBackgroundStatus() {
                             <i class="fas ${status.in_deep_sleep ? 'fa-moon' : 'fa-check-circle'} me-2"></i>
                             All documents have been fully processed.
                             ${status.in_deep_sleep ? 
-                              `<span class="ms-2"><strong>Deep Sleep Mode Active</strong> - Processor is conserving resources. Will wake instantly when new documents are added.</span>` : 
+                              `<span class="ms-2"><strong>Deep Sleep Mode Active</strong> - ${status.vector_store_unloaded ? 'Vector store unloaded to save memory. ' : ''}Processor is conserving resources. Will wake instantly when new documents are added.</span>` : 
                               (status.consecutive_idle_cycles > 3 ? 
                                `<span class="ms-2"><strong>Energy Saving Mode</strong> - Processor is using adaptive sleep (${status.current_sleep_time}s) to conserve resources.</span>` : 
                                ``)}
@@ -129,6 +164,9 @@ async function loadBackgroundStatus() {
 
 // Setup refresh button event listener
 document.addEventListener('DOMContentLoaded', function() {
+    // Ensure status element exists first
+    ensureBackgroundProcessorStatus();
+    
     // Initial load
     loadBackgroundStatus();
     
@@ -174,9 +212,9 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Check deep sleep status and adjust if needed
         const statusElement = document.getElementById('background-processor-status');
-        if (statusElement && statusElement.dataset.deepSleep === 'true' && !inDeepSleep) {
+        if (statusElement && statusElement.dataset && statusElement.dataset.deepSleep === 'true' && !inDeepSleep) {
             updateRefreshInterval(true);
-        } else if (statusElement && statusElement.dataset.deepSleep === 'false' && inDeepSleep) {
+        } else if (statusElement && statusElement.dataset && statusElement.dataset.deepSleep === 'false' && inDeepSleep) {
             updateRefreshInterval(false);
         }
     }, refreshInterval);
