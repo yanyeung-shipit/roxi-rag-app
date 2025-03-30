@@ -22,6 +22,7 @@ import datetime
 import argparse
 import pickle
 import traceback
+import random
 from typing import Dict, Any, List, Set, Optional, Tuple
 
 # Configure logging
@@ -50,7 +51,7 @@ except ImportError as e:
 
 # Constants
 CHECKPOINT_DIR = "logs/checkpoints"
-DEFAULT_TARGET_PERCENTAGE = 66.0  # Default target completion percentage
+DEFAULT_TARGET_PERCENTAGE = 65.0  # Default target completion percentage
 MAX_BATCH_SIZE = 10  # Maximum batch size for optimal conditions
 MIN_BATCH_SIZE = 1  # Minimum batch size (single-chunk processing)
 MAX_RETRIES = 3     # Maximum number of retries for failed chunks
@@ -169,54 +170,88 @@ class AdaptiveProcessor:
         Returns:
             Dictionary with progress information
         """
-        with app.app_context():
-            # Get total chunks in database
-            total_chunks = db.session.query(DocumentChunk).count()
+        # Retry up to 3 times for database operations
+        max_retries = 3
+        retry_delay = 5
+        total_chunks = 0
+        
+        for attempt in range(max_retries):
+            try:
+                with app.app_context():
+                    # Get total chunks in database
+                    total_chunks = db.session.query(DocumentChunk).count()
+                    break  # Success, exit retry loop
+            except Exception as e:
+                logger.error(f"Database error on attempt {attempt+1}/{max_retries}: {str(e)}")
+                if "SSL connection has been closed unexpectedly" in str(e):
+                    logger.warning("SSL connection error detected, attempting to rollback and reconnect")
+                    try:
+                        with app.app_context():
+                            db.session.rollback()
+                    except Exception as rollback_error:
+                        logger.error(f"Error during rollback: {str(rollback_error)}")
+                
+                if attempt < max_retries - 1:
+                    sleep_time = retry_delay * (attempt + 1)
+                    logger.info(f"Retrying in {sleep_time} seconds...")
+                    time.sleep(sleep_time)
+                else:
+                    logger.error("Maximum retries reached, using cached or default values")
+                    # If we can't get fresh data, use the last known value or a default
+                    if hasattr(self, '_last_total_chunks') and self._last_total_chunks > 0:
+                        total_chunks = self._last_total_chunks
+                        logger.info(f"Using cached value of {total_chunks} total chunks")
+                    else:
+                        total_chunks = 1000  # Fallback default
+                        logger.warning(f"Using default value of {total_chunks} total chunks")
+        
+        # Cache the value for potential future failures
+        self._last_total_chunks = total_chunks
             
-            # Get vector store document count
-            processed_chunks = len(self.processed_chunk_ids)
-            
-            # Calculate percentages
-            percentage = round((processed_chunks / total_chunks) * 100, 1) if total_chunks > 0 else 0
-            
-            # Calculate rate and estimated time
-            elapsed_time = time.time() - self.start_time
-            rate = self.chunks_processed / elapsed_time if elapsed_time > 0 and self.chunks_processed > 0 else 0
-            remaining_chunks = total_chunks - processed_chunks
-            
-            # Handle infinite or very large remaining time
-            if rate > 0:
-                est_time_remaining = remaining_chunks / rate
-                if est_time_remaining > 1e9:  # Cap at a billion seconds
-                    est_time_remaining = 1e9
-            else:
-                est_time_remaining = 1e6  # Default to a large but finite number
-            
-            # Format estimated time for display
-            minutes, seconds = divmod(int(est_time_remaining), 60)
-            hours, minutes = divmod(minutes, 60)
-            days, hours = divmod(hours, 24)
-            
-            # Create time string
-            if days > 0:
-                time_str = f"{days}d {hours}h {minutes}m"
-            elif hours > 0:
-                time_str = f"{hours}h {minutes}m"
-            else:
-                time_str = f"{minutes}m {seconds}s"
-            
-            return {
-                "total_chunks": total_chunks,
-                "processed_chunks": processed_chunks,
-                "percentage": percentage,
-                "remaining_chunks": remaining_chunks,
-                "chunks_processed_this_session": self.chunks_processed,
-                "total_batches": self.total_batches,
-                "rate_chunks_per_second": round(rate, 2),
-                "estimated_seconds_remaining": min(int(est_time_remaining), 1000000000),
-                "estimated_time_remaining": time_str,
-                "target_percentage": self.target_percentage
-            }
+        # Get vector store document count
+        processed_chunks = len(self.processed_chunk_ids)
+        
+        # Calculate percentages
+        percentage = round((processed_chunks / total_chunks) * 100, 1) if total_chunks > 0 else 0
+        
+        # Calculate rate and estimated time
+        elapsed_time = time.time() - self.start_time
+        rate = self.chunks_processed / elapsed_time if elapsed_time > 0 and self.chunks_processed > 0 else 0
+        remaining_chunks = total_chunks - processed_chunks
+        
+        # Handle infinite or very large remaining time
+        if rate > 0:
+            est_time_remaining = remaining_chunks / rate
+            if est_time_remaining > 1e9:  # Cap at a billion seconds
+                est_time_remaining = 1e9
+        else:
+            est_time_remaining = 1e6  # Default to a large but finite number
+        
+        # Format estimated time for display
+        minutes, seconds = divmod(int(est_time_remaining), 60)
+        hours, minutes = divmod(minutes, 60)
+        days, hours = divmod(hours, 24)
+        
+        # Create time string
+        if days > 0:
+            time_str = f"{days}d {hours}h {minutes}m"
+        elif hours > 0:
+            time_str = f"{hours}h {minutes}m"
+        else:
+            time_str = f"{minutes}m {seconds}s"
+        
+        return {
+            "total_chunks": total_chunks,
+            "processed_chunks": processed_chunks,
+            "percentage": percentage,
+            "remaining_chunks": remaining_chunks,
+            "chunks_processed_this_session": self.chunks_processed,
+            "total_batches": self.total_batches,
+            "rate_chunks_per_second": round(rate, 2),
+            "estimated_seconds_remaining": min(int(est_time_remaining), 1000000000),
+            "estimated_time_remaining": time_str,
+            "target_percentage": self.target_percentage
+        }
     
     def get_next_chunk_batch(self, batch_size: int) -> List[DocumentChunk]:
         """
@@ -228,15 +263,45 @@ class AdaptiveProcessor:
         Returns:
             List of DocumentChunk objects
         """
-        with app.app_context():
-            # Use join to eagerly load document relationship to avoid detached session issues
-            chunks = db.session.query(DocumentChunk).options(
-                db.joinedload(DocumentChunk.document)
-            ).filter(
-                ~DocumentChunk.id.in_(self.processed_chunk_ids) if self.processed_chunk_ids else True
-            ).order_by(DocumentChunk.id).limit(batch_size).all()
-            
-            return chunks
+        # Retry up to 3 times for database operations
+        max_retries = 3
+        retry_delay = 5
+        chunks = []
+        
+        for attempt in range(max_retries):
+            try:
+                with app.app_context():
+                    # Use join to eagerly load document relationship to avoid detached session issues
+                    chunks = db.session.query(DocumentChunk).options(
+                        db.joinedload(DocumentChunk.document)
+                    ).filter(
+                        ~DocumentChunk.id.in_(self.processed_chunk_ids) if self.processed_chunk_ids else True
+                    ).order_by(DocumentChunk.id).limit(batch_size).all()
+                    
+                    # Make a copy of all needed data to avoid detached session issues
+                    if chunks:
+                        # Log successful retrieval
+                        logger.info(f"Successfully retrieved {len(chunks)} chunks on attempt {attempt+1}")
+                    break  # Success, exit retry loop
+            except Exception as e:
+                logger.error(f"Database error on get_next_chunk_batch attempt {attempt+1}/{max_retries}: {str(e)}")
+                if "SSL connection has been closed unexpectedly" in str(e):
+                    logger.warning("SSL connection error detected, attempting to rollback and reconnect")
+                    try:
+                        with app.app_context():
+                            db.session.rollback()
+                    except Exception as rollback_error:
+                        logger.error(f"Error during rollback: {str(rollback_error)}")
+                
+                if attempt < max_retries - 1:
+                    sleep_time = retry_delay * (attempt + 1)
+                    logger.info(f"Retrying get_next_chunk_batch in {sleep_time} seconds...")
+                    time.sleep(sleep_time)
+                else:
+                    logger.error("Maximum retries reached, returning empty chunk list")
+                    return []
+        
+        return chunks
     
     def save_checkpoint(self) -> None:
         """Save the current state of processed chunk IDs."""
@@ -342,14 +407,39 @@ class AdaptiveProcessor:
             if document_doi:
                 metadata["doi"] = document_doi
             
-            # Add to vector store
-            self.vector_store.add_text(text_content, metadata=metadata)
+            # Add to vector store with exponential backoff for rate limits
+            max_retries = 5
+            base_delay = 2  # Base delay in seconds
             
-            # Update processed IDs
-            self.processed_chunk_ids.add(chunk_id)
-            self.chunks_processed += 1
+            for attempt in range(max_retries):
+                try:
+                    # Add text to vector store
+                    self.vector_store.add_text(text_content, metadata=metadata)
+                    
+                    # Update processed IDs
+                    self.processed_chunk_ids.add(chunk_id)
+                    self.chunks_processed += 1
+                    
+                    return True
+                except Exception as inner_e:
+                    error_str = str(inner_e).lower()
+                    
+                    # Check for rate limit errors (specific to OpenAI's error messages)
+                    if "rate limit" in error_str or "too many requests" in error_str:
+                        # Calculate exponential backoff with jitter
+                        delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                        delay = min(delay, 60)  # Cap at 60 seconds
+                        
+                        logger.warning(f"Rate limit error detected. Retrying in {delay:.1f} seconds... "
+                                     f"(Attempt {attempt+1}/{max_retries})")
+                        time.sleep(delay)
+                    else:
+                        # For non-rate-limit errors, don't retry
+                        raise
             
-            return True
+            # If we got here, we've exhausted our retries
+            logger.error(f"Failed to process chunk {chunk_id} after {max_retries} attempts due to rate limits")
+            return False
         except Exception as e:
             logger.error(f"Error processing chunk {chunk.id}: {str(e)}")
             logger.error(traceback.format_exc())
@@ -475,8 +565,13 @@ class AdaptiveProcessor:
                 summary["reached_target"] = True
                 break
             
-            # Add a small delay to avoid overwhelming the system
-            time.sleep(2)
+            # Add a delay to avoid overwhelming the system and allow resources to recover
+            # Use a longer delay for single-chunk mode (resource constrained)
+            if batch_size == MIN_BATCH_SIZE:
+                logger.info("Resource constrained mode, using longer delay between chunks")
+                time.sleep(5)  # 5 seconds in resource-constrained mode
+            else:
+                time.sleep(3)  # 3 seconds in normal mode
         
         # Final progress
         progress = self.get_progress()
