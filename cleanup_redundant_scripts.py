@@ -59,6 +59,7 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Show what would be moved without actually moving')
     parser.add_argument('--legacy-dir', type=str, default='legacy/processors', help='Legacy directory to move scripts to')
     parser.add_argument('--scripts', nargs='+', help='Specific scripts to move (defaults to predefined list)')
+    parser.add_argument('--yes', '-y', action='store_true', help='Proceed without confirmation')
     
     args = parser.parse_args()
     
@@ -71,10 +72,14 @@ def main():
     for script in scripts_to_move:
         print(f"  - {script}")
     
-    if not args.dry_run:
-        confirm = input("\nDo you want to proceed? (y/n): ")
-        if confirm.lower() != 'y':
-            print("Operation cancelled.")
+    if not args.dry_run and not args.yes:
+        try:
+            confirm = input("\nDo you want to proceed? (y/n): ")
+            if confirm.lower() != 'y':
+                print("Operation cancelled.")
+                return
+        except (EOFError, KeyboardInterrupt):
+            print("\nNo input received. Use --yes to bypass confirmation.")
             return
     
     # Create the legacy directory
