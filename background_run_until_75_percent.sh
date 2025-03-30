@@ -1,25 +1,22 @@
 #!/bin/bash
-# Script to run the 75% processing in the background with increased resilience
-# This version will run in the background using nohup
 
-# Configuration
-BATCH_SIZE=5  # Reduced batch size to avoid timeouts
-TARGET_PERCENTAGE=75
+# Run the chunk processor in the background with nohup to reach 75% completion
+# Usage: ./background_run_until_75_percent.sh [batch_size] [delay_seconds]
+
+# Default values
+BATCH_SIZE=${1:-5}
+DELAY_SECONDS=${2:-3}
 LOG_FILE="process_75_percent_background.log"
 
-# Echo with timestamp function
-timestamp() {
-  date +"%Y-%m-%d %H:%M:%S"
-}
+echo "Starting chunk processor in background to reach 75% target..."
+echo "Using batch size: $BATCH_SIZE with $DELAY_SECONDS seconds delay between batches"
+echo "Log file: $LOG_FILE"
 
-echo "$(timestamp) Starting vector store rebuild to $TARGET_PERCENTAGE% target" > $LOG_FILE
-echo "$(timestamp) Current progress:" >> $LOG_FILE
-python check_progress.py >> $LOG_FILE 2>&1
+# Run in the background with nohup
+nohup python run_chunk_processor.py --batch-size $BATCH_SIZE --target 75.0 --delay $DELAY_SECONDS > $LOG_FILE 2>&1 &
 
-# Start the process in the background
-echo "$(timestamp) Running process_to_75_percent.py with batch size $BATCH_SIZE" >> $LOG_FILE
-nohup python process_to_75_percent.py --batch-size $BATCH_SIZE --target-percentage $TARGET_PERCENTAGE >> $LOG_FILE 2>&1 &
-PROCESS_PID=$!
-
-echo "Process started with PID: $PROCESS_PID. Check $LOG_FILE for progress."
-echo "You can monitor progress using: python check_progress.py"
+# Save the process ID
+PID=$!
+echo "Process started with PID: $PID"
+echo "To check progress, run: tail -f $LOG_FILE"
+echo "To stop the process, run: kill $PID"

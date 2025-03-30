@@ -77,26 +77,39 @@ def get_next_chunk_batch(batch_size: int, processed_ids: Set[int]) -> List[Docum
 def process_chunk(chunk: DocumentChunk) -> bool:
     """Process a single chunk and add it to the vector store."""
     try:
+        from utils.openai_service import OpenAIEmbeddingService
         vector_store = get_vector_store()
+        embedding_service = OpenAIEmbeddingService()
         
-        # Add to vector store with proper metadata
-        vector_store.add_document(
+        # Get embedding for the text
+        try:
+            embedding = embedding_service.get_embedding(chunk.text)
+        except Exception as e:
+            logger.error(f"Error generating embedding for chunk {chunk.id}: {str(e)}")
+            return False
+        
+        # Create metadata object
+        metadata = {
+            'chunk_id': chunk.id,
+            'document_id': chunk.document_id,
+            'source': chunk.source or "Unknown",
+            'title': chunk.title or "Untitled",
+            'url': chunk.url,
+            'filename': chunk.filename,
+            'page': chunk.page_number,
+            'chunk_index': chunk.chunk_index,
+            'citation': chunk.citation or "",
+            'doi': chunk.doi or "",
+            'authors': chunk.authors or "",
+            'publication_date': str(chunk.publication_date) if chunk.publication_date else "",
+            'journal': chunk.journal or "",
+        }
+        
+        # Add to vector store with embedding
+        vector_store.add_embedding(
             text=chunk.text,
-            metadata={
-                'chunk_id': chunk.id,
-                'document_id': chunk.document_id,
-                'source': chunk.source or "Unknown",
-                'title': chunk.title or "Untitled",
-                'url': chunk.url,
-                'filename': chunk.filename,
-                'page': chunk.page_number,
-                'chunk_index': chunk.chunk_index,
-                'citation': chunk.citation or "",
-                'doi': chunk.doi or "",
-                'authors': chunk.authors or "",
-                'publication_date': str(chunk.publication_date) if chunk.publication_date else "",
-                'journal': chunk.journal or "",
-            }
+            embedding=embedding,
+            metadata=metadata
         )
         
         # Save after each chunk to ensure we don't lose progress
