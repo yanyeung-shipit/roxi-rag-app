@@ -15,8 +15,9 @@ This document serves as a central reference for all processing scripts in the RO
 | Script | Purpose | When to Use | Special Features |
 |--------|---------|-------------|-----------------|
 | robust_process_to_50_percent.py | Robust Process to 50% Target | If PostgreSQL SSL connection errors occur |  |
-| enhanced_batch_processor.py | Enhanced Batch Processor with Robust Database Connection Handling | If PostgreSQL SSL connection errors occur |  |
+| enhanced_batch_processor.py | Enhanced Batch Processor with Robust Database Connection Handling | If PostgreSQL SSL connection errors occur | Uses VectorStore add_embedding method for adding chunks |
 | enhanced_process_to_50_percent.py | Enhanced Processing to 50 Percent | If PostgreSQL SSL connection errors occur |  |
+| enhanced_process_to_65_percent.py | Enhanced Processing to 65 Percent | **RECOMMENDED** for reaching 65% target during SSL errors | Most recent version with improved field handling |
 
 ## MONITORING AND MANAGEMENT SCRIPTS
 

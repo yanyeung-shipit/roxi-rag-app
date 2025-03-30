@@ -284,8 +284,8 @@ class BatchProcessor:
                 if self.processed_chunk_ids:
                     format_strings = ','.join(['%s' % id for id in self.processed_chunk_ids])
                     query = text(f"""
-                        SELECT dc.id, dc.document_id, dc.chunk_index, dc.text, dc.embedding,
-                               d.url, d.title, d.source_type, d.upload_date
+                        SELECT dc.id, dc.document_id, dc.chunk_index, dc.text_content, 
+                               d.source_url, d.title, d.file_type, d.created_at
                         FROM document_chunks dc
                         JOIN documents d ON dc.document_id = d.id
                         WHERE dc.id NOT IN ({format_strings})
@@ -294,8 +294,8 @@ class BatchProcessor:
                     """)
                 else:
                     query = text("""
-                        SELECT dc.id, dc.document_id, dc.chunk_index, dc.text, dc.embedding,
-                               d.url, d.title, d.source_type, d.upload_date
+                        SELECT dc.id, dc.document_id, dc.chunk_index, dc.text_content, 
+                               d.source_url, d.title, d.file_type, d.created_at
                         FROM document_chunks dc
                         JOIN documents d ON dc.document_id = d.id
                         ORDER BY dc.document_id, dc.chunk_index
@@ -311,13 +311,13 @@ class BatchProcessor:
                         "id": row.id,
                         "document_id": row.document_id,
                         "chunk_index": row.chunk_index,
-                        "text": row.text,
-                        "embedding": row.embedding,
+                        "text_content": row.text_content,  # Keep the original field name from DB
+                        "embedding": None,  # We'll generate this when processing
                         "metadata": {
-                            "url": row.url,
+                            "url": row.source_url,
                             "title": row.title,
-                            "source_type": row.source_type,
-                            "upload_date": row.upload_date
+                            "source_type": row.file_type,
+                            "upload_date": row.created_at
                         }
                     }
                     chunks.append(chunk)
@@ -389,29 +389,40 @@ class BatchProcessor:
         """
         try:
             from utils.vector_store import VectorStore
+            from utils.llm_service import get_embedding
             
-            # Load vector store
+            # Load vector store - it initializes and loads existing data automatically
             vector_store = VectorStore()
-            vector_store.load_from_disk()
             
             # Process the chunk
             chunk_id = chunk["id"]
             document_id = chunk["document_id"]
             
-            # Add the document to vector store
+            # Get text content from the chunk - it may be in "text" or "text_content" depending on the source
+            text = chunk.get("text", chunk.get("text_content", ""))
+            if not text:
+                logger.error(f"No text content found in chunk {chunk_id}")
+                return False
+            
+            # Generate embedding
+            logger.info(f"Generating embedding for chunk {chunk_id}")
+            embedding = get_embedding(text)
+            
+            # Add the embedding to vector store
             metadata = chunk["metadata"]
             metadata["chunk_index"] = chunk["chunk_index"]
+            metadata["document_id"] = str(document_id)
+            metadata["chunk_id"] = chunk_id
             
-            vector_store.add_document(
-                document_id=str(document_id),
-                chunk_id=chunk_id,
-                text=chunk["text"],
-                embedding=chunk["embedding"],
+            # Use add_embedding to store the document with its metadata
+            vector_store.add_embedding(
+                text=text,
+                embedding=embedding,
                 metadata=metadata
             )
             
             # Save the vector store
-            vector_store.save_to_disk()
+            vector_store.save()
             
             # Update the processed chunk IDs
             self.processed_chunk_ids.add(chunk_id)

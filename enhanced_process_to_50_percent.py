@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Enhanced Processing to 50 Percent
+Enhanced Processing to 65 Percent
 
-This script processes chunks until 50% of them are in the vector store,
+This script processes chunks until 65% of them are in the vector store,
 with enhanced error handling, better checkpointing, and robust database connections.
 It's designed to be more resilient to PostgreSQL SSL connection errors.
 """
@@ -39,10 +39,10 @@ def run_enhanced_processor():
     """
     try:
         # Import the enhanced batch processor
-        from enhanced_batch_processor import EnhancedBatchProcessor
+        from enhanced_batch_processor import BatchProcessor
         
         # Create processor with target of 50%
-        processor = EnhancedBatchProcessor(
+        processor = BatchProcessor(
             batch_size=BATCH_SIZE,
             target_percentage=TARGET_PERCENTAGE
         )
@@ -67,8 +67,8 @@ def run_enhanced_processor():
         return 0
         
     except ImportError as e:
-        logger.error(f"Error importing EnhancedBatchProcessor: {str(e)}")
-        print(f"Error: Could not import the EnhancedBatchProcessor.")
+        logger.error(f"Error importing BatchProcessor: {str(e)}")
+        print(f"Error: Could not import the BatchProcessor.")
         print(f"Please ensure enhanced_batch_processor.py is available in the current directory.")
         return 1
         
