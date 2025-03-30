@@ -1,30 +1,19 @@
 #!/bin/bash
 
-# run_batch_processor.sh
-# Process multiple chunks in a single batch efficiently
+# This script is a convenience wrapper that runs the preferred 
+# batch processor from the processors directory
 
-# Process 5 chunks by default, but allow overriding via command-line argument
-NUM_CHUNKS=${1:-5}
+echo "ROXI Vector Store Batch Processor"
+echo "=================================="
+echo ""
+echo "This script will run the most reliable batch processor"
+echo "to process document chunks up to 40% completion."
+echo ""
+echo "Running processors/run_batch_to_40_percent.sh..."
+echo ""
 
-echo "======================================================"
-echo "BATCH PROCESSING $NUM_CHUNKS CHUNKS"
-echo "======================================================"
-echo "Starting at: $(date)"
-echo "======================================================"
+# Make it executable first (just in case)
+chmod +x processors/run_batch_to_40_percent.sh
 
-# Make the script executable
-chmod +x batch_process_chunks.py
-
-# Run the batch processor
-python batch_process_chunks.py --num-chunks $NUM_CHUNKS
-
-# Check the result
-RESULT=$?
-if [ $RESULT -eq 0 ]; then
-    echo "✅ Batch processing completed successfully"
-else
-    echo "❌ Batch processing failed with exit code $RESULT"
-fi
-
-echo "Completed at: $(date)"
-echo "======================================================"
+# Run the processor
+./processors/run_batch_to_40_percent.sh
