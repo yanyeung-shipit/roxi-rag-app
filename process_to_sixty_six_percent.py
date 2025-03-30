@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """
-Process chunks until we reach 66% completion.
-This script is designed to be run in a terminal and will keep processing 
-chunks until the target percentage is reached.
+Process chunks using the batch processor until we reach 66% completion.
+This script is a specialized version of batch_rebuild_to_target.py that
+sets the target percentage to 66% by default.
 """
 
 import os
 import sys
-import time
 import logging
-from typing import Dict, Any, List, Optional
-from flask import Flask
-from flask_sqlalchemy import SQLAlchemy
+import time
+import datetime
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,131 +20,57 @@ logger = logging.getLogger(__name__)
 # Add the current directory to the path so we can import our modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from utils.vector_store import VectorStore
-from app import app, db
-from models import DocumentChunk
+from batch_rebuild_to_target import BatchProcessor
 
-# Initialize vector store
-vector_store = VectorStore()
+# Target percentage is 66% to match user requirements
+TARGET_PERCENTAGE = 66.0
 
-def get_db_session():
-    """Get a database session."""
-    from app import app
-    with app.app_context():
-        return db.session
+# Default batch size is 5 chunks at a time
+DEFAULT_BATCH_SIZE = 5
 
-def get_progress() -> Dict[str, Any]:
-    """Get current progress of vector rebuild."""
-    # Initialize session
-    from app import app
-    with app.app_context():
-        # Get total chunks in database
-        total_chunks = db.session.query(DocumentChunk).count()
-        
-        # Get total documents in vector store
-        vector_docs = len(vector_store.documents)
-        
-        # Calculate progress
-        progress = {
-            "total_chunks": total_chunks,
-            "vector_docs": vector_docs,
-            "percentage": round((vector_docs / total_chunks) * 100, 1) if total_chunks > 0 else 0,
-            "remaining": total_chunks - vector_docs
-        }
-        
-    return progress
-
-def get_next_chunk_ids(limit: int = 5) -> List[int]:
+def process_to_sixty_six_percent(batch_size: int = DEFAULT_BATCH_SIZE):
     """
-    Get the next chunk IDs to process.
+    Process chunks until 66% completion is reached.
     
     Args:
-        limit (int): Maximum number of chunk IDs to return
-        
-    Returns:
-        List[int]: List of chunk IDs to process
+        batch_size: Number of chunks to process per batch
     """
-    # Get all processed chunk IDs from vector store
-    processed_ids = set()
-    for doc in vector_store.documents:
-        if 'chunk_id' in doc.metadata:
-            try:
-                chunk_id = int(doc.metadata['chunk_id'])
-                processed_ids.add(chunk_id)
-            except (ValueError, TypeError):
-                pass
+    start_time = time.time()
+    logger.info(f"Starting batch processing to reach {TARGET_PERCENTAGE}% completion")
     
-    # Get unprocessed chunks from database
-    from app import app
-    with app.app_context():
-        chunks = db.session.query(DocumentChunk.id).filter(
-            ~DocumentChunk.id.in_(processed_ids) if processed_ids else True
-        ).order_by(DocumentChunk.id).limit(limit).all()
-        
-        chunk_ids = [chunk[0] for chunk in chunks]
-        
-    return chunk_ids
-
-def process_chunk(chunk_id: int) -> bool:
-    """
-    Process a single chunk using direct_process_chunk.py
+    # Create and run batch processor
+    processor = BatchProcessor(batch_size=batch_size, target_percentage=TARGET_PERCENTAGE)
+    summary = processor.run_until_target()
     
-    Args:
-        chunk_id (int): ID of the chunk to process
-        
-    Returns:
-        bool: True if processing was successful, False otherwise
-    """
-    try:
-        cmd = f"python direct_process_chunk.py {chunk_id}"
-        result = os.system(cmd)
-        return result == 0
-    except Exception as e:
-        logger.error(f"Error processing chunk {chunk_id}: {e}")
-        return False
+    # Calculate total time
+    elapsed_time = time.time() - start_time
+    hours, remainder = divmod(elapsed_time, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    
+    # Log completion summary
+    logger.info("=" * 50)
+    logger.info("BATCH PROCESSING COMPLETED")
+    logger.info("=" * 50)
+    logger.info(f"Total elapsed time: {int(hours)}h {int(minutes)}m {int(seconds)}s")
+    logger.info(f"Processed {summary['chunks_processed']} chunks in {summary['batches_processed']} batches")
+    logger.info(f"Starting percentage: {summary['start_percentage']}%")
+    logger.info(f"Final percentage: {summary['final_percentage']}%")
+    logger.info(f"Target reached: {'Yes' if summary['reached_target'] else 'No'}")
+    logger.info("=" * 50)
+    
+    return summary
 
 def main():
-    """Main function to process chunks until target percentage is reached."""
-    target_percentage = 66.0
-    logger.info(f"Starting to process chunks until {target_percentage}% completion")
+    """Main function to run the processing."""
+    # Parse command-line arguments
+    import argparse
+    parser = argparse.ArgumentParser(description='Process chunks until 66% completion is reached')
+    parser.add_argument('--batch-size', type=int, default=DEFAULT_BATCH_SIZE,
+                        help=f'Number of chunks to process per batch (default: {DEFAULT_BATCH_SIZE})')
     
-    # Get initial progress
-    progress = get_progress()
-    logger.info(f"Initial progress: {progress['percentage']}% ({progress['vector_docs']}/{progress['total_chunks']} chunks)")
+    args = parser.parse_args()
     
-    # Process chunks until target percentage is reached
-    while progress['percentage'] < target_percentage:
-        # Get next chunk IDs
-        chunk_ids = get_next_chunk_ids(limit=1)
-        
-        if not chunk_ids:
-            logger.info("No more chunks to process")
-            break
-        
-        # Process each chunk
-        for chunk_id in chunk_ids:
-            logger.info(f"Processing chunk {chunk_id}...")
-            success = process_chunk(chunk_id)
-            
-            if success:
-                logger.info(f"Successfully processed chunk {chunk_id}")
-            else:
-                logger.error(f"Failed to process chunk {chunk_id}")
-                
-            # Update progress
-            progress = get_progress()
-            logger.info(f"Current progress: {progress['percentage']}% ({progress['vector_docs']}/{progress['total_chunks']} chunks)")
-            
-            # Check if target percentage is reached
-            if progress['percentage'] >= target_percentage:
-                logger.info(f"Target percentage of {target_percentage}% reached!")
-                return
-            
-            # Sleep briefly to avoid hammering the API
-            time.sleep(1)
-    
-    logger.info(f"Final progress: {progress['percentage']}% ({progress['vector_docs']}/{progress['total_chunks']} chunks)")
-    logger.info("Done!")
+    process_to_sixty_six_percent(batch_size=args.batch_size)
 
 if __name__ == "__main__":
     main()
