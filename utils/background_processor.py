@@ -70,11 +70,15 @@ class BackgroundProcessor:
             sleep_time (int): Time to sleep between batches in seconds
         """
         self.batch_size = batch_size
-        self.sleep_time = sleep_time
+        self.base_sleep_time = sleep_time
+        self.sleep_time = sleep_time  # Current sleep time (will adapt)
+        self.max_sleep_time = 300     # Maximum sleep time (5 minutes)
+        self.consecutive_idle_cycles = 0  # Track consecutive idle cycles
         self.running = False
         self.thread = None
         self.last_run_time = None
         self.documents_processed = 0
+        self.last_work_found_time = time.time()  # Track when we last found work
         
         # Create SQLAlchemy engine and session
         self.engine = create_engine(DATABASE_URL)
@@ -235,7 +239,11 @@ class BackgroundProcessor:
                                 
                     # We processed some documents with more content, sleep before checking for unprocessed documents
                     if documents_with_more_content:
-                        logger.info(f"Processed {len(documents_with_more_content)} documents with more content")
+                        # Reset idle counter since we found work
+                        self.consecutive_idle_cycles = 0
+                        self.sleep_time = self.base_sleep_time  # Reset sleep time to base value
+                        
+                        logger.info(f"Processed {len(documents_with_more_content)} documents with more content, reset sleep time to {self.sleep_time}s")
                         time.sleep(self.sleep_time / 2)  # Sleep half the normal time before looking for unprocessed docs
                 
                 except Exception as e:
@@ -269,7 +277,17 @@ class BackgroundProcessor:
                         unprocessed_docs = partially_processed_docs
                     
                     if not unprocessed_docs:
-                        logger.debug("No unprocessed documents found, sleeping...")
+                        # No work found, implement adaptive sleep time
+                        self.consecutive_idle_cycles += 1
+                        
+                        # Calculate new sleep time with exponential backoff
+                        if self.consecutive_idle_cycles > 3:
+                            # Double sleep time after 3 idle cycles (up to max limit)
+                            self.sleep_time = min(self.sleep_time * 2, self.max_sleep_time)
+                            logger.debug(f"No unprocessed documents found for {self.consecutive_idle_cycles} cycles, increasing sleep to {self.sleep_time}s")
+                        else:
+                            logger.debug(f"No unprocessed documents found, sleeping for {self.sleep_time}s...")
+                            
                         session.close()
                         time.sleep(self.sleep_time)
                         continue
@@ -285,6 +303,11 @@ class BackgroundProcessor:
                     time.sleep(2)  # Brief pause to let database recover
                     session = self._create_session()
                     continue
+                
+                # If we got here, we have work to do, reset the idle counter and sleep time
+                self.consecutive_idle_cycles = 0
+                self.sleep_time = self.base_sleep_time  # Reset sleep time to base value
+                logger.debug(f"Found work to do, resetting sleep time to {self.sleep_time}s")
                 
                 # Process each document
                 for doc in unprocessed_docs:
@@ -525,6 +548,8 @@ class BackgroundProcessor:
             'documents_processed': self.documents_processed,
             'unprocessed_documents': unprocessed_documents,
             'documents_waiting_for_more_content': waiting_documents,
+            'current_sleep_time': self.sleep_time,
+            'consecutive_idle_cycles': self.consecutive_idle_cycles,
             
             # Resource information
             'system_resources': {

@@ -2052,29 +2052,29 @@ def get_background_status():
         except Exception:
             unprocessed_count = len(unprocessed_docs)
         
-        # Get vector store statistics
-        from utils.vector_store import VectorStore
-        vector_store = VectorStore()
+        # Use the vector stats already in the processor status
+        # to avoid loading the vector store again
         vector_stats = {
             "total_documents": 0,
-            "document_count": 0
+            "document_count": 0,
+            "processed_chunks": 0,
+            "percent_complete": 0
         }
         
         try:
-            # Get vector store document count
-            vector_stats["document_count"] = len(vector_store.document_ids)
-            
-            # Get processed chunk count
-            processed_chunks = len(vector_store.get_processed_chunk_ids())
-            vector_stats["processed_chunks"] = processed_chunks
-            
-            # Calculate percentage complete (from vector store and database)
-            if "processing_metrics" in processor_status and processor_status["processing_metrics"]["total_chunks"] > 0:
-                vector_stats["percent_complete"] = processor_status["processing_metrics"]["percent_complete"]
+            # Use the metrics from the processor status directly
+            if "processing_metrics" in processor_status:
+                metrics = processor_status["processing_metrics"]
+                vector_stats["document_count"] = metrics.get("total_documents", 0)
+                vector_stats["processed_chunks"] = metrics.get("processed_chunks", 0)
+                vector_stats["percent_complete"] = metrics.get("percent_complete", 0)
+                vector_stats["total_documents"] = metrics.get("total_documents", 0)
             else:
-                # Fallback calculation
+                # Fallback to database query only if necessary (avoids vector store load)
+                from sqlalchemy import func
                 total_chunks = Document.query.join(DocumentChunk).count()
-                vector_stats["percent_complete"] = round((processed_chunks / total_chunks * 100) if total_chunks > 0 else 0, 1)
+                vector_stats["total_documents"] = Document.query.count()
+                vector_stats["document_count"] = Document.query.filter_by(processed=True).count()
         except Exception as ve:
             logger.warning(f"Error getting vector statistics: {str(ve)}")
             
