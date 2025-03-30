@@ -58,6 +58,20 @@ def reduce_memory_usage():
         logger.info(f"Cleared {cache_entries} entries from embedding cache")
     except Exception as e:
         logger.warning(f"Failed to clear embedding cache: {str(e)}")
+        
+    # Unload vector store from memory in deep sleep mode
+    global _background_processor
+    if _background_processor and _background_processor.in_deep_sleep:
+        try:
+            # Access the vector store instance and unload it
+            if hasattr(_background_processor, 'vector_store') and _background_processor.vector_store:
+                logger.info("Unloading vector store to reduce memory footprint")
+                docs_unloaded = _background_processor.vector_store.unload_from_memory()
+                logger.info(f"Unloaded {docs_unloaded} documents from vector store")
+                # Mark vector store as unloaded so we know to reload it when needed
+                _background_processor.vector_store_unloaded = True
+        except Exception as e:
+            logger.warning(f"Failed to unload vector store: {str(e)}")
     
     # Clear any module-specific caches that might be holding memory
     if 'openai' in sys.modules:
@@ -84,6 +98,7 @@ def reduce_memory_usage():
     
     # Clear Python's internal caches
     gc.collect(generation=2)  # Full collection
+    gc.collect(generation=2)  # Run a second time to ensure maximum cleanup
     
     # Get after stats
     after_mem = process.memory_info().rss / 1024 / 1024  # MB
@@ -133,8 +148,10 @@ def force_deep_sleep():
             from utils.llm_service import _CACHE_TTL, _CACHE_CLEANUP_INTERVAL
             import sys
             # If available, override with more aggressive settings during deep sleep
-            sys.modules['utils.llm_service']._CACHE_TTL = 60 * 1  # 1 minute TTL
-            sys.modules['utils.llm_service']._CACHE_CLEANUP_INTERVAL = 30  # Clean up every 30 seconds
+            sys.modules['utils.llm_service']._CACHE_TTL = 30  # 30 seconds TTL (more aggressive)
+            sys.modules['utils.llm_service']._CACHE_CLEANUP_INTERVAL = 15  # Clean up every 15 seconds
+            # Also reduce max cache size during deep sleep
+            sys.modules['utils.llm_service']._MAX_CACHE_SIZE = 25  # Very small cache during deep sleep
             logger.info(f"Set aggressive cache timeout during deep sleep: TTL={60 * 1}s, Cleanup={30}s")
         except Exception as e:
             logger.warning(f"Failed to update cache settings: {str(e)}")
@@ -184,6 +201,11 @@ def exit_deep_sleep():
         _background_processor.consecutive_idle_cycles = 0
         _background_processor.sleep_time = _background_processor.base_sleep_time
         
+        # Make sure vector store is loaded if it was unloaded
+        if hasattr(_background_processor, 'vector_store_unloaded') and _background_processor.vector_store_unloaded:
+            logger.info("Reloading vector store after deep sleep")
+            _background_processor.ensure_vector_store_loaded()
+        
         # Still run memory reduction for cleanup, but we expect it to be less effective
         # since we're about to start processing again
         memory_stats = reduce_memory_usage()
@@ -194,7 +216,9 @@ def exit_deep_sleep():
             # Reset to default values for normal operation
             sys.modules['utils.llm_service']._CACHE_TTL = 60 * 3  # 3 minutes TTL
             sys.modules['utils.llm_service']._CACHE_CLEANUP_INTERVAL = 60 * 1  # Clean up every minute
-            logger.info(f"Reset cache settings to normal: TTL={60 * 3}s, Cleanup={60 * 1}s")
+            # Also reset max cache size
+            sys.modules['utils.llm_service']._MAX_CACHE_SIZE = 75  # Normal cache size (matches the new reduced value)
+            logger.info(f"Reset cache settings to normal: TTL={60 * 3}s, Cleanup={60 * 1}s, Cache Size=75")
         except Exception as e:
             logger.warning(f"Failed to reset cache settings: {str(e)}")
         
@@ -276,6 +300,7 @@ class BackgroundProcessor:
         self.last_run_time = None
         self.documents_processed = 0
         self.last_work_found_time = time.time()  # Track when we last found work
+        self.vector_store_unloaded = False  # Track if vector store has been unloaded
         
         # Create SQLAlchemy engine and session
         self.engine = create_engine(DATABASE_URL)
@@ -283,6 +308,22 @@ class BackgroundProcessor:
         
         # Init vector store
         self.vector_store = VectorStore()
+        
+    def ensure_vector_store_loaded(self):
+        """
+        Ensure the vector store is loaded in memory.
+        If it was previously unloaded during deep sleep, reload it.
+        
+        Returns:
+            bool: True if a reload was needed, False if already loaded
+        """
+        if self.vector_store_unloaded:
+            logger.info("Vector store was unloaded, reloading from disk")
+            docs_loaded = self.vector_store.reload_from_disk()
+            logger.info(f"Reloaded {docs_loaded} documents into vector store")
+            self.vector_store_unloaded = False
+            return True
+        return False
         
     def _create_session(self):
         """Create a new database session. Used to recover from transaction errors."""

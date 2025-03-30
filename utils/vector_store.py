@@ -55,6 +55,61 @@ class VectorStore:
                 logger.info(f"Loaded {len(self.documents)} documents from disk")
         except Exception as e:
             logger.exception(f"Error loading vector store: {str(e)}")
+            
+    def unload_from_memory(self):
+        """
+        Unload the vector store from memory to reduce memory usage.
+        This saves the current state to disk, then releases the memory.
+        
+        Returns:
+            int: Number of documents unloaded
+        """
+        try:
+            # Save current state first
+            self._save()
+            
+            # Get the current count for reporting
+            doc_count = len(self.documents)
+            
+            # Clear the in-memory data structures
+            self.documents = {}
+            self.document_counts = defaultdict(int)
+            
+            # Replace the index with a new empty one
+            self.index = faiss.IndexFlatL2(self.dimension)
+            
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+            logger.info(f"Unloaded vector store from memory: {doc_count} documents")
+            return doc_count
+        except Exception as e:
+            logger.exception(f"Error unloading vector store: {str(e)}")
+            return 0
+            
+    def reload_from_disk(self):
+        """
+        Reload the vector store from disk.
+        This is used to restore the vector store after it was unloaded.
+        
+        Returns:
+            int: Number of documents loaded
+        """
+        try:
+            # First make sure we're starting with empty data structures
+            self.documents = {}
+            self.document_counts = defaultdict(int)
+            self.index = faiss.IndexFlatL2(self.dimension)
+            
+            # Load from disk
+            self._load_if_exists()
+            
+            # Return the number of documents loaded
+            return len(self.documents)
+        except Exception as e:
+            logger.exception(f"Error reloading vector store: {str(e)}")
+            return 0
     
     def _save(self):
         """Save the current index and data to disk with improved error handling."""

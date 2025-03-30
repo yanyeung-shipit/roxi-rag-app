@@ -770,6 +770,12 @@ def query():
                 'success': False, 
                 'message': 'Query is required'
             }), 400
+            
+        # Ensure vector store is loaded if it was unloaded during deep sleep
+        from utils.background_processor import _background_processor
+        if _background_processor and hasattr(_background_processor, 'vector_store_unloaded') and _background_processor.vector_store_unloaded:
+            logger.info("Vector store was unloaded during deep sleep, reloading before search")
+            _background_processor.ensure_vector_store_loaded()
         
         # Get similar documents from vector store
         retrieval_results = vector_store.search(query_text, top_k=5)
@@ -816,6 +822,12 @@ def query():
 @app.route('/stats', methods=['GET'])
 def stats():
     try:
+        # Ensure vector store is loaded if it was unloaded during deep sleep
+        from utils.background_processor import _background_processor
+        if _background_processor and hasattr(_background_processor, 'vector_store_unloaded') and _background_processor.vector_store_unloaded:
+            logger.info("Vector store was unloaded during deep sleep, reloading before stats")
+            _background_processor.ensure_vector_store_loaded()
+            
         # Get vector store stats
         vector_stats = vector_store.get_stats()
         
@@ -1272,6 +1284,12 @@ def get_documents():
 def get_document(document_id):
     """Get details of a specific document."""
     try:
+        # Ensure vector store is loaded if it was unloaded during deep sleep
+        from utils.background_processor import _background_processor
+        if _background_processor and hasattr(_background_processor, 'vector_store_unloaded') and _background_processor.vector_store_unloaded:
+            logger.info("Vector store was unloaded during deep sleep, reloading before document details")
+            _background_processor.ensure_vector_store_loaded()
+            
         doc = Document.query.get(document_id)
         
         if not doc:
@@ -1336,6 +1354,12 @@ def get_document(document_id):
 def process_document(document_id):
     """Manually trigger processing for a document that hasn't been processed yet."""
     try:
+        # Ensure vector store is loaded if it was unloaded during deep sleep
+        from utils.background_processor import _background_processor
+        if _background_processor and hasattr(_background_processor, 'vector_store_unloaded') and _background_processor.vector_store_unloaded:
+            logger.info("Vector store was unloaded during deep sleep, reloading before document processing")
+            _background_processor.ensure_vector_store_loaded()
+            
         doc = Document.query.get(document_id)
         
         if not doc:
@@ -1503,6 +1527,12 @@ def process_document(document_id):
 def load_more_document_content(document_id):
     """Load more content for a document that has additional chunks available."""
     try:
+        # Ensure vector store is loaded if it was unloaded during deep sleep
+        from utils.background_processor import _background_processor
+        if _background_processor and hasattr(_background_processor, 'vector_store_unloaded') and _background_processor.vector_store_unloaded:
+            logger.info("Vector store was unloaded during deep sleep, reloading before loading more content")
+            _background_processor.ensure_vector_store_loaded()
+            
         # Find the document
         doc = Document.query.get(document_id)
         
@@ -1652,6 +1682,12 @@ def load_more_document_content(document_id):
 def delete_document(document_id):
     """Delete a specific document and its chunks."""
     try:
+        # Ensure vector store is loaded if it was unloaded during deep sleep
+        from utils.background_processor import _background_processor
+        if _background_processor and hasattr(_background_processor, 'vector_store_unloaded') and _background_processor.vector_store_unloaded:
+            logger.info("Vector store was unloaded during deep sleep, reloading before document deletion")
+            _background_processor.ensure_vector_store_loaded()
+            
         doc = Document.query.get(document_id)
         
         if not doc:
@@ -2046,6 +2082,17 @@ def force_sleep_mode():
         cleared_entries = clear_embedding_cache()
         app.logger.info(f"Cleared {cleared_entries} entries from embedding cache")
         
+        # Unload vector store from memory to save significant memory
+        from utils.background_processor import _background_processor
+        unloaded_docs = 0
+        if _background_processor:
+            # Mark vector store as unloaded in the background processor
+            _background_processor.vector_store_unloaded = True
+            
+            # Unload vector store to save memory
+            unloaded_docs = vector_store.unload_from_memory()
+            app.logger.info(f"Unloaded vector store with {unloaded_docs} documents from memory")
+        
         # Get final memory usage
         after_mem = process.memory_info().rss / 1024 / 1024  # MB
         memory_saved = before_mem - after_mem
@@ -2056,7 +2103,9 @@ def force_sleep_mode():
             'in_deep_sleep': is_in_deep_sleep(),
             'memory_saved': f"{round(memory_saved, 1)}MB",
             'current_memory': f"{round(after_mem, 1)}MB",
-            'note': 'Background processing has been paused. The system will wake up when you add a new document.'
+            'vector_store_unloaded': unloaded_docs > 0,
+            'vector_documents_unloaded': unloaded_docs,
+            'note': 'Background processing has been paused and vector store has been unloaded. The system will wake up and reload data when needed.'
         })
     except Exception as e:
         app.logger.error(f"Error forcing sleep mode: {str(e)}")
@@ -2079,6 +2128,11 @@ def get_background_status():
         # Ensure deep sleep status is included
         if 'in_deep_sleep' not in processor_status:
             processor_status['in_deep_sleep'] = is_in_deep_sleep()
+            
+        # Check if vector store is unloaded
+        from utils.background_processor import _background_processor
+        if _background_processor and hasattr(_background_processor, 'vector_store_unloaded'):
+            processor_status['vector_store_unloaded'] = _background_processor.vector_store_unloaded
         
         # Fetch partially processed documents
         unprocessed_docs = []

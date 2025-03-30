@@ -34,9 +34,9 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Embedding cache with time-based expiration
 _embedding_cache: Dict[str, Tuple[np.ndarray, float]] = {}
-_CACHE_TTL = 60 * 3  # 3 minutes cache TTL in seconds
-_MAX_CACHE_SIZE = 150  # Maximum number of embeddings to cache
-_CACHE_CLEANUP_INTERVAL = 60 * 1  # Clean up every minute
+_CACHE_TTL = 60 * 2  # 2 minutes cache TTL in seconds (reduced from 3)
+_MAX_CACHE_SIZE = 75  # Maximum number of embeddings to cache (reduced from 150)
+_CACHE_CLEANUP_INTERVAL = 30  # Clean up every 30 seconds (reduced from 60)
 
 # Create a last cleanup tracker
 _last_cache_cleanup_time = time.time()
