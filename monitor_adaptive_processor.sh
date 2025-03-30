@@ -4,12 +4,16 @@
 # This script continuously monitors the adaptive processor and restarts it if needed
 
 # Configuration
-LOG_FILE="adaptive_processor_monitor.log"
+LOG_FILE="logs/adaptive_processor_66_percent_monitor_$(date +%Y%m%d_%H%M%S).log"
 PROCESSOR_NAME="adaptive_processor.py"
-TARGET_PERCENTAGE=65.0
-MAX_BATCH_SIZE=2  # Reduced batch size for memory-constrained environment
+TARGET_PERCENTAGE=66.0
+MAX_BATCH_SIZE=8  # Balanced batch size for memory-constrained environment
 CHECK_INTERVAL=60  # seconds
 MAX_RESTART_ATTEMPTS=10
+PROCESSOR_LOG_FILE="logs/adaptive_processor_66_percent_$(date +%Y%m%d_%H%M%S).log"
+
+# Create logs directory if it doesn't exist
+mkdir -p logs
 
 # Color codes for better readability
 GREEN='\033[0;32m'
@@ -32,14 +36,17 @@ is_running() {
 # Function to start the processor
 start_processor() {
     log "${BLUE}Starting adaptive processor with target $TARGET_PERCENTAGE% and max batch size $MAX_BATCH_SIZE...${NC}"
-    cd processors && nohup python adaptive_processor.py --target $TARGET_PERCENTAGE --max-batch $MAX_BATCH_SIZE > ../adaptive_processor_65_target.log 2>&1 &
+    cd processors && nohup python adaptive_processor.py --target $TARGET_PERCENTAGE --max-batch $MAX_BATCH_SIZE > "../$PROCESSOR_LOG_FILE" 2>&1 &
     
     # Sleep briefly to let process start
     sleep 5
     
     # Check if started successfully
     if is_running; then
-        log "${GREEN}Processor started successfully with PID $(pgrep -f "$PROCESSOR_NAME.*--target $TARGET_PERCENTAGE")${NC}"
+        pid=$(pgrep -f "$PROCESSOR_NAME.*--target $TARGET_PERCENTAGE")
+        log "${GREEN}Processor started successfully with PID $pid${NC}"
+        echo $pid > adaptive_processor_66_percent.pid
+        log "${GREEN}PID saved to adaptive_processor_66_percent.pid${NC}"
         return 0
     else
         log "${RED}Failed to start processor!${NC}"

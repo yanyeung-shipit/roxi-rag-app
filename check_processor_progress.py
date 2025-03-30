@@ -27,7 +27,7 @@ PID_FILES = [
     "enhanced_rebuild.pid",         # Enhanced batch processor
     "fast_processor.pid"           # Fast processor 
 ]
-TARGET_PERCENTAGE = 65.0
+TARGET_PERCENTAGE = 66.0
 
 def get_checkpoint_progress():
     """Get progress from the checkpoint files, checking multiple options."""

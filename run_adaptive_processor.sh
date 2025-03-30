@@ -12,7 +12,7 @@ TIMESTAMP=$(date +%Y%m%d%H%M%S)
 LOG_FILE="logs/adaptive_processor_${TIMESTAMP}.log"
 
 # Default settings
-TARGET_PERCENTAGE=65.0
+TARGET_PERCENTAGE=66.0
 MAX_BATCH_SIZE=10
 
 # Banner
