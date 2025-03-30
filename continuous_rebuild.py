@@ -5,6 +5,8 @@ Features:
 - Robust error handling that doesn't stop the process on individual failures
 - Comprehensive monitoring and progress tracking
 - Checkpoint-based recovery system
+- Adaptive sleep with deep sleep mode for resource conservation
+- Exponential backoff during idle periods
 """
 import os
 import sys
@@ -98,16 +100,19 @@ def enhanced_add_next_chunk() -> Dict[str, Any]:
     return {'success': False, 'error': 'No more chunks to process or error occurred'}
 
 def continuous_rebuild(max_chunks=None, delay_seconds=2, enable_monitoring=True,
-                      start_from_checkpoint=True, retry_failed=True):
+                      start_from_checkpoint=True, retry_failed=True, 
+                      enable_adaptive_sleep=True, deep_sleep_mode=True):
     """
     Continuously process chunks until all are processed or the maximum is reached.
     
     Args:
         max_chunks (int, optional): Maximum number of chunks to process. If None, process all.
-        delay_seconds (int, optional): Delay between chunks to avoid API rate limits.
+        delay_seconds (int, optional): Base delay between chunks to avoid API rate limits.
         enable_monitoring (bool): Whether to enable the monitoring system.
         start_from_checkpoint (bool): Whether to resume from the last checkpoint.
         retry_failed (bool): Whether to retry previously failed documents.
+        enable_adaptive_sleep (bool): Whether to use adaptive sleep times that increase during idle periods.
+        deep_sleep_mode (bool): Whether to enable deep sleep mode for extended idle periods.
         
     Returns:
         bool: True if rebuild completed successfully, False otherwise
@@ -123,6 +128,13 @@ def continuous_rebuild(max_chunks=None, delay_seconds=2, enable_monitoring=True,
             logger.info("Monitoring system started")
         
         chunk_count = 0
+        consecutive_idle_cycles = 0
+        in_deep_sleep = False
+        current_sleep_time = delay_seconds
+        max_sleep_time = 300  # 5 minutes
+        deep_sleep_time = 600  # 10 minutes
+        deep_sleep_threshold = 10  # Cycles before entering deep sleep
+        
         last_progress_check = time.time()
         progress_check_interval = 30  # seconds
         
@@ -169,12 +181,46 @@ def continuous_rebuild(max_chunks=None, delay_seconds=2, enable_monitoring=True,
                 
                 # Check if chunk was processed successfully
                 if not result.get('success', False):
-                    logger.info("No more chunks to process or encountered an error.")
-                    progress = check_progress()
-                    return progress['progress_percent'] >= 99.9
+                    # No chunks to process, implement adaptive sleep
+                    if enable_adaptive_sleep:
+                        consecutive_idle_cycles += 1
+                        
+                        # Check if we should enter deep sleep mode
+                        if deep_sleep_mode and consecutive_idle_cycles >= deep_sleep_threshold and not in_deep_sleep:
+                            in_deep_sleep = True
+                            current_sleep_time = deep_sleep_time
+                            logger.info(f"Entering deep sleep mode after {consecutive_idle_cycles} idle cycles, sleeping for {deep_sleep_time}s")
+                        # Otherwise use exponential backoff
+                        elif not in_deep_sleep and consecutive_idle_cycles > 3:
+                            # Double sleep time after 3 idle cycles (up to max limit)
+                            current_sleep_time = min(current_sleep_time * 2, max_sleep_time)
+                            logger.debug(f"No chunks found for {consecutive_idle_cycles} cycles, increasing sleep to {current_sleep_time}s")
+                        elif in_deep_sleep:
+                            logger.debug(f"In deep sleep mode, sleeping for {current_sleep_time}s")
+                        else:
+                            logger.debug(f"No chunks found, sleeping for {current_sleep_time}s")
+                            
+                        # Sleep for the adaptive time before checking again
+                        time.sleep(current_sleep_time)
+                        continue
+                    else:
+                        # If adaptive sleep is disabled, just finish processing
+                        logger.info("No more chunks to process or encountered an error.")
+                        progress = check_progress()
+                        return progress['progress_percent'] >= 99.9
                 
                 # Increment chunk count
                 chunk_count += 1
+                
+                # Reset sleep state and counters when work is found
+                if enable_adaptive_sleep:
+                    consecutive_idle_cycles = 0
+                    current_sleep_time = delay_seconds
+                    
+                    # If we were in deep sleep, exit that mode
+                    if in_deep_sleep:
+                        in_deep_sleep = False
+                        logger.info("Exiting deep sleep mode - work found!")
                 
                 # Log success with available information
                 if result.get('chunk_id'):
@@ -195,8 +241,11 @@ def continuous_rebuild(max_chunks=None, delay_seconds=2, enable_monitoring=True,
                 logger.error(f"Error processing chunk: {str(e)}")
                 log_error("chunk_processing_error", str(e), recoverable=True)
             
-            # Small delay to avoid API rate limits
-            time.sleep(delay_seconds)
+            # Use adaptive sleep time if enabled, otherwise use fixed delay
+            if enable_adaptive_sleep:
+                time.sleep(current_sleep_time)
+            else:
+                time.sleep(delay_seconds)
             
     except KeyboardInterrupt:
         logger.info("Rebuild process interrupted by user.")
@@ -232,6 +281,10 @@ if __name__ == "__main__":
                       help="Don't resume from the last checkpoint")
     parser.add_argument("--no-retry", action="store_true", 
                       help="Don't retry previously failed documents")
+    parser.add_argument("--no-adaptive-sleep", action="store_true",
+                      help="Disable adaptive sleep times that increase during idle periods")
+    parser.add_argument("--no-deep-sleep", action="store_true",
+                      help="Disable deep sleep mode for extended idle periods")
     
     # Parse arguments
     args = parser.parse_args()
@@ -242,5 +295,7 @@ if __name__ == "__main__":
         delay_seconds=args.delay,
         enable_monitoring=not args.no_monitoring,
         start_from_checkpoint=not args.no_checkpoint,
-        retry_failed=not args.no_retry
+        retry_failed=not args.no_retry,
+        enable_adaptive_sleep=not args.no_adaptive_sleep,
+        deep_sleep_mode=not args.no_deep_sleep
     )

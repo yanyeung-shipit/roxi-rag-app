@@ -65,6 +65,10 @@ async function loadBackgroundStatus() {
                                         <div><strong>Documents Processed:</strong> ${status.documents_processed}</div>
                                         <div><strong>Unprocessed Documents:</strong> ${unprocessedCount}</div>
                                         <div><strong>Documents Pending More Content:</strong> ${waitingForMoreContent}</div>
+                                        <div><strong>Sleep Time:</strong> ${status.current_sleep_time}s</div>
+                                        ${status.in_deep_sleep ? 
+                                          `<div class="text-warning"><strong>Deep Sleep Mode:</strong> Active</div>` : 
+                                          ``}
                                     </div>
                                 </div>
                             </div>
@@ -84,9 +88,14 @@ async function loadBackgroundStatus() {
                             ${waitingForMoreContent > 0 ? `${waitingForMoreContent} document(s) waiting for additional content to be loaded.<br>` : ''}
                             Processing will happen automatically in the background.
                         </div>` : 
-                        `<div class="alert alert-success">
-                            <i class="fas fa-check-circle me-2"></i>
+                        `<div class="alert ${status.in_deep_sleep ? 'alert-warning' : 'alert-success'}">
+                            <i class="fas ${status.in_deep_sleep ? 'fa-moon' : 'fa-check-circle'} me-2"></i>
                             All documents have been fully processed.
+                            ${status.in_deep_sleep ? 
+                              `<span class="ms-2"><strong>Deep Sleep Mode Active</strong> - Processor is conserving resources. Will wake instantly when new documents are added.</span>` : 
+                              (status.consecutive_idle_cycles > 3 ? 
+                               `<span class="ms-2"><strong>Energy Saving Mode</strong> - Processor is using adaptive sleep (${status.current_sleep_time}s) to conserve resources.</span>` : 
+                               ``)}
                         </div>`
                     }
                 </div>

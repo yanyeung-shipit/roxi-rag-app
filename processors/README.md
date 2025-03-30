@@ -11,6 +11,8 @@ Our most advanced processor that automatically adapts to available system resour
 - Falls back to single-chunk processing when resources are constrained
 - Includes all the benefits of the batch processor (checkpoints, monitoring, etc.)
 - Provides detailed resource usage statistics
+- Features adaptive sleep times that increase during idle periods
+- Implements deep sleep mode to minimize resource usage when inactive
 
 Usage:
 ```
@@ -65,3 +67,25 @@ We maintain several other processors in the main directory for different use cas
 3. For overnight processing in Replit's resource-constrained environment, use the adaptive processor
 4. Always check progress with `check_processor_progress.py` before and after processing
 5. Use checkpoint capabilities to resume interrupted processing
+
+## Resource Conservation Features
+
+The background processor now includes several resource conservation features:
+
+1. **Adaptive Sleep**: Sleep times dynamically adjust based on workload:
+   - Starts at 5 seconds during active processing
+   - Doubles after 3 idle cycles (5s → 10s → 20s → 40s → 80s → 160s)
+   - Maximum standard sleep time: 5 minutes
+
+2. **Deep Sleep Mode**:
+   - Activates after extended inactivity (10 consecutive idle cycles)
+   - Further extends sleep time to 10 minutes
+   - Instantly exits deep sleep when new documents are detected
+   - Displayed in UI with status indicators
+
+3. **Workload Awareness**:
+   - Tracks consecutive idle cycles to detect extended inactivity
+   - Efficiently manages memory by releasing resources during idle periods
+   - Automatically scales up responsiveness when work is available
+
+These features ensure optimal resource utilization, allowing the system to process documents quickly when needed while minimizing resource consumption during inactive periods.

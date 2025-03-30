@@ -73,7 +73,10 @@ class BackgroundProcessor:
         self.base_sleep_time = sleep_time
         self.sleep_time = sleep_time  # Current sleep time (will adapt)
         self.max_sleep_time = 300     # Maximum sleep time (5 minutes)
+        self.deep_sleep_time = 600    # Deep sleep mode (10 minutes)
         self.consecutive_idle_cycles = 0  # Track consecutive idle cycles
+        self.deep_sleep_threshold = 10  # Cycles before entering deep sleep
+        self.in_deep_sleep = False    # Deep sleep mode flag
         self.running = False
         self.thread = None
         self.last_run_time = None
@@ -280,11 +283,18 @@ class BackgroundProcessor:
                         # No work found, implement adaptive sleep time
                         self.consecutive_idle_cycles += 1
                         
-                        # Calculate new sleep time with exponential backoff
-                        if self.consecutive_idle_cycles > 3:
+                        # Check if we should enter deep sleep mode
+                        if self.consecutive_idle_cycles >= self.deep_sleep_threshold and not self.in_deep_sleep:
+                            self.in_deep_sleep = True
+                            self.sleep_time = self.deep_sleep_time
+                            logger.info(f"Entering deep sleep mode after {self.consecutive_idle_cycles} idle cycles, sleep time set to {self.deep_sleep_time}s")
+                        # Otherwise use exponential backoff
+                        elif not self.in_deep_sleep and self.consecutive_idle_cycles > 3:
                             # Double sleep time after 3 idle cycles (up to max limit)
                             self.sleep_time = min(self.sleep_time * 2, self.max_sleep_time)
                             logger.debug(f"No unprocessed documents found for {self.consecutive_idle_cycles} cycles, increasing sleep to {self.sleep_time}s")
+                        elif self.in_deep_sleep:
+                            logger.debug(f"In deep sleep mode, sleeping for {self.sleep_time}s")
                         else:
                             logger.debug(f"No unprocessed documents found, sleeping for {self.sleep_time}s...")
                             
@@ -307,6 +317,12 @@ class BackgroundProcessor:
                 # If we got here, we have work to do, reset the idle counter and sleep time
                 self.consecutive_idle_cycles = 0
                 self.sleep_time = self.base_sleep_time  # Reset sleep time to base value
+                
+                # If we were in deep sleep, exit that mode
+                if self.in_deep_sleep:
+                    self.in_deep_sleep = False
+                    logger.info(f"Exiting deep sleep mode, work found!")
+                
                 logger.debug(f"Found work to do, resetting sleep time to {self.sleep_time}s")
                 
                 # Process each document
@@ -550,6 +566,8 @@ class BackgroundProcessor:
             'documents_waiting_for_more_content': waiting_documents,
             'current_sleep_time': self.sleep_time,
             'consecutive_idle_cycles': self.consecutive_idle_cycles,
+            'in_deep_sleep': self.in_deep_sleep,
+            'deep_sleep_threshold': self.deep_sleep_threshold,
             
             # Resource information
             'system_resources': {
