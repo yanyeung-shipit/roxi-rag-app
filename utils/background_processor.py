@@ -59,6 +59,21 @@ def force_deep_sleep():
     except Exception as e:
         logger.error(f"Error forcing deep sleep mode: {str(e)}")
         return False
+        
+def is_in_deep_sleep():
+    """
+    Check if the background processor is currently in deep sleep mode.
+    
+    Returns:
+        bool: True if the background processor is in deep sleep mode, False otherwise
+    """
+    global _background_processor
+    
+    if _background_processor is None:
+        logger.warning("Background processor not initialized, cannot check deep sleep status")
+        return False
+        
+    return _background_processor.in_deep_sleep
 
 def initialize_background_processor(batch_size=1, sleep_time=5):
     """

@@ -452,11 +452,32 @@
         <div class="card bg-dark border-secondary">
             <div class="card-header bg-dark text-light d-flex justify-content-between align-items-center">
                 <h4><i class="fas fa-tasks me-2"></i>Background Processing Status</h4>
-                <button class="btn btn-sm btn-outline-secondary" onclick="refreshBackgroundStatus()">
-                    <i class="fas fa-sync-alt"></i> Refresh
-                </button>
+                <div>
+                    <button id="deep-sleep-btn" class="btn btn-sm btn-outline-info me-2" onclick="activateDeepSleep()">
+                        <i class="fas fa-moon"></i> Sleep Mode
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="refreshBackgroundStatus()">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
             </div>
             <div class="card-body">
+                <div class="alert alert-info alert-dismissible fade show mb-3" role="alert">
+                    <h5><i class="fas fa-info-circle"></i> About Sleep Mode</h5>
+                    <p><strong>Sleep Mode</strong> reduces resource usage when you're done working. The system will:</p>
+                    <ul>
+                        <li>Reduce background processing activity to save memory and CPU</li>
+                        <li>Continue to serve search queries and remain fully functional</li>
+                        <li>Automatically wake up when new documents are uploaded</li>
+                    </ul>
+                    <p class="mb-0"><small class="text-muted">Use this feature at the end of your session to conserve system resources.</small></p>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+                
+                <div id="sleep-status-message" class="alert alert-success d-none mb-3">
+                    <i class="fas fa-check-circle"></i> Deep sleep mode activated. System will use minimal resources until new work is available.
+                </div>
+                
                 <div id="background-status-content">
                     <div class="d-flex justify-content-center my-4">
                         <div class="spinner-border text-secondary" role="status">
@@ -472,6 +493,53 @@
 
 <!-- JavaScript for resource and status monitoring -->
 <script>
+    // Function to activate deep sleep mode
+    function activateDeepSleep() {
+        // Disable the button and show loading state
+        const sleepBtn = document.getElementById('deep-sleep-btn');
+        sleepBtn.disabled = true;
+        sleepBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Activating...';
+        
+        // Call the API endpoint to force deep sleep
+        fetch('/force_sleep_mode', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            // Show success message
+            if (data.success) {
+                const sleepMessage = document.getElementById('sleep-status-message');
+                sleepMessage.classList.remove('d-none');
+                sleepMessage.textContent = data.message;
+                
+                // Update button to show sleep state
+                sleepBtn.innerHTML = '<i class="fas fa-moon"></i> System Sleeping';
+                sleepBtn.classList.remove('btn-outline-info');
+                sleepBtn.classList.add('btn-info');
+                
+                // Still disabled but with a different look
+                sleepBtn.disabled = true;
+                
+                // Refresh the status display
+                setTimeout(refreshBackgroundStatus, 1000);
+            } else {
+                // Show error state
+                alert('Failed to activate sleep mode: ' + data.message);
+                sleepBtn.innerHTML = '<i class="fas fa-moon"></i> Sleep Mode';
+                sleepBtn.disabled = false;
+            }
+        })
+        .catch(error => {
+            console.error('Error activating sleep mode:', error);
+            alert('Error activating sleep mode. Please try again.');
+            sleepBtn.innerHTML = '<i class="fas fa-moon"></i> Sleep Mode';
+            sleepBtn.disabled = false;
+        });
+    }
+
     // Load all metrics and status when the page loads
     document.addEventListener('DOMContentLoaded', function() {
         refreshProcessingMetrics();
@@ -561,17 +629,102 @@
                 // Find the card-body inside it
                 const cardBody = statusSection.querySelector('.card-body');
                 if (cardBody) {
-                    // Recreate the content element
-                    cardBody.innerHTML = `
-                        <div id="background-status-content">
-                            <div class="d-flex justify-content-center my-4">
-                                <div class="spinner-border text-secondary" role="status">
-                                    <span class="visually-hidden">Loading...</span>
-                                </div>
+                    // Check if we need to restore the sleep message and info alert
+                    const hasInfoAlert = cardBody.querySelector('.alert-info') !== null;
+                    const hasSleepMessage = cardBody.querySelector('#sleep-status-message') !== null;
+                    
+                    // If the alert is missing, recreate the entire content
+                    if (!hasInfoAlert) {
+                        cardBody.innerHTML = `
+                            <div class="alert alert-info alert-dismissible fade show mb-3" role="alert">
+                                <h5><i class="fas fa-info-circle"></i> About Sleep Mode</h5>
+                                <p><strong>Sleep Mode</strong> reduces resource usage when you're done working. The system will:</p>
+                                <ul>
+                                    <li>Reduce background processing activity to save memory and CPU</li>
+                                    <li>Continue to serve search queries and remain fully functional</li>
+                                    <li>Automatically wake up when new documents are uploaded</li>
+                                </ul>
+                                <p class="mb-0"><small class="text-muted">Use this feature at the end of your session to conserve system resources.</small></p>
+                                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" aria-label="Close"></button>
                             </div>
-                            <p class="text-center text-muted">Loading background processing status...</p>
-                        </div>
-                    `;
+                            
+                            <div id="sleep-status-message" class="alert alert-success d-none mb-3">
+                                <i class="fas fa-check-circle"></i> Deep sleep mode activated. System will use minimal resources until new work is available.
+                            </div>
+                            
+                            <div id="background-status-content">
+                                <div class="d-flex justify-content-center my-4">
+                                    <div class="spinner-border text-secondary" role="status">
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
+                                </div>
+                                <p class="text-center text-muted">Loading background processing status...</p>
+                            </div>
+                        `;
+                    }
+                    // Otherwise just recreate the missing element
+                    else if (!document.getElementById('background-status-content')) {
+                        if (!hasSleepMessage) {
+                            // Also need to add the sleep message
+                            cardBody.innerHTML += `
+                                <div id="sleep-status-message" class="alert alert-success d-none mb-3">
+                                    <i class="fas fa-check-circle"></i> Deep sleep mode activated. System will use minimal resources until new work is available.
+                                </div>
+                                
+                                <div id="background-status-content">
+                                    <div class="d-flex justify-content-center my-4">
+                                        <div class="spinner-border text-secondary" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                    </div>
+                                    <p class="text-center text-muted">Loading background processing status...</p>
+                                </div>
+                            `;
+                        } else {
+                            // Just add the content element
+                            cardBody.innerHTML += `
+                                <div id="background-status-content">
+                                    <div class="d-flex justify-content-center my-4">
+                                        <div class="spinner-border text-secondary" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                    </div>
+                                    <p class="text-center text-muted">Loading background processing status...</p>
+                                </div>
+                            `;
+                        }
+                    }
+                    
+                    // Also make sure the sleep button is working
+                    const header = statusSection.querySelector('.card-header');
+                    if (header && !document.getElementById('deep-sleep-btn')) {
+                        const btnContainer = header.querySelector('div') || document.createElement('div');
+                        if (!header.querySelector('div')) {
+                            // Create the button container
+                            header.innerHTML = `
+                                <h4><i class="fas fa-tasks me-2"></i>Background Processing Status</h4>
+                                <div>
+                                    <button id="deep-sleep-btn" class="btn btn-sm btn-outline-info me-2" onclick="activateDeepSleep()">
+                                        <i class="fas fa-moon"></i> Sleep Mode
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-secondary" onclick="refreshBackgroundStatus()">
+                                        <i class="fas fa-sync-alt"></i> Refresh
+                                    </button>
+                                </div>
+                            `;
+                        } else if (!document.getElementById('deep-sleep-btn')) {
+                            // Just add the sleep button
+                            btnContainer.innerHTML = `
+                                <button id="deep-sleep-btn" class="btn btn-sm btn-outline-info me-2" onclick="activateDeepSleep()">
+                                    <i class="fas fa-moon"></i> Sleep Mode
+                                </button>
+                                <button class="btn btn-sm btn-outline-secondary" onclick="refreshBackgroundStatus()">
+                                    <i class="fas fa-sync-alt"></i> Refresh
+                                </button>
+                            `;
+                        }
+                    }
+                    
                     // Trigger a refresh
                     setTimeout(refreshBackgroundStatus, 500);
                 }
@@ -785,6 +938,70 @@
             });
     }
     
+    // Function to activate deep sleep mode
+    function activateDeepSleep() {
+        console.log("Activating deep sleep mode...");
+        const sleepBtn = document.getElementById('deep-sleep-btn');
+        const sleepMessage = document.getElementById('sleep-status-message');
+        
+        // Disable the button and update its appearance
+        if (sleepBtn) {
+            sleepBtn.disabled = true;
+            sleepBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Activating...';
+        }
+        
+        // Call the force_sleep_mode endpoint
+        fetch('/force_sleep_mode', {
+            method: 'POST',
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Status error: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.success) {
+                // Update button to indicate success
+                if (sleepBtn) {
+                    sleepBtn.innerHTML = '<i class="fas fa-moon"></i> System Sleeping';
+                    sleepBtn.classList.remove('btn-outline-info');
+                    sleepBtn.classList.add('btn-info');
+                }
+                
+                // Show sleep message
+                if (sleepMessage) {
+                    sleepMessage.classList.remove('d-none');
+                    sleepMessage.innerHTML = '<i class="fas fa-check-circle"></i> ' + data.message;
+                }
+                
+                // Refresh to update status indicators
+                setTimeout(refreshBackgroundStatus, 1000);
+            } else {
+                // Restore button on error
+                if (sleepBtn) {
+                    sleepBtn.disabled = false;
+                    sleepBtn.innerHTML = '<i class="fas fa-moon"></i> Sleep Mode';
+                }
+                
+                // Show error
+                alert('Error: ' + (data.message || 'Failed to activate sleep mode'));
+            }
+        })
+        .catch(error => {
+            console.error("Cannot activate sleep mode:", error);
+            
+            // Restore button on error
+            if (sleepBtn) {
+                sleepBtn.disabled = false;
+                sleepBtn.innerHTML = '<i class="fas fa-moon"></i> Sleep Mode';
+            }
+            
+            // Show error
+            alert('Error: ' + error.message);
+        });
+    }
+    
     function refreshBackgroundStatus() {
         console.log("Loading background processing status...");
         const statusContent = document.getElementById('background-status-content');
@@ -794,6 +1011,10 @@
             ensureBackgroundStatusElement();
             return;
         }
+        
+        // Get references to UI elements
+        const sleepBtn = document.getElementById('deep-sleep-btn');
+        const sleepMessage = document.getElementById('sleep-status-message');
         
         // Show loading spinner
         statusContent.innerHTML = `
@@ -815,6 +1036,36 @@
             })
             .then(data => {
                 if (data.success) {
+                    // Update sleep button state based on data
+                    if (data.processor_status && data.processor_status.in_deep_sleep) {
+                        // System is in deep sleep mode
+                        if (sleepBtn) {
+                            sleepBtn.innerHTML = '<i class="fas fa-moon"></i> System Sleeping';
+                            sleepBtn.classList.remove('btn-outline-info');
+                            sleepBtn.classList.add('btn-info');
+                            sleepBtn.disabled = true;
+                        }
+                        
+                        // Show sleep message if it's hidden
+                        if (sleepMessage && sleepMessage.classList.contains('d-none')) {
+                            sleepMessage.classList.remove('d-none');
+                            sleepMessage.innerHTML = '<i class="fas fa-check-circle"></i> Deep sleep mode activated. System will use minimal resources until new work is available.';
+                        }
+                    } else {
+                        // System is not in deep sleep mode
+                        if (sleepBtn) {
+                            sleepBtn.innerHTML = '<i class="fas fa-moon"></i> Sleep Mode';
+                            sleepBtn.classList.remove('btn-info');
+                            sleepBtn.classList.add('btn-outline-info');
+                            sleepBtn.disabled = false;
+                        }
+                        
+                        // Hide sleep message
+                        if (sleepMessage && !sleepMessage.classList.contains('d-none')) {
+                            sleepMessage.classList.add('d-none');
+                        }
+                    }
+                    
                     // If there are unprocessed documents, show details
                     if (data.unprocessed_documents && data.unprocessed_documents.length > 0) {
                         let html = `

@@ -1990,25 +1990,44 @@ def force_sleep_mode():
     when they are done using the system for extended periods.
     """
     try:
-        from utils.background_processor import force_deep_sleep
+        from utils.background_processor import force_deep_sleep, is_in_deep_sleep
+        
+        # Check current state first
+        if is_in_deep_sleep():
+            return jsonify({
+                'success': True,
+                'message': 'System is already in deep sleep mode.',
+                'in_deep_sleep': True
+            })
+            
+        # Try to activate deep sleep
         success = force_deep_sleep()
         return jsonify({
             'success': success,
-            'message': 'System is now in deep sleep mode. It will use minimal resources until new work is available.'
+            'message': 'System is now in deep sleep mode. It will use minimal resources until new work is available.',
+            'in_deep_sleep': is_in_deep_sleep()
         })
     except Exception as e:
         app.logger.error(f"Error forcing sleep mode: {str(e)}")
         return jsonify({
             'success': False,
-            'message': f'Failed to enter deep sleep mode: {str(e)}'
+            'message': f'Failed to enter deep sleep mode: {str(e)}',
+            'in_deep_sleep': False
         }), 500
 
 @app.route('/background_status', methods=['GET'])
 def get_background_status():
     """Get status of background processing and detailed information on unprocessed documents."""
     try:
+        # Import for checking deep sleep status
+        from utils.background_processor import is_in_deep_sleep
+        
         # Get background processor status
         processor_status = background_processor.get_status()
+        
+        # Ensure deep sleep status is included
+        if 'in_deep_sleep' not in processor_status:
+            processor_status['in_deep_sleep'] = is_in_deep_sleep()
         
         # Fetch partially processed documents
         unprocessed_docs = []
