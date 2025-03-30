@@ -1,60 +1,53 @@
 #!/bin/bash
-# This script will persistently run the processing until we reach 75%
-# It uses add_single_chunk.py, which is the most reliable processor
+
+# This script is designed to run for an extended period, processing chunks
+# until reaching 75% of the total chunks, with more aggressive batch sizes.
 
 # Configuration
-CHUNKS_PER_BATCH=5
-TARGET_PERCENTAGE=75.0
-MAX_ATTEMPTS=100
-LOG_FILE="process_75_percent_background.log"
+BATCH_SIZE=20     # Process 20 chunks at a time
+TARGET_PCT=75.0   # Target percentage (75%)
+LOG_DIR="logs"
+TIMESTAMP=$(date "+%Y%m%d_%H%M%S")
+LOG_FILE="${LOG_DIR}/process_75_percent_background_${TIMESTAMP}.log"
 
-# Echo with timestamp function
-timestamp() {
-  date +"%Y-%m-%d %H:%M:%S"
+# Create logs directory if it doesn't exist
+mkdir -p "$LOG_DIR"
+
+# Write PID to file for monitoring
+echo $$ > "process_75_percent.pid"
+
+echo "Starting long-running processor to reach ${TARGET_PCT}% completion..." | tee -a "$LOG_FILE"
+echo "Log file: $LOG_FILE" | tee -a "$LOG_FILE"
+echo "Started at: $(date)" | tee -a "$LOG_FILE"
+echo "Using batch size: $BATCH_SIZE" | tee -a "$LOG_FILE"
+
+# Function to get current processing percentage
+get_progress() {
+    local vector_file="faiss_index.bin"
+    local total_chunks=1261 # From previous analysis
+    
+    if [ -f "$vector_file" ]; then
+        # Count processed chunks by checking for specific patterns in logs
+        local processed_chunks=$(grep "Successfully processed chunk" "$LOG_FILE" | wc -l)
+        
+        # Add the initial chunks that were already processed
+        local initial_chunks=65 # Based on recent log entry
+        processed_chunks=$((processed_chunks + initial_chunks))
+        
+        # Calculate percentage
+        local percentage=$(echo "scale=1; $processed_chunks * 100 / $total_chunks" | bc)
+        echo "$percentage% ($processed_chunks/$total_chunks chunks)"
+    else
+        echo "0% (0/0 chunks) - Vector file not found"
+    fi
 }
 
-echo "$(timestamp) Starting persistent chunk processing until $TARGET_PERCENTAGE% completion" >> $LOG_FILE
-echo "Starting persistent processing until $TARGET_PERCENTAGE% completion"
+# Run the Python script with customized parameters
+python -u process_to_50_percent.py --batch-size=$BATCH_SIZE --target-percentage=$TARGET_PCT >> "$LOG_FILE" 2>&1
 
-attempts=0
-current_percentage=0
+# Check final status
+echo "Processor completed at: $(date)" | tee -a "$LOG_FILE"
+echo "Final progress: $(get_progress)" | tee -a "$LOG_FILE"
 
-# Function to get current percentage
-get_current_percentage() {
-  python check_progress.py | grep "complete" | tail -1 | awk '{print $2}' | tr -d '%'
-}
-
-# Initial percentage
-current_percentage=$(get_current_percentage)
-echo "$(timestamp) Starting at $current_percentage%" >> $LOG_FILE
-echo "Starting at $current_percentage%"
-
-# Process until target or max attempts
-while [ "$(echo "$current_percentage < $TARGET_PERCENTAGE" | bc -l)" -eq 1 ] && [ $attempts -lt $MAX_ATTEMPTS ]; do
-  # Increment attempts
-  attempts=$((attempts + 1))
-  
-  echo "$(timestamp) Attempt $attempts: Processing $CHUNKS_PER_BATCH chunks" >> $LOG_FILE
-  echo "Attempt $attempts: Processing $CHUNKS_PER_BATCH chunks"
-  
-  # Process chunks
-  python add_single_chunk.py --max-chunks $CHUNKS_PER_BATCH >> $LOG_FILE 2>&1
-  
-  # Get new percentage
-  current_percentage=$(get_current_percentage)
-  
-  echo "$(timestamp) Current progress: $current_percentage%" >> $LOG_FILE
-  echo "Current progress: $current_percentage%"
-  
-  # Brief delay to allow system to stabilize
-  sleep 3
-done
-
-# Final status
-if [ "$(echo "$current_percentage >= $TARGET_PERCENTAGE" | bc -l)" -eq 1 ]; then
-  echo "$(timestamp) Target reached! Final progress: $current_percentage%" >> $LOG_FILE
-  echo "Target reached! Final progress: $current_percentage%"
-else
-  echo "$(timestamp) Maximum attempts reached. Final progress: $current_percentage%" >> $LOG_FILE
-  echo "Maximum attempts reached. Final progress: $current_percentage%"
-fi
+# Clean up PID file
+rm -f "process_75_percent.pid"
