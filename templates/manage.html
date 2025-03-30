@@ -398,6 +398,30 @@
         </div>
     </div>
 </div>
+<!-- Processing Metrics Card -->
+<div class="row mb-4" id="processing-metrics-section">
+    <div class="col-12">
+        <div class="card bg-dark border-info">
+            <div class="card-header bg-dark text-light d-flex justify-content-between align-items-center">
+                <h4><i class="fas fa-chart-line me-2"></i>Processing Metrics</h4>
+                <button class="btn btn-sm btn-outline-info" onclick="refreshProcessingMetrics()">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+            </div>
+            <div class="card-body">
+                <div id="processing-metrics-content">
+                    <div class="d-flex justify-content-center my-4">
+                        <div class="spinner-border text-secondary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                    <p class="text-center text-muted">Loading processing metrics...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- System Resources Card -->
 <div class="row mb-4" id="system-resources-section">
     <div class="col-12">
@@ -448,18 +472,21 @@
 
 <!-- JavaScript for resource and status monitoring -->
 <script>
-    // Load both resources and status when the page loads
+    // Load all metrics and status when the page loads
     document.addEventListener('DOMContentLoaded', function() {
+        refreshProcessingMetrics();
         refreshSystemResources();
         refreshBackgroundStatus();
         
         // Auto-refresh every 30 seconds
+        setInterval(refreshProcessingMetrics, 30000);
         setInterval(refreshSystemResources, 30000);
         setInterval(refreshBackgroundStatus, 30000);
         
         // Check for element existence every 5 seconds
         // This ensures we can recover if elements are removed from the DOM
         setInterval(function() {
+            ensureProcessingMetricsElement();
             ensureSystemResourcesElement();
             ensureBackgroundStatusElement();
         }, 5000);
@@ -494,6 +521,35 @@
         }
     }
     
+    // Function to ensure the processing-metrics-content element exists
+    function ensureProcessingMetricsElement() {
+        if (!document.getElementById('processing-metrics-content')) {
+            console.log("Restoring processing-metrics-content element...");
+            
+            // Find the processing-metrics-section
+            const metricsSection = document.getElementById('processing-metrics-section');
+            if (metricsSection) {
+                // Find the card-body inside it
+                const cardBody = metricsSection.querySelector('.card-body');
+                if (cardBody) {
+                    // Recreate the content element
+                    cardBody.innerHTML = `
+                        <div id="processing-metrics-content">
+                            <div class="d-flex justify-content-center my-4">
+                                <div class="spinner-border text-secondary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                            </div>
+                            <p class="text-center text-muted">Loading processing metrics...</p>
+                        </div>
+                    `;
+                    // Trigger a refresh
+                    setTimeout(refreshProcessingMetrics, 500);
+                }
+            }
+        }
+    }
+    
     // Function to ensure the background-status-content element exists
     function ensureBackgroundStatusElement() {
         if (!document.getElementById('background-status-content')) {
@@ -521,6 +577,93 @@
                 }
             }
         }
+    }
+    
+    function refreshProcessingMetrics() {
+        console.log("Loading processing metrics...");
+        const metricsContent = document.getElementById('processing-metrics-content');
+        
+        if (!metricsContent) {
+            console.error("Cannot load processing metrics: processing-metrics-content element not found");
+            ensureProcessingMetricsElement();
+            return;
+        }
+        
+        // Show loading spinner
+        metricsContent.innerHTML = `
+            <div class="d-flex justify-content-center my-4">
+                <div class="spinner-border text-secondary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+            </div>
+            <p class="text-center text-muted">Loading processing metrics...</p>
+        `;
+        
+        // Fetch processing metrics
+        fetch('/background_status')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Status error: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success && data.processor_status && data.processor_status.processing_metrics) {
+                    const metrics = data.processor_status.processing_metrics;
+                    const percentComplete = metrics.percent_complete;
+                    
+                    const html = `
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <h6 class="text-light">Overall Progress</h6>
+                                    <div class="progress" style="height: 25px;">
+                                        <div class="progress-bar bg-info" role="progressbar" 
+                                            style="width: ${percentComplete}%;" 
+                                            aria-valuenow="${percentComplete}" aria-valuemin="0" aria-valuemax="100">
+                                            ${percentComplete}%
+                                        </div>
+                                    </div>
+                                </div>
+                                <p class="text-light"><strong>Total Documents:</strong> ${metrics.total_documents}</p>
+                                <p class="text-light"><strong>Total Chunks:</strong> ${metrics.total_chunks}</p>
+                            </div>
+                            <div class="col-md-6">
+                                <p class="text-light"><strong>Processed Chunks:</strong> ${metrics.processed_chunks}</p>
+                                <p class="text-light"><strong>Estimated Time Remaining:</strong> ${metrics.estimated_time_remaining}</p>
+                                <p class="text-light"><strong>Processing Rate:</strong> ${metrics.processing_rate_chunks_per_second.toFixed(2)} chunks/sec</p>
+                            </div>
+                        </div>
+                        <div class="text-muted small mt-2">
+                            <p><i class="fas fa-clock me-1"></i>Last updated: ${new Date().toLocaleTimeString()}</p>
+                        </div>
+                    `;
+                    
+                    metricsContent.innerHTML = html;
+                } else {
+                    metricsContent.innerHTML = `
+                        <div class="alert alert-warning">
+                            <h5><i class="fas fa-exclamation-triangle me-2"></i>Processing Metrics Not Available</h5>
+                            <p>The processing metrics information is currently not available.</p>
+                        </div>
+                        <div class="text-muted small mt-2">
+                            <p><i class="fas fa-clock me-1"></i>Last updated: ${new Date().toLocaleTimeString()}</p>
+                        </div>
+                    `;
+                }
+            })
+            .catch(error => {
+                console.error("Cannot load processing metrics:", error);
+                metricsContent.innerHTML = `
+                    <div class="alert alert-danger">
+                        <h5><i class="fas fa-exclamation-triangle me-2"></i>Error</h5>
+                        <p>Failed to load processing metrics: ${error.message}</p>
+                    </div>
+                    <div class="text-muted small mt-2">
+                        <p><i class="fas fa-clock me-1"></i>Last updated: ${new Date().toLocaleTimeString()}</p>
+                    </div>
+                `;
+            });
     }
     
     function refreshSystemResources() {
@@ -748,115 +891,9 @@
                         
                         statusContent.innerHTML = html;
                     } else {
-                        // No documents being processed - prepare system metrics
-                        let processingMetrics = '';
-                        let systemResources = '';
-                        
-                        // Add processing metrics if available
-                        if (data.processor_status && data.processor_status.processing_metrics) {
-                            const metrics = data.processor_status.processing_metrics;
-                            const percentComplete = metrics.percent_complete;
-                            
-                            processingMetrics = `
-                                <div class="card bg-dark border-info mb-3">
-                                    <div class="card-header bg-dark text-light">
-                                        <h5 class="mb-0"><i class="fas fa-chart-line me-2"></i>Processing Metrics</h5>
-                                    </div>
-                                    <div class="card-body">
-                                        <div class="row">
-                                            <div class="col-md-6">
-                                                <div class="mb-3">
-                                                    <h6 class="text-light">Overall Progress</h6>
-                                                    <div class="progress" style="height: 25px;">
-                                                        <div class="progress-bar bg-info" role="progressbar" 
-                                                            style="width: ${percentComplete}%;" 
-                                                            aria-valuenow="${percentComplete}" aria-valuemin="0" aria-valuemax="100">
-                                                            ${percentComplete}%
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <p class="text-light"><strong>Total Documents:</strong> ${metrics.total_documents}</p>
-                                                <p class="text-light"><strong>Total Chunks:</strong> ${metrics.total_chunks}</p>
-                                            </div>
-                                            <div class="col-md-6">
-                                                <p class="text-light"><strong>Processed Chunks:</strong> ${metrics.processed_chunks}</p>
-                                                <p class="text-light"><strong>Estimated Time Remaining:</strong> ${metrics.estimated_time_remaining}</p>
-                                                <p class="text-light"><strong>Processing Rate:</strong> ${metrics.processing_rate_chunks_per_second.toFixed(2)} chunks/sec</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                        }
-                        
-                        // Add system resources if available
-                        if (data.system_resources) {
-                            const resources = data.system_resources;
-                            
-                            // Determine status classes based on usage levels
-                            const cpuClass = resources.cpu_percent > 80 ? 'danger' : 
-                                          resources.cpu_percent > 60 ? 'warning' : 'success';
-                            const memoryClass = resources.memory_percent > 80 ? 'danger' : 
-                                             resources.memory_percent > 60 ? 'warning' : 'success';
-                            
-                            // Process mode info if available
-                            let processModeHtml = '';
-                            if (data.processor_status && data.processor_status.processing_mode) {
-                                const mode = data.processor_status.processing_mode;
-                                processModeHtml = `
-                                    <h6 class="text-light">Processing Mode</h6>
-                                    <div class="d-flex justify-content-between align-items-center mb-3">
-                                        <span class="text-light">Current Mode:</span>
-                                        <span class="badge bg-info">${mode.current_mode}</span>
-                                    </div>
-                                    <div class="d-flex justify-content-between align-items-center mb-3">
-                                        <span class="text-light">Recommended Batch Size:</span>
-                                        <span class="badge bg-secondary">${mode.recommended_batch_size}</span>
-                                    </div>
-                                    <div class="d-flex justify-content-between align-items-center">
-                                        <span class="text-light">Resource Constrained:</span>
-                                        <span class="badge ${mode.resource_constrained ? 'bg-warning' : 'bg-success'}">
-                                            ${mode.resource_constrained ? 'Yes' : 'No'}
-                                        </span>
-                                    </div>
-                                `;
-                            }
-                            
-                            systemResources = `
-                                <div class="card bg-dark border-secondary mb-3">
-                                    <div class="card-header bg-dark text-light">
-                                        <h5 class="mb-0"><i class="fas fa-server me-2"></i>System Resources</h5>
-                                    </div>
-                                    <div class="card-body">
-                                        <div class="row">
-                                            <div class="col-md-6">
-                                                <h6 class="text-light">CPU Usage</h6>
-                                                <div class="progress mb-3" style="height: 25px;">
-                                                    <div class="progress-bar bg-${cpuClass}" role="progressbar" 
-                                                        style="width: ${resources.cpu_percent}%;" 
-                                                        aria-valuenow="${resources.cpu_percent}" aria-valuemin="0" aria-valuemax="100">
-                                                        ${resources.cpu_percent.toFixed(1)}%
-                                                    </div>
-                                                </div>
-                                                
-                                                <h6 class="text-light">Memory Usage</h6>
-                                                <div class="progress" style="height: 25px;">
-                                                    <div class="progress-bar bg-${memoryClass}" role="progressbar" 
-                                                        style="width: ${resources.memory_percent}%;" 
-                                                        aria-valuenow="${resources.memory_percent}" aria-valuemin="0" aria-valuemax="100">
-                                                        ${resources.memory_percent.toFixed(1)}%
-                                                    </div>
-                                                </div>
-                                                <p class="text-light mt-2"><strong>Available Memory:</strong> ${resources.memory_available_mb.toFixed(1)} MB</p>
-                                            </div>
-                                            <div class="col-md-6">
-                                                ${processModeHtml}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                        }
+                        // No documents being processed - show a simple message
+                        // We've removed the processing metrics and system resources sections
+                        // as they are now in their own dedicated cards
                         
                         // No documents being processed
                         // Create the HTML for the main content
@@ -865,8 +902,6 @@
                                 <h5><i class="fas fa-check-circle me-2"></i>All Documents Processed</h5>
                                 <p>No documents are currently being processed in the background.</p>
                             </div>
-                            ${processingMetrics}
-                            ${systemResources}
                             <div class="text-muted small mt-2">
                                 <p>
                                     <i class="fas fa-info-circle me-1"></i>
