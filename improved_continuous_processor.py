@@ -1,14 +1,16 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
-Improved Continuous Chunk Processor
+Improved Continuous Processor
 
-This script provides a robust way to continuously process chunks in the background.
-Features:
-- Processes chunks in batches to minimize overhead
-- Maintains checkpoints for recovery
-- Provides detailed logging and progress tracking
-- Handles errors gracefully without stopping the entire process
-- Can be interrupted and resumed
+This script is a streamlined and improved version of the continuous chunk processor.
+It's designed to be more efficient and reliable in the Replit environment.
+
+Key features:
+- Direct database access with no ORM overhead
+- Simplified vector store operations
+- Configurable batch size and delays
+- Progress tracking and reporting
+- Checkpoint-based resumption
 """
 
 import os
@@ -16,426 +18,499 @@ import sys
 import time
 import json
 import logging
+import datetime
+import pickle
 import argparse
-from datetime import datetime
-from typing import Dict, List, Any, Optional, Union, Set
+from typing import Dict, List, Set, Any, Optional, Tuple
 
-# Setup logging
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('logs/continuous_processing.log')
+        logging.FileHandler("improved_processor.log"),
+        logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger(__name__)
 
-# Ensure log directories exist
-os.makedirs('logs', exist_ok=True)
-os.makedirs('logs/checkpoints', exist_ok=True)
+try:
+    import faiss
+    from tenacity import retry, stop_after_attempt, wait_fixed
+    import numpy as np
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    import openai
+except ImportError as e:
+    logger.error(f"Failed to import required modules: {e}")
+    sys.exit(1)
 
-# Constants
-CHECKPOINT_DIR = 'logs/checkpoints'
-CHECKPOINT_FILE = os.path.join(CHECKPOINT_DIR, 'last_processed_chunk.json')
-DEFAULT_BATCH_SIZE = 5
-MAX_RETRIES = 3
-DELAY_BETWEEN_CHUNKS = 1  # seconds
-DELAY_BETWEEN_BATCHES = 5  # seconds
+# Configuration constants
+DEFAULT_BATCH_SIZE = 1
+DEFAULT_DELAY = 3  # seconds between operations
+DEFAULT_TARGET_PERCENTAGE = 40.0
+DEFAULT_MAX_CHUNKS = None  # Process all chunks by default
+CHECKPOINT_FILE = "processor_checkpoint.json"
+VECTOR_DATA_FILE = "document_data.pkl"
+FAISS_INDEX_FILE = "faiss_index.bin"
 
-def save_checkpoint(chunk_id: int, document_id: Optional[int] = None, success: bool = True) -> None:
+# OpenAI configuration
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+EMBEDDING_MODEL = "text-embedding-3-small"
+
+# Database connection
+DB_URL = os.environ.get("DATABASE_URL")
+
+
+def get_db_connection():
+    """Get a connection to the PostgreSQL database."""
+    try:
+        return psycopg2.connect(DB_URL)
+    except Exception as e:
+        logger.error(f"Database connection error: {e}")
+        raise
+
+
+def get_embeddings(text: str) -> List[float]:
     """
-    Save a checkpoint of the last processed chunk.
+    Get embeddings for text using OpenAI's API.
     
     Args:
-        chunk_id: ID of the chunk that was processed
-        document_id: ID of the document containing the chunk (if available)
-        success: Whether the processing was successful
+        text: The text to embed
+        
+    Returns:
+        List of embedding values
     """
-    checkpoint_data = {
-        'chunk_id': chunk_id,
-        'document_id': document_id,
-        'timestamp': datetime.now().isoformat(),
-        'success': success
-    }
-    
-    with open(CHECKPOINT_FILE, 'w') as f:
-        json.dump(checkpoint_data, f, indent=2)
-    
-    logger.debug(f"Saved checkpoint: chunk_id={chunk_id}, success={success}")
+    try:
+        response = openai.embeddings.create(
+            model=EMBEDDING_MODEL,
+            input=text,
+            dimensions=1536
+        )
+        return response.data[0].embedding
+    except Exception as e:
+        logger.error(f"Error getting embeddings: {e}")
+        raise
 
-def load_checkpoint() -> Optional[Dict[str, Any]]:
+
+def load_vector_store() -> Tuple[Dict[str, Any], Any]:
     """
-    Load the last processed chunk checkpoint.
+    Load the vector store data from disk.
     
     Returns:
-        Dictionary containing checkpoint data or None if no checkpoint exists
+        Tuple containing (document data, FAISS index)
     """
-    if not os.path.exists(CHECKPOINT_FILE):
-        return None
+    # Load document data
+    try:
+        with open(VECTOR_DATA_FILE, 'rb') as f:
+            document_data = pickle.load(f)
+        logger.info(f"Loaded document data from {VECTOR_DATA_FILE}")
+    except FileNotFoundError:
+        document_data = {"documents": {}, "id_to_uuid": {}, "next_id": 0}
+        logger.info("No existing document data found, initializing new store")
     
+    # Load FAISS index
+    try:
+        index = faiss.read_index(FAISS_INDEX_FILE)
+        logger.info(f"Loaded FAISS index from {FAISS_INDEX_FILE}")
+    except:
+        # Initialize a new index
+        dimension = 1536  # For OpenAI embeddings
+        index = faiss.IndexFlatL2(dimension)
+        logger.info("No existing FAISS index found, initializing new index")
+    
+    return document_data, index
+
+
+def save_vector_store(document_data: Dict[str, Any], index: Any) -> None:
+    """
+    Save the vector store data to disk.
+    
+    Args:
+        document_data: The document data dictionary
+        index: The FAISS index
+    """
+    try:
+        # Save document data
+        with open(VECTOR_DATA_FILE, 'wb') as f:
+            pickle.dump(document_data, f)
+        
+        # Save FAISS index
+        faiss.write_index(index, FAISS_INDEX_FILE)
+        
+        logger.info("Vector store saved to disk")
+    except Exception as e:
+        logger.error(f"Error saving vector store: {e}")
+        raise
+
+
+def get_processed_chunk_ids(document_data: Dict[str, Any]) -> Set[int]:
+    """
+    Get IDs of chunks that have already been processed.
+    
+    Args:
+        document_data: The document data dictionary
+        
+    Returns:
+        Set of processed chunk IDs
+    """
+    processed_ids = set()
+    
+    for doc_id, doc in document_data["documents"].items():
+        if "chunk_id" in doc:
+            processed_ids.add(doc["chunk_id"])
+    
+    logger.info(f"Found {len(processed_ids)} processed chunk IDs in vector store")
+    return processed_ids
+
+
+def save_checkpoint(processed_ids: Set[int]) -> None:
+    """
+    Save the current state of processed chunk IDs.
+    
+    Args:
+        processed_ids: Set of processed chunk IDs
+    """
+    try:
+        with open(CHECKPOINT_FILE, 'w') as f:
+            json.dump({
+                "processed_ids": list(processed_ids),
+                "timestamp": datetime.datetime.now().isoformat()
+            }, f)
+        logger.info(f"Saved checkpoint with {len(processed_ids)} processed chunks")
+    except Exception as e:
+        logger.error(f"Error saving checkpoint: {e}")
+
+
+def load_checkpoint() -> Set[int]:
+    """
+    Load the previous checkpoint if it exists.
+    
+    Returns:
+        Set of processed chunk IDs from checkpoint
+    """
     try:
         with open(CHECKPOINT_FILE, 'r') as f:
-            checkpoint_data = json.load(f)
-        
-        logger.debug(f"Loaded checkpoint: chunk_id={checkpoint_data.get('chunk_id')}")
-        return checkpoint_data
+            data = json.load(f)
+            processed_ids = set(data["processed_ids"])
+            logger.info(f"Loaded checkpoint with {len(processed_ids)} processed chunks from {data['timestamp']}")
+            return processed_ids
+    except FileNotFoundError:
+        logger.info("No checkpoint file found, starting fresh")
+        return set()
     except Exception as e:
-        logger.error(f"Failed to load checkpoint: {e}")
-        return None
+        logger.error(f"Error loading checkpoint: {e}")
+        return set()
 
-def get_next_chunk_ids(batch_size: int = DEFAULT_BATCH_SIZE, start_from_id: Optional[int] = None) -> List[int]:
+
+def get_unprocessed_chunks(processed_ids: Set[int], batch_size: int) -> List[Dict[str, Any]]:
     """
-    Get a list of the next chunk IDs to process.
+    Get chunks that haven't been processed yet.
     
     Args:
-        batch_size: Maximum number of chunks to retrieve
-        start_from_id: Optional ID to start from (for resuming from checkpoints)
+        processed_ids: Set of already processed chunk IDs
+        batch_size: Number of chunks to retrieve
         
     Returns:
-        List of chunk IDs to process next
+        List of chunk dictionaries
     """
-    import sys
-    sys.path.append('.')
-    
-    # First, try to use find_unprocessed_chunks.py if it exists
     try:
-        from find_unprocessed_chunks import find_unprocessed_chunks
-        
-        # Get unprocessed chunks
-        chunk_ids = find_unprocessed_chunks(batch_size)
-        
-        # If we have a start_from_id, filter the list to start from that ID
-        if start_from_id is not None and chunk_ids:
-            try:
-                start_idx = chunk_ids.index(start_from_id)
-                chunk_ids = chunk_ids[start_idx:start_idx + batch_size]
-            except ValueError:
-                # If start_from_id is not in the list, just use the first batch_size chunks
-                chunk_ids = chunk_ids[:batch_size]
-        
-        # If we found any chunks, return them
-        if chunk_ids:
-            return chunk_ids
-    except (ImportError, Exception) as e:
-        logger.warning(f"Could not use find_unprocessed_chunks.py: {e}")
-    
-    # Fallback: Direct database query with SQLAlchemy
-    try:
-        from sqlalchemy import create_engine, text
-        from sqlalchemy.orm import sessionmaker
-        import os
-        
-        # Connect to the database
-        db_url = os.environ.get('DATABASE_URL')
-        if not db_url:
-            logger.error("DATABASE_URL environment variable is not set")
-            return []
-        
-        engine = create_engine(db_url)
-        Session = sessionmaker(bind=engine)
-        session = Session()
-        
-        # First, get IDs of chunks that exist in the vector store
-        try:
-            from utils.vector_store import VectorStore
-            vs = VectorStore()
-            processed_ids_set = set(vs.get_processed_chunk_ids())
-        except Exception as e:
-            logger.warning(f"Could not get processed chunk IDs from vector store: {e}")
-            processed_ids_set = set()
-        
-        # Query for unprocessed chunks
-        if start_from_id is not None:
-            query = text(f"""
-                SELECT id FROM document_chunks 
-                WHERE id >= :start_id
-                ORDER BY id
-                LIMIT :limit
-            """)
-            result = session.execute(query, {"start_id": start_from_id, "limit": batch_size})
-        else:
-            query = text("""
-                SELECT id FROM document_chunks 
-                ORDER BY id
-                LIMIT :limit
-            """)
-            result = session.execute(query, {"limit": batch_size})
-        
-        # Convert to list and filter out already processed chunks
-        all_chunk_ids = [row[0] for row in result]
-        unprocessed_ids = [c_id for c_id in all_chunk_ids if c_id not in processed_ids_set]
-        
-        # If we filtered out all chunks, try getting more
-        if not unprocessed_ids and all_chunk_ids and processed_ids_set:
-            # Get the highest ID we checked
-            last_id = all_chunk_ids[-1]
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            placeholders = ','.join(['%s'] * len(processed_ids)) if processed_ids else '0'
             
-            # Query for more chunks beyond the last one we checked
-            query = text("""
-                SELECT id FROM document_chunks 
-                WHERE id > :last_id
-                ORDER BY id
-                LIMIT :limit
-            """)
-            result = session.execute(query, {"last_id": last_id, "limit": batch_size})
+            query = f"""
+            SELECT c.id as chunk_id, c.text_content as content, c.document_id, 
+                   d.title as document_title, d.source_url as document_url,
+                   d.title as document_description, d.filename
+            FROM document_chunks c
+            JOIN documents d ON c.document_id = d.id
+            WHERE c.id NOT IN ({placeholders})
+            ORDER BY c.document_id, c.id
+            LIMIT %s
+            """
             
-            # Filter again
-            more_chunk_ids = [row[0] for row in result]
-            unprocessed_ids = [c_id for c_id in more_chunk_ids if c_id not in processed_ids_set]
-        
-        session.close()
-        return unprocessed_ids[:batch_size]  # Ensure we don't return more than requested
-    
+            if processed_ids:
+                cur.execute(query, (list(processed_ids) + [batch_size]))
+            else:
+                # If no processed IDs yet, use a simpler query
+                cur.execute(
+                    """
+                    SELECT c.id as chunk_id, c.text_content as content, c.document_id, 
+                           d.title as document_title, d.source_url as document_url,
+                           d.title as document_description, d.filename
+                    FROM document_chunks c
+                    JOIN documents d ON c.document_id = d.id
+                    ORDER BY c.document_id, c.id
+                    LIMIT %s
+                    """,
+                    (batch_size,)
+                )
+            
+            chunks = list(cur.fetchall())
+            
+        conn.close()
+        logger.info(f"Retrieved {len(chunks)} unprocessed chunks")
+        return chunks
     except Exception as e:
-        logger.error(f"Error getting next chunk IDs: {e}")
-        return []
+        logger.error(f"Error getting unprocessed chunks: {e}")
+        raise
 
-def process_chunk(chunk_id: int) -> bool:
+
+def get_total_chunks_count() -> int:
     """
-    Process a single chunk using direct_process_chunk.py
+    Get the total number of chunks in the database.
+    
+    Returns:
+        Total number of chunks
+    """
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM document_chunks")
+            count = cur.fetchone()[0]
+        conn.close()
+        return count
+    except Exception as e:
+        logger.error(f"Error getting total chunks count: {e}")
+        return 0
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+def process_chunk(chunk: Dict[str, Any], document_data: Dict[str, Any], index: Any) -> bool:
+    """
+    Process a single chunk and add it to the vector store.
     
     Args:
-        chunk_id: ID of the chunk to process
+        chunk: The chunk dictionary
+        document_data: The document data dictionary
+        index: The FAISS index
         
     Returns:
-        True if processing was successful, False otherwise
+        True if successful, False otherwise
     """
-    import subprocess
-    
     try:
-        # Run direct_process_chunk.py for this chunk
-        start_time = time.time()
-        result = subprocess.run(
-            ["python", "direct_process_chunk.py", str(chunk_id)],
-            check=True,
-            capture_output=True,
-            text=True
-        )
+        chunk_id = chunk["chunk_id"]
+        document_id = chunk["document_id"]
+        content = chunk["content"]
         
-        duration = time.time() - start_time
-        logger.info(f"✅ Successfully processed chunk {chunk_id} in {duration:.2f}s")
+        # Get embedding for the content
+        embedding = get_embeddings(content)
         
-        # Log the output
-        for line in result.stdout.splitlines():
-            if line.strip():
-                logger.debug(f"STDOUT: {line}")
+        # Create document entry
+        doc_entry = {
+            "document_id": document_id,
+            "chunk_id": chunk_id,
+            "page_content": content,
+            "metadata": {
+                "title": chunk["document_title"],
+                "url": chunk["document_url"],
+                "description": chunk["document_description"],
+                "filename": chunk["filename"],
+                "source_id": str(document_id),
+                "chunk_id": chunk_id
+            }
+        }
         
+        # Add to document data
+        next_id = document_data["next_id"]
+        document_data["documents"][str(next_id)] = doc_entry
+        document_data["id_to_uuid"][str(next_id)] = str(next_id)
+        document_data["next_id"] = next_id + 1
+        
+        # Add embedding to index
+        embedding_array = np.array([embedding], dtype=np.float32)
+        index.add(embedding_array)
+        
+        logger.info(f"Successfully processed chunk {chunk_id} from document {document_id}")
         return True
-    
-    except subprocess.CalledProcessError as e:
-        logger.error(f"❌ Failed to process chunk {chunk_id}: {e}")
-        
-        # Log the detailed error output
-        if e.stdout:
-            for line in e.stdout.splitlines():
-                if line.strip():
-                    logger.debug(f"STDOUT: {line}")
-        
-        if e.stderr:
-            for line in e.stderr.splitlines():
-                if line.strip():
-                    logger.error(f"STDERR: {line}")
-        
+    except Exception as e:
+        logger.error(f"Error processing chunk {chunk_id}: {e}")
         return False
 
-def process_batch(chunk_ids: List[int]) -> Dict[str, Any]:
+
+def get_progress(processed_count: int, total_count: int) -> Dict[str, Any]:
     """
-    Process a batch of chunks.
+    Get the current progress information.
     
     Args:
-        chunk_ids: List of chunk IDs to process
+        processed_count: Number of processed chunks
+        total_count: Total number of chunks
         
     Returns:
-        Dictionary with processing results
+        Dictionary with progress information
     """
-    if not chunk_ids:
-        return {"successful": 0, "failed": 0, "processed": []}
-    
-    logger.info(f"Processing batch of {len(chunk_ids)} chunks: {chunk_ids}")
-    
-    successful = 0
-    failed = 0
-    processed_chunks = []
-    
-    for i, chunk_id in enumerate(chunk_ids):
-        logger.info(f"Processing chunk {i+1}/{len(chunk_ids)} (ID: {chunk_id})")
-        
-        # Try processing the chunk with retries
-        success = False
-        retries = 0
-        
-        while not success and retries < MAX_RETRIES:
-            if retries > 0:
-                logger.warning(f"Retry {retries}/{MAX_RETRIES} for chunk {chunk_id}")
-                time.sleep(DELAY_BETWEEN_CHUNKS * 2)  # Wait longer between retries
-            
-            success = process_chunk(chunk_id)
-            
-            if not success:
-                retries += 1
-        
-        # Record the result
-        if success:
-            successful += 1
-            processed_chunks.append({"id": chunk_id, "success": True})
-            
-            # Save a checkpoint after each successful chunk
-            save_checkpoint(chunk_id, success=True)
-        else:
-            failed += 1
-            processed_chunks.append({"id": chunk_id, "success": False})
-            
-            # Save a checkpoint for failed chunks too
-            save_checkpoint(chunk_id, success=False)
-        
-        # Pause between chunks to avoid rate limiting
-        if i < len(chunk_ids) - 1:  # Don't sleep after the last chunk
-            time.sleep(DELAY_BETWEEN_CHUNKS)
-    
-    logger.info(f"Batch completed. Success: {successful}, Failed: {failed}")
-    
+    percentage = (processed_count / total_count * 100) if total_count > 0 else 0
     return {
-        "successful": successful,
-        "failed": failed,
-        "processed": processed_chunks
+        "processed_chunks": processed_count,
+        "total_chunks": total_count,
+        "percentage": round(percentage, 2),
+        "remaining": total_count - processed_count,
+        "timestamp": datetime.datetime.now().isoformat()
     }
 
-def continuous_processing(max_batches=None, batch_size=DEFAULT_BATCH_SIZE, resume_from_checkpoint=True) -> Dict[str, Any]:
+
+def print_progress_info(progress: Dict[str, Any]) -> None:
     """
-    Continuously process chunks until all are processed or the maximum is reached.
+    Print progress information to the console.
     
     Args:
-        max_batches: Maximum number of batches to process (None for unlimited)
-        batch_size: Number of chunks to process in each batch
-        resume_from_checkpoint: Whether to resume from the last checkpoint
-        
-    Returns:
-        Dictionary with overall processing results
+        progress: Progress information dictionary
     """
-    # Print header
-    logger.info("=" * 50)
-    logger.info(f"CONTINUOUS PROCESSING: {datetime.now().strftime('%Y%m%d_%H%M%S')}")
-    logger.info(f"Batch size: {batch_size}")
-    logger.info("=" * 50)
+    logger.info(f"Progress: {progress['processed_chunks']}/{progress['total_chunks']} chunks ({progress['percentage']}%)")
+    logger.info(f"Remaining: {progress['remaining']} chunks")
+
+
+def process_chunks(batch_size: int = DEFAULT_BATCH_SIZE, 
+                  delay: int = DEFAULT_DELAY,
+                  target_percentage: float = DEFAULT_TARGET_PERCENTAGE,
+                  max_chunks: Optional[int] = DEFAULT_MAX_CHUNKS) -> None:
+    """
+    Process chunks in batches until target percentage is reached or max_chunks is hit.
     
-    # Start from checkpoint if requested
-    start_chunk_id = None
-    if resume_from_checkpoint:
-        checkpoint = load_checkpoint()
-        if checkpoint:
-            start_chunk_id = checkpoint.get('chunk_id')
-            logger.info(f"Resuming from checkpoint: chunk_id={start_chunk_id}")
+    Args:
+        batch_size: Number of chunks to process per batch
+        delay: Delay in seconds between chunk processing
+        target_percentage: Stop when this percentage is reached
+        max_chunks: Maximum number of chunks to process (None for unlimited)
+    """
+    # Load vector store
+    document_data, index = load_vector_store()
     
-    # Initialize counters
-    batches_processed = 0
-    total_successful = 0
-    total_failed = 0
+    # Get processed chunk IDs from the vector store
+    processed_ids = get_processed_chunk_ids(document_data)
     
-    # Process until we run out of chunks or reach max_batches
-    while max_batches is None or batches_processed < max_batches:
-        # Check progress
-        try:
-            # Try to use check_progress.py if it exists
-            logger.info("Checking progress...")
-            import subprocess
-            
-            result = subprocess.run(
-                ["python", "check_progress.py"],
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            
-            # Log the output
-            for line in result.stdout.splitlines():
-                if "VECTOR STORE REBUILD PROGRESS" in line or "Progress:" in line or "Remaining:" in line:
-                    logger.info(line.strip())
-        except Exception as e:
-            logger.warning(f"Could not check progress: {e}")
+    # Load checkpoint if available
+    checkpoint_ids = load_checkpoint()
+    
+    # Merge processed IDs from vector store and checkpoint
+    processed_ids = processed_ids.union(checkpoint_ids)
+    
+    # Get total number of chunks
+    total_chunks = get_total_chunks_count()
+    
+    # Track processing statistics
+    stats = {
+        "start_time": datetime.datetime.now(),
+        "chunks_processed": 0,
+        "successful": 0,
+        "failed": 0
+    }
+    
+    # Main processing loop
+    processed_count = len(processed_ids)
+    chunks_processed_this_session = 0
+    
+    while True:
+        # Get current progress
+        progress = get_progress(processed_count, total_chunks)
+        print_progress_info(progress)
         
-        # Get the next batch of chunks to process
-        chunk_ids = get_next_chunk_ids(batch_size, start_chunk_id)
-        
-        # If we've processed at least one batch, don't use start_chunk_id anymore
-        if batches_processed > 0:
-            start_chunk_id = None
-        
-        # If there are no more chunks to process, we're done!
-        if not chunk_ids:
-            logger.info("No more chunks to process. Exiting.")
+        # Check if we've reached the target percentage
+        if progress["percentage"] >= target_percentage:
+            logger.info(f"Target percentage of {target_percentage}% reached, stopping")
             break
         
-        # Process this batch
-        batch_results = process_batch(chunk_ids)
+        # Check if we've processed the maximum number of chunks
+        if max_chunks is not None and chunks_processed_this_session >= max_chunks:
+            logger.info(f"Maximum number of chunks ({max_chunks}) processed, stopping")
+            break
         
-        # Update counters
-        total_successful += batch_results["successful"]
-        total_failed += batch_results["failed"]
-        batches_processed += 1
+        # Get batch of unprocessed chunks
+        chunks = get_unprocessed_chunks(processed_ids, batch_size)
         
-        logger.info(f"Completed batch {batches_processed}")
-        logger.info(f"Total successful: {total_successful}, Total failed: {total_failed}")
+        if not chunks:
+            logger.info("No more unprocessed chunks found, stopping")
+            break
         
-        # Pause between batches to let the system breathe
-        if max_batches is None or batches_processed < max_batches:
-            logger.info(f"Pausing for {DELAY_BETWEEN_BATCHES} seconds before next batch...")
-            time.sleep(DELAY_BETWEEN_BATCHES)
+        # Process each chunk in the batch
+        for chunk in chunks:
+            chunk_id = chunk["chunk_id"]
+            
+            # Skip if already processed
+            if chunk_id in processed_ids:
+                continue
+            
+            # Process the chunk
+            success = process_chunk(chunk, document_data, index)
+            
+            if success:
+                processed_ids.add(chunk_id)
+                processed_count += 1
+                stats["successful"] += 1
+            else:
+                stats["failed"] += 1
+            
+            stats["chunks_processed"] += 1
+            chunks_processed_this_session += 1
+            
+            # Save vector store and checkpoint after each chunk to prevent data loss
+            save_vector_store(document_data, index)
+            save_checkpoint(processed_ids)
+            
+            # Check if we've reached the target or max chunks after each individual chunk
+            progress = get_progress(processed_count, total_chunks)
+            if progress["percentage"] >= target_percentage:
+                logger.info(f"Target percentage of {target_percentage}% reached, stopping")
+                break
+                
+            if max_chunks is not None and chunks_processed_this_session >= max_chunks:
+                logger.info(f"Maximum number of chunks ({max_chunks}) processed, stopping")
+                break
+            
+            # Delay between chunks to prevent Replit from killing the process
+            if delay > 0:
+                time.sleep(delay)
+        
+        # If we've processed all chunks in the batch, get the next batch
+        if not chunks:
+            logger.info("No more unprocessed chunks found, stopping")
+            break
     
-    # Print summary
-    logger.info("=" * 50)
-    logger.info("PROCESSING COMPLETE")
-    logger.info(f"Batches processed: {batches_processed}")
-    logger.info(f"Total successful: {total_successful}")
-    logger.info(f"Total failed: {total_failed}")
-    logger.info("=" * 50)
+    # Print final statistics
+    end_time = datetime.datetime.now()
+    duration = (end_time - stats["start_time"]).total_seconds()
+    logger.info(f"Processing completed in {duration:.2f} seconds")
+    logger.info(f"Chunks processed: {stats['chunks_processed']}")
+    logger.info(f"Successful: {stats['successful']}")
+    logger.info(f"Failed: {stats['failed']}")
     
-    return {
-        "batches_processed": batches_processed,
-        "total_successful": total_successful,
-        "total_failed": total_failed
-    }
+    # Final progress
+    progress = get_progress(processed_count, total_chunks)
+    print_progress_info(progress)
 
-def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Continuous Chunk Processor")
-    parser.add_argument(
-        "-b", "--batch-size",
-        type=int,
-        default=DEFAULT_BATCH_SIZE,
-        help=f"Number of chunks to process in each batch (default: {DEFAULT_BATCH_SIZE})"
-    )
-    parser.add_argument(
-        "-m", "--max-batches",
-        type=int,
-        default=None,
-        help="Maximum number of batches to process (default: unlimited)"
-    )
-    parser.add_argument(
-        "--no-resume",
-        action="store_true",
-        help="Don't resume from the last checkpoint"
-    )
-    
-    return parser.parse_args()
 
-if __name__ == "__main__":
-    # Parse command line arguments
-    args = parse_args()
+def main():
+    """Main function."""
+    parser = argparse.ArgumentParser(description="Process chunks and add to vector store")
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE,
+                        help=f"Number of chunks to process per batch (default: {DEFAULT_BATCH_SIZE})")
+    parser.add_argument("--delay", type=int, default=DEFAULT_DELAY,
+                        help=f"Delay in seconds between chunk processing (default: {DEFAULT_DELAY})")
+    parser.add_argument("--target", type=float, default=DEFAULT_TARGET_PERCENTAGE,
+                        help=f"Target percentage of completion (default: {DEFAULT_TARGET_PERCENTAGE})")
+    parser.add_argument("--max-chunks", type=int, default=DEFAULT_MAX_CHUNKS,
+                        help=f"Maximum number of chunks to process (default: unlimited)")
+    
+    args = parser.parse_args()
+    
+    logger.info(f"Starting chunk processor with batch size {args.batch_size}, "
+                f"delay {args.delay}s, target {args.target}%")
     
     try:
-        # Run the continuous processing
-        results = continuous_processing(
-            max_batches=args.max_batches,
+        process_chunks(
             batch_size=args.batch_size,
-            resume_from_checkpoint=not args.no_resume
+            delay=args.delay,
+            target_percentage=args.target,
+            max_chunks=args.max_chunks
         )
-        
-        sys.exit(0 if results["total_failed"] == 0 else 1)
-    
+        logger.info("Processing completed successfully")
     except KeyboardInterrupt:
-        logger.info("Processing interrupted by user. Exiting gracefully.")
-        sys.exit(0)
+        logger.info("Processing interrupted by user")
     except Exception as e:
-        logger.exception(f"Unexpected error: {e}")
+        logger.error(f"Processing failed with error: {e}")
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
