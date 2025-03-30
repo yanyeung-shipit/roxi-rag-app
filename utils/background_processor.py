@@ -291,10 +291,10 @@ class BackgroundProcessor:
         self.sleep_time = sleep_time  # Current sleep time (will adapt)
         self.max_sleep_time = 300     # Maximum sleep time (5 minutes)
         self.deep_sleep_time = 600    # Deep sleep mode (10 minutes)
-        self.consecutive_idle_cycles = 0  # Track consecutive idle cycles
+        self.consecutive_idle_cycles = 10  # Start with enough idle cycles to trigger deep sleep
         self.deep_sleep_threshold = 10  # Cycles before entering deep sleep
-        self.in_deep_sleep = False    # Deep sleep mode flag
-        self.manually_activated_sleep = False  # Flag for when sleep mode was manually activated
+        self.in_deep_sleep = True     # Start in deep sleep mode by default
+        self.manually_activated_sleep = True   # Consider it manually activated at start
         self.running = False
         self.thread = None
         self.last_run_time = None
@@ -308,6 +308,10 @@ class BackgroundProcessor:
         
         # Init vector store
         self.vector_store = VectorStore()
+        
+        # Since we're starting in deep sleep mode, unload the vector store to save memory
+        self.vector_store_unloaded = True
+        logger.info("Starting in deep sleep mode with vector store unloaded")
         
     def ensure_vector_store_loaded(self):
         """
@@ -531,6 +535,14 @@ class BackgroundProcessor:
                             
                             # Reduce memory consumption when entering automatic deep sleep
                             memory_stats = reduce_memory_usage()
+                            
+                            # Also unload vector store from memory to significantly reduce memory usage
+                            from utils.vector_store import vector_store
+                            unloaded_docs = 0
+                            if not self.vector_store_unloaded:
+                                unloaded_docs = vector_store.unload_from_memory()
+                                self.vector_store_unloaded = True
+                                logger.info(f"Unloaded vector store with {unloaded_docs} documents to save memory")
                             
                             logger.info(f"Entering deep sleep mode after {self.consecutive_idle_cycles} idle cycles, sleep time set to {self.deep_sleep_time}s")
                             logger.info(f"Memory usage reduced by {memory_stats['saved_mb']}MB to {memory_stats['after_mb']}MB")

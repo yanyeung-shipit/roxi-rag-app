@@ -45,6 +45,9 @@ async function loadBackgroundStatus() {
             }
             
             // Create card with status information
+            // Add a data attribute to the parent element for the refresh timer to detect deep sleep
+            document.getElementById('background-processor-status').dataset.deepSleep = status.in_deep_sleep ? 'true' : 'false';
+            
             backgroundStatusContent.innerHTML = `
                 <div class="card bg-dark border-secondary">
                     <div class="card-body">
@@ -137,6 +140,44 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // Setup automatic refresh every 30 seconds
-    setInterval(loadBackgroundStatus, 30000);
+    // Variables to control refresh rate
+    let refreshInterval = 30000; // Default 30 seconds
+    let deepSleepInterval = 300000; // Deep sleep mode: 5 minutes
+    let inDeepSleep = false;
+    let refreshTimerId = null;
+    
+    // Function to update refresh interval based on status
+    function updateRefreshInterval(isInDeepSleep) {
+        // Clear existing timer
+        if (refreshTimerId) {
+            clearInterval(refreshTimerId);
+        }
+        
+        // Set appropriate interval based on sleep status
+        if (isInDeepSleep) {
+            inDeepSleep = true;
+            refreshInterval = deepSleepInterval;
+            console.log("Background processor in deep sleep mode, reducing status refresh rate to 5 minutes");
+        } else {
+            inDeepSleep = false;
+            refreshInterval = 30000;
+            console.log("Background processor active, using normal status refresh rate (30 seconds)");
+        }
+        
+        // Set new timer
+        refreshTimerId = setInterval(loadBackgroundStatus, refreshInterval);
+    }
+    
+    // Initial setup with the regular interval
+    refreshTimerId = setInterval(async function() {
+        await loadBackgroundStatus();
+        
+        // Check deep sleep status and adjust if needed
+        const statusElement = document.getElementById('background-processor-status');
+        if (statusElement && statusElement.dataset.deepSleep === 'true' && !inDeepSleep) {
+            updateRefreshInterval(true);
+        } else if (statusElement && statusElement.dataset.deepSleep === 'false' && inDeepSleep) {
+            updateRefreshInterval(false);
+        }
+    }, refreshInterval);
 });
