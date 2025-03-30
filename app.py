@@ -2013,22 +2013,50 @@ def force_sleep_mode():
     when they are done using the system for extended periods.
     """
     try:
-        from utils.background_processor import force_deep_sleep, is_in_deep_sleep
+        from utils.background_processor import force_deep_sleep, is_in_deep_sleep, reduce_memory_usage
+        import gc
+        import psutil
+        
+        # Get current process memory usage before sleep
+        process = psutil.Process()
+        before_mem = process.memory_info().rss / 1024 / 1024  # MB
         
         # Check current state first
         if is_in_deep_sleep():
+            # Still do memory reduction even if already in sleep mode
+            memory_stats = reduce_memory_usage()
+            
             return jsonify({
                 'success': True,
-                'message': 'System is already in deep sleep mode.',
-                'in_deep_sleep': True
+                'message': 'System is already in deep sleep mode. Additional memory cleanup performed.',
+                'in_deep_sleep': True,
+                'memory_saved': f"{memory_stats['saved_mb']}MB",
+                'current_memory': f"{memory_stats['after_mb']}MB",
+                'note': 'The system will remain in deep sleep until you upload a new document.'
             })
             
         # Try to activate deep sleep
         success = force_deep_sleep()
+        
+        # Force garbage collection to immediately reduce memory usage
+        gc.collect()
+        
+        # Clear embedding cache to free up memory
+        from utils.llm_service import clear_embedding_cache
+        cleared_entries = clear_embedding_cache()
+        app.logger.info(f"Cleared {cleared_entries} entries from embedding cache")
+        
+        # Get final memory usage
+        after_mem = process.memory_info().rss / 1024 / 1024  # MB
+        memory_saved = before_mem - after_mem
+        
         return jsonify({
             'success': success,
-            'message': 'System is now in deep sleep mode. It will use minimal resources until new work is available.',
-            'in_deep_sleep': is_in_deep_sleep()
+            'message': 'System is now in deep sleep mode. It will use minimal resources until you upload a new document.',
+            'in_deep_sleep': is_in_deep_sleep(),
+            'memory_saved': f"{round(memory_saved, 1)}MB",
+            'current_memory': f"{round(after_mem, 1)}MB",
+            'note': 'Background processing has been paused. The system will wake up when you add a new document.'
         })
     except Exception as e:
         app.logger.error(f"Error forcing sleep mode: {str(e)}")

@@ -1,8 +1,11 @@
 import os
 import time
+import random
 import logging
 import threading
 import urllib.parse
+import gc
+import psutil
 from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
@@ -29,6 +32,71 @@ vector_store = VectorStore()
 # Global background processor instance
 _background_processor = None
 
+# Pre-configured singleton instance, will be set at the end of the file
+background_processor = None
+
+def reduce_memory_usage():
+    """
+    Aggressively reduce memory usage by clearing caches and forcing garbage collection.
+    This is primarily used during deep sleep to minimize memory footprint.
+    
+    Returns:
+        dict: Memory statistics before and after reduction
+    """
+    import gc
+    import psutil
+    import sys
+    
+    # Get before stats
+    process = psutil.Process()
+    before_mem = process.memory_info().rss / 1024 / 1024  # MB
+    
+    # Clear embedding cache if available
+    try:
+        from utils.llm_service import clear_embedding_cache
+        cache_entries = clear_embedding_cache()
+        logger.info(f"Cleared {cache_entries} entries from embedding cache")
+    except Exception as e:
+        logger.warning(f"Failed to clear embedding cache: {str(e)}")
+    
+    # Clear any module-specific caches that might be holding memory
+    if 'openai' in sys.modules:
+        # Clear OpenAI API response caches if the module is loaded
+        try:
+            # Reset thread pool if it exists
+            if hasattr(sys.modules['openai'], '_Thread__initialized'):
+                sys.modules['openai']._Thread__initialized = False
+        except Exception as e:
+            logger.warning(f"Failed to reset OpenAI thread pool: {str(e)}")
+    
+    # Clear SQLAlchemy caches if present
+    if 'sqlalchemy' in sys.modules:
+        try:
+            from sqlalchemy import event
+            from sqlalchemy.engine import Engine
+            engine = _background_processor.engine if _background_processor else None
+            if engine:
+                # Dispose connections
+                engine.dispose()
+                logger.info("SQLAlchemy connection pool disposed")
+        except Exception as e:
+            logger.warning(f"Failed to dispose SQLAlchemy connections: {str(e)}")
+    
+    # Clear Python's internal caches
+    gc.collect(generation=2)  # Full collection
+    
+    # Get after stats
+    after_mem = process.memory_info().rss / 1024 / 1024  # MB
+    
+    saved = before_mem - after_mem
+    logger.info(f"Memory reduction: Before={before_mem:.1f}MB, After={after_mem:.1f}MB, Saved={saved:.1f}MB")
+    
+    return {
+        "before_mb": round(before_mem, 1),
+        "after_mb": round(after_mem, 1),
+        "saved_mb": round(saved, 1)
+    }
+
 def force_deep_sleep():
     """
     Force the background processor into deep sleep mode.
@@ -46,17 +114,35 @@ def force_deep_sleep():
         
     try:
         logger.info("Manually forcing deep sleep mode via API request")
-        _background_processor.consecutive_idle_cycles = _background_processor.deep_sleep_threshold + 1
-        _background_processor.in_deep_sleep = True
-        _background_processor.sleep_time = _background_processor.deep_sleep_time
         
-        # Optional: Set an even longer sleep time for manual activation
-        _background_processor.sleep_time = _background_processor.deep_sleep_time * 2  # 20 minutes
+        # Set to extreme values to ensure persistent deep sleep
+        _background_processor.consecutive_idle_cycles = _background_processor.deep_sleep_threshold * 2
+        _background_processor.in_deep_sleep = True
+        
+        # Set a much longer sleep time for manual activation - 30 minutes
+        _background_processor.sleep_time = _background_processor.deep_sleep_time * 3  # 30 minutes
         
         # Set a flag to indicate manual activation, which will prevent auto-exit
         _background_processor.manually_activated_sleep = True
         
+        # Aggressively release memory and clear caches
+        memory_stats = reduce_memory_usage()
+        
+        # Now that we're in deep sleep, set a more aggressive cache cleaning approach
+        try:
+            from utils.llm_service import _CACHE_TTL, _CACHE_CLEANUP_INTERVAL
+            import sys
+            # If available, override with more aggressive settings during deep sleep
+            sys.modules['utils.llm_service']._CACHE_TTL = 60 * 1  # 1 minute TTL
+            sys.modules['utils.llm_service']._CACHE_CLEANUP_INTERVAL = 30  # Clean up every 30 seconds
+            logger.info(f"Set aggressive cache timeout during deep sleep: TTL={60 * 1}s, Cleanup={30}s")
+        except Exception as e:
+            logger.warning(f"Failed to update cache settings: {str(e)}")
+        
+        # Log detailed info about the sleep activation
         logger.info(f"Deep sleep mode activated manually. Sleep time set to {_background_processor.sleep_time}s")
+        logger.info(f"Memory usage reduced by {memory_stats['saved_mb']}MB to {memory_stats['after_mb']}MB")
+        
         # Pass 0.0 as rate when manually activating deep sleep
         set_processing_status("deep_sleep", 0.0)
         return True
@@ -79,17 +165,44 @@ def exit_deep_sleep():
         return False
         
     try:
-        if _background_processor.in_deep_sleep:
-            logger.info("Exiting deep sleep mode due to new document upload")
-            _background_processor.in_deep_sleep = False
-            _background_processor.manually_activated_sleep = False
-            _background_processor.consecutive_idle_cycles = 0
-            _background_processor.sleep_time = _background_processor.base_sleep_time
+        was_in_deep_sleep = False
+        
+        # Check if deep sleep was activated manually and create a clearer log message
+        if _background_processor.manually_activated_sleep:
+            logger.info("Exiting manually-activated deep sleep mode due to explicit user action")
+            was_in_deep_sleep = True
+        elif _background_processor.in_deep_sleep:
+            logger.info("Exiting automatic deep sleep mode due to new document upload")
+            was_in_deep_sleep = True
+        else:
+            # Already not in deep sleep
+            return False
             
-            logger.info(f"Deep sleep mode exited. Sleep time reset to {_background_processor.sleep_time}s")
-            set_processing_status("active", 0.0)  # Reset status to active
-            return True
-        return False
+        # Reset all sleep-related flags regardless of how it was activated
+        _background_processor.in_deep_sleep = False
+        _background_processor.manually_activated_sleep = False
+        _background_processor.consecutive_idle_cycles = 0
+        _background_processor.sleep_time = _background_processor.base_sleep_time
+        
+        # Still run memory reduction for cleanup, but we expect it to be less effective
+        # since we're about to start processing again
+        memory_stats = reduce_memory_usage()
+        
+        # Reset cache settings to normal values when exiting deep sleep
+        try:
+            import sys
+            # Reset to default values for normal operation
+            sys.modules['utils.llm_service']._CACHE_TTL = 60 * 3  # 3 minutes TTL
+            sys.modules['utils.llm_service']._CACHE_CLEANUP_INTERVAL = 60 * 1  # Clean up every minute
+            logger.info(f"Reset cache settings to normal: TTL={60 * 3}s, Cleanup={60 * 1}s")
+        except Exception as e:
+            logger.warning(f"Failed to reset cache settings: {str(e)}")
+        
+        logger.info(f"Deep sleep mode exited. Sleep time reset to {_background_processor.sleep_time}s")
+        logger.info(f"Memory status after exit: {memory_stats['after_mb']}MB (released {memory_stats['saved_mb']}MB)")
+        
+        set_processing_status("active", 0.0)  # Reset status to active
+        return True
     except Exception as e:
         logger.error(f"Error exiting deep sleep mode: {str(e)}")
         return False
@@ -364,11 +477,22 @@ class BackgroundProcessor:
                         # No work found, implement adaptive sleep time
                         self.consecutive_idle_cycles += 1
                         
+                        # Periodically reduce memory even before deep sleep
+                        if self.consecutive_idle_cycles > 5 and self.consecutive_idle_cycles % 5 == 0:
+                            logger.info(f"Reducing memory after {self.consecutive_idle_cycles} idle cycles")
+                            memory_stats = reduce_memory_usage()
+                            logger.info(f"Memory usage reduced by {memory_stats['saved_mb']}MB to {memory_stats['after_mb']}MB")
+                        
                         # Check if we should enter deep sleep mode
                         if self.consecutive_idle_cycles >= self.deep_sleep_threshold and not self.in_deep_sleep:
                             self.in_deep_sleep = True
                             self.sleep_time = self.deep_sleep_time
+                            
+                            # Reduce memory consumption when entering automatic deep sleep
+                            memory_stats = reduce_memory_usage()
+                            
                             logger.info(f"Entering deep sleep mode after {self.consecutive_idle_cycles} idle cycles, sleep time set to {self.deep_sleep_time}s")
+                            logger.info(f"Memory usage reduced by {memory_stats['saved_mb']}MB to {memory_stats['after_mb']}MB")
                         # Otherwise use exponential backoff
                         elif not self.in_deep_sleep and self.consecutive_idle_cycles > 3:
                             # Double sleep time after 3 idle cycles (up to max limit)
@@ -395,24 +519,32 @@ class BackgroundProcessor:
                     session = self._create_session()
                     continue
                 
+                # If manually activated sleep, we don't want to process work at all
+                if self.manually_activated_sleep:
+                    logger.info(f"Staying in deep sleep mode despite work (manually activated)")
+                    
+                    # Maintain high sleep time
+                    self.sleep_time = max(self.sleep_time, self.deep_sleep_time * 3)
+                    self.in_deep_sleep = True
+                    
+                    # Always reduce memory in manual sleep mode - reliable cleanup
+                    # This is a guaranteed memory reduction even during manual sleep
+                    memory_stats = reduce_memory_usage()
+                    logger.info(f"Periodic memory cleanup during manual sleep: {memory_stats['saved_mb']}MB freed")
+                    
+                    # Skip processing - go straight to sleep
+                    session.close()
+                    time.sleep(self.sleep_time)
+                    continue
+                
                 # If we got here, we have work to do, reset the idle counter and sleep time
                 self.consecutive_idle_cycles = 0
                 self.sleep_time = self.base_sleep_time  # Reset sleep time to base value
                 
-                # If we were in deep sleep, check if we should exit that mode
+                # If we were in deep sleep, exit that mode (only happens for automatic deep sleep)
                 if self.in_deep_sleep:
-                    # Only exit deep sleep if it wasn't manually activated
-                    if not self.manually_activated_sleep:
-                        self.in_deep_sleep = False
-                        logger.info(f"Exiting deep sleep mode, work found!")
-                    else:
-                        # When in manually activated sleep mode, we ignore work until next upload
-                        logger.info(f"Staying in deep sleep mode despite work (manually activated)")
-                        
-                        # Skip processing - go straight to sleep
-                        session.close()
-                        time.sleep(self.sleep_time)
-                        continue
+                    self.in_deep_sleep = False
+                    logger.info(f"Exiting deep sleep mode, work found!")
                 
                 logger.debug(f"Found work to do, resetting sleep time to {self.sleep_time}s")
                 
@@ -693,5 +825,10 @@ class BackgroundProcessor:
         }
 
 
-# Singleton instance
-background_processor = BackgroundProcessor(batch_size=1, sleep_time=10)
+# Use a single shared instance for the background processor
+# This synchronizes _background_processor (for sleep control) with background_processor (for API usage)
+_background_processor = BackgroundProcessor(batch_size=1, sleep_time=10)
+background_processor = _background_processor
+
+# Initialize both with the same instance to ensure sleep mode functions correctly
+# and deep sleep state is properly reported through the API
