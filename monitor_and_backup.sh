@@ -1,98 +1,129 @@
 #!/bin/bash
 
-# Combined monitor and backup script
-# This script starts both monitoring and backup processes
+# Script to monitor the vector processing and create regular backups
+# Run with: ./monitor_and_backup.sh
 
-echo "Starting vector store protection system..."
+# Configure settings
+BACKUP_INTERVAL=15  # minutes
+CHECK_INTERVAL=5    # minutes
+MAX_RUNTIME=86400   # 24 hours (in seconds)
 
-# Function to clean up on exit
-cleanup() {
-    echo "Shutting down protection system..."
-    
-    # Kill backup scheduler if running
-    if [ -f "backup_scheduler.pid" ]; then
-        BACKUP_PID=$(cat backup_scheduler.pid)
-        if ps -p $BACKUP_PID > /dev/null; then
-            echo "Stopping backup scheduler..."
-            kill $BACKUP_PID
-        fi
-        rm backup_scheduler.pid
-    fi
-    
-    # Kill monitor process if running
-    if [ -f "monitor_process.pid" ]; then
-        MONITOR_PID=$(cat monitor_process.pid)
-        if ps -p $MONITOR_PID > /dev/null; then
-            echo "Stopping monitor process..."
-            kill $MONITOR_PID
-        fi
-        rm monitor_process.pid
-    fi
-    
-    echo "Protection system stopped"
-    exit 0
+# Directory for monitoring logs
+LOG_DIR="./logs"
+mkdir -p "$LOG_DIR"
+
+# Log file
+LOG_FILE="$LOG_DIR/monitor_$(date +%Y%m%d).log"
+
+# Process ID file for the main processing script
+PROCESSOR_PID_FILE=".processor.pid"
+
+# Log with timestamp
+log() {
+  local message="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+  echo "$message" | tee -a "$LOG_FILE"
 }
 
-# Set trap for cleanup on exit
-trap cleanup SIGINT SIGTERM
+# Check if the processor is running
+check_processor() {
+  if [ -f "$PROCESSOR_PID_FILE" ]; then
+    local pid=$(cat "$PROCESSOR_PID_FILE")
+    if ps -p "$pid" > /dev/null; then
+      echo "running"
+      return 0
+    fi
+  fi
+  echo "stopped"
+  return 1
+}
 
-# Start backup scheduler in background
-echo "Starting backup scheduler..."
-./schedule_backups.sh > backup_scheduler.log 2>&1 &
+# Create a backup
+create_backup() {
+  log "Creating vector store backup..."
+  if python backup_vector_store.py >> "$LOG_FILE" 2>&1; then
+    log "Backup created successfully"
+  else
+    log "Failed to create backup"
+  fi
+}
 
-# Start monitor process in background
-echo "Starting vector store monitor..."
-python monitor_vector_store.py > monitor_vector_store.log 2>&1 &
-echo $! > monitor_process.pid
-
-echo "Protection system started"
-echo "- Backups will run every 4 hours"
-echo "- Vector store is being monitored for data loss"
-echo "- Press Ctrl+C to stop all protection services"
-
-# Keep script running and show status periodically
-while true; do
-    sleep 600  # 10 minutes
+# Check progress
+check_progress() {
+  local output=$(python check_progress.py --json 2>/dev/null)
+  if [ $? -eq 0 ]; then
+    local percentage=$(echo "$output" | grep -o '"percentage":[^,}]*' | cut -d':' -f2)
+    local processed=$(echo "$output" | grep -o '"processed_chunks":[^,}]*' | cut -d':' -f2)
+    local total=$(echo "$output" | grep -o '"total_chunks":[^,}]*' | cut -d':' -f2)
     
-    # Show status
-    echo "=== Protection System Status ==="
-    echo "$(date)"
-    
-    # Check if backup scheduler is running
-    if [ -f "backup_scheduler.pid" ]; then
-        BACKUP_PID=$(cat backup_scheduler.pid)
-        if ps -p $BACKUP_PID > /dev/null; then
-            echo "✓ Backup scheduler: Running (PID $BACKUP_PID)"
-        else
-            echo "✗ Backup scheduler: Not running (stale PID file)"
-        fi
+    # Format for consistent display
+    if [ -n "$percentage" ] && [ -n "$processed" ] && [ -n "$total" ]; then
+      log "Progress: ${percentage}% (${processed}/${total})"
     else
-        echo "✗ Backup scheduler: Not running (no PID file)"
+      log "Failed to parse progress information"
+    fi
+  else
+    log "Failed to check progress"
+  fi
+}
+
+# Check for target completion
+check_target() {
+  ./check_50_percent_progress.sh >> "$LOG_FILE" 2>&1
+  if [ $? -eq 0 ]; then
+    return 0  # Target reached
+  else
+    return 1  # Target not reached
+  fi
+}
+
+# Main monitoring loop
+main() {
+  log "Starting vector store monitor and backup service"
+  
+  start_time=$(date +%s)
+  next_backup_time=$((start_time + BACKUP_INTERVAL * 60))
+  
+  while true; do
+    # Check if we've reached max runtime
+    current_time=$(date +%s)
+    runtime=$((current_time - start_time))
+    if [ $runtime -ge $MAX_RUNTIME ]; then
+      log "Maximum runtime reached. Performing final backup and exiting."
+      create_backup
+      exit 0
     fi
     
-    # Check if monitor is running
-    if [ -f "monitor_process.pid" ]; then
-        MONITOR_PID=$(cat monitor_process.pid)
-        if ps -p $MONITOR_PID > /dev/null; then
-            echo "✓ Vector store monitor: Running (PID $MONITOR_PID)"
-        else
-            echo "✗ Vector store monitor: Not running (stale PID file)"
-        fi
+    # Check if the processor is running
+    processor_status=$(check_processor)
+    if [ "$processor_status" == "running" ]; then
+      log "Processor is running"
     else
-        echo "✗ Vector store monitor: Not running (no PID file)"
+      log "Processor is not running"
     fi
     
-    # Show latest backup time
-    if [ -d "./backups/daily" ]; then
-        LATEST_BACKUP=$(ls -lt ./backups/daily | grep -v ^total | head -n 1 | awk '{print $6, $7, $8}')
-        if [ ! -z "$LATEST_BACKUP" ]; then
-            echo "Latest daily backup: $LATEST_BACKUP"
-        else
-            echo "No daily backups found"
-        fi
-    else
-        echo "No backup directory found"
+    # Check progress
+    check_progress
+    
+    # Check if we should create a backup
+    if [ $current_time -ge $next_backup_time ]; then
+      create_backup
+      next_backup_time=$((current_time + BACKUP_INTERVAL * 60))
     fi
     
-    echo "==============================="
-done
+    # Check if target has been reached
+    if check_target; then
+      log "🎉 TARGET REACHED! Creating final backup and exiting."
+      create_backup
+      exit 0
+    fi
+    
+    # Sleep until next check
+    sleep $((CHECK_INTERVAL * 60))
+  done
+}
+
+# Trap signals
+trap 'log "Monitor interrupted. Creating final backup and exiting."; create_backup; exit 1' INT TERM
+
+# Start the main loop
+main

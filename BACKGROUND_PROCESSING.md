@@ -1,155 +1,99 @@
-# Background Processing System Documentation
+# Background Processing Guide
 
-This document explains how the background processing system works in ROXI, including how to monitor it, manage it, and recover from issues.
+This guide explains how the background processing system works in the ROXI (Rheumatology Optimized eXpert Intelligence) system.
 
 ## Overview
 
-ROXI uses a sophisticated background processing system to handle the embedding and indexing of document chunks. This system is designed to:
-
-1. Process documents incrementally to avoid memory issues
-2. Adapt to system load by pausing during high-load periods
-3. Conserve resources during idle periods with "deep sleep" mode
-4. Recover automatically from errors and crashes
-5. Provide detailed monitoring and progress tracking
+ROXI's background processing system manages the resource-intensive task of embedding document chunks into the vector store. This process converts raw text into high-dimensional vector representations that enable semantic search capabilities.
 
 ## Key Components
 
-### 1. Continuous Processor
+### 1. Vector Store
 
-The `continuous_rebuild.py` script is the core of the background processing system. It runs continuously in the background, processing unprocessed document chunks in the database.
+The vector store is responsible for:
+- Storing document embeddings
+- Managing the FAISS index for similarity search
+- Saving and loading the vector database from disk
+- Memory management (including deep sleep mode)
 
-Key features:
-- Robust error handling (individual document failures don't stop the entire process)
-- Checkpoint-based recovery system
-- Adaptive sleep with deep sleep mode for resource conservation
-- Comprehensive monitoring and progress tracking
+### 2. Background Processor
 
-### 2. Target-Based Processors
+The background processor:
+- Runs as a separate thread in the application
+- Processes documents in the queue
+- Adapts its activity based on system usage patterns
+- Enters deep sleep mode during periods of inactivity
 
-Several target-based processors are available to process chunks until reaching a specific percentage:
+### 3. Processing Scripts
 
-- `process_to_50_percent.py` - Process until 50% of chunks are complete
-- `batch_rebuild_to_target.py` - Configurable target percentage
+Several scripts are available for different processing needs:
 
-### 3. Monitoring System
+- `process_chunks_until_50_percent.py`: Processes chunks until 50% of the database is complete
+- `check_50_percent_progress.sh`: Checks current progress toward 50% completion
+- `check_and_notify_50_percent.sh`: Monitors and notifies when 50% target is reached
+- `monitor_and_backup.sh`: Monitors processing and creates regular backups
+- `backup_vector_store.py`: Creates backups of the vector store
 
-Several tools are available to monitor the processing:
+## Resource Management
 
-- `check_progress.py` - General progress check
-- `check_50_percent_progress.sh` - Visual progress toward 50% goal
-- `monitor_vector_store.py` - Continuous monitoring for data integrity
-- `monitor_and_backup.sh` - Combined monitoring and backup system
+The system includes sophisticated resource management:
 
-### 4. Backup System
+### Deep Sleep Mode
 
-The system includes an automated backup system to prevent data loss:
+When the system is inactive, the background processor enters deep sleep mode:
 
-- `backup_vector_store.py` - Creates timestamped backups
-- `schedule_backups.sh` - Schedules regular backups
-- `monitor_and_backup.sh` - Combines monitoring and backup functions
+1. The vector store is completely unloaded from memory
+2. All caches are cleared
+3. Memory is released back to the operating system
+4. Embedding services are suspended
+5. The processor only wakes up periodically to check for new documents
 
-## Deep Sleep Mode
+This dramatically reduces memory usage during inactive periods while ensuring the system remains responsive when needed.
 
-To conserve system resources during idle periods, the background processor enters "deep sleep" mode. This mode:
+### Memory Optimization
 
-1. Unloads the vector store from memory (7-stage cleanup)
-2. Releases memory back to the OS
-3. Sets embedding cache parameters to minimal values
-4. Checks for new work less frequently
-5. Can be manually triggered via the "Force Deep Sleep" button
+Several memory optimization techniques are employed:
 
-The processor automatically exits deep sleep mode when new documents are added.
+- Using float16 embeddings (half-precision) to reduce memory footprint
+- Progressive loading of documents when performing searches
+- Caching with intelligent expiration
+- Periodic garbage collection
+- OS-level memory release via malloc_trim on Linux
 
-## Memory Optimization
+## Processing Workflow
 
-The system employs several memory optimization techniques:
+1. Documents are uploaded and stored in the database
+2. Each document is split into manageable chunks
+3. Processing scripts convert chunks to vector embeddings
+4. Chunks are added to the vector store with metadata
+5. Regular backups preserve progress
+6. Progress monitoring tracks completion percentage
 
-1. Using float16 embeddings to reduce memory footprint by ~50%
-2. Incremental processing to avoid loading all documents at once
-3. Unloading vector store when not in use
-4. OS-level memory release through malloc_trim on Linux
-5. Minimal embedding cache parameters in deep sleep mode
+## Monitoring and Maintenance
 
-## Usage Instructions
-
-### Running the Processor
-
-To start processing in the background:
-
-```bash
-python continuous_rebuild.py
-```
-
-To process to a specific target (e.g., 50%):
+To monitor processing status:
 
 ```bash
-python process_to_50_percent.py
-```
-
-### Monitoring Progress
-
-To check current progress:
-
-```bash
-python check_progress.py
-# or
+# Check current progress
 ./check_50_percent_progress.sh
-```
 
-### Setting Up Automated Protection
+# Monitor progress with notifications
+./check_and_notify_50_percent.sh
 
-To set up combined monitoring and backups:
-
-```bash
+# Monitor with backups
 ./monitor_and_backup.sh
 ```
 
-This will:
-- Monitor the vector store for data loss
-- Create backups every 4 hours
-- Automatically recover if problems are detected
+## Performance Considerations
 
-## Recovery Procedures
+- Processing speed depends on API rate limits and system resources
+- The system is designed to process in batches to optimize throughput
+- Backups are created regularly to prevent data loss
+- The system can be paused and resumed without losing progress
 
-If data loss is detected:
+## Best Practices
 
-1. Check the latest backups in `./backups/daily/`
-2. Restore the most recent backup:
-   ```bash
-   cp ./backups/daily/TIMESTAMP_document_data.pkl ./document_data.pkl
-   cp ./backups/daily/TIMESTAMP_faiss_index.bin ./faiss_index.bin
-   ```
-3. Restart the background processor
-
-## Troubleshooting
-
-**Problem: Processor not running**
-- Check for Python errors in the logs
-- Ensure database is accessible
-- Verify OpenAI API key is valid
-
-**Problem: Processing too slow**
-- Check for API rate limiting
-- Monitor system resources for bottlenecks
-- Consider batch processing with `batch_rebuild_to_target.py`
-
-**Problem: High memory usage**
-- Force deep sleep mode when not actively using the system
-- Check if other processes are consuming memory
-- Reduce batch size in batch processors
-
-## Internal Architecture
-
-The background processor uses a multi-stage pipeline:
-
-1. **Selection**: Identify unprocessed chunks in the database
-2. **Processing**: Generate embeddings for each chunk
-3. **Indexing**: Add embeddings to the vector store
-4. **Verification**: Verify chunks were correctly added
-5. **Cleanup**: Release resources no longer needed
-
-## Log Files
-
-- `improved_processor.log` - Main processor log
-- `monitor.log` - Vector store monitor log
-- `backup_vector_store.log` - Backup system log
+1. Allow the system to reach the 50% threshold before heavy usage
+2. Create regular backups during processing
+3. Monitor memory usage with the system resources card
+4. Use deep sleep mode when the system will be inactive for extended periods

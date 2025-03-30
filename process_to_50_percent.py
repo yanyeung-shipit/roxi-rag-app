@@ -68,19 +68,26 @@ def get_processed_chunk_ids() -> Set[int]:
         Set of chunk IDs that are already in the vector store
     """
     try:
+        # Load the vector store from disk
         vector_store = VectorStore()
         processed_ids = set()
         
-        if vector_store and hasattr(vector_store, 'documents'):
+        # Get document metadata
+        if hasattr(vector_store, 'documents'):
             for doc_id, doc in vector_store.documents.items():
                 chunk_id = doc.get('metadata', {}).get('chunk_id')
                 if chunk_id:
-                    processed_ids.add(int(chunk_id))
+                    try:
+                        processed_ids.add(int(chunk_id))
+                    except (ValueError, TypeError):
+                        # Skip invalid chunk IDs
+                        logger.warning(f"Invalid chunk ID found in vector store: {chunk_id}")
         
         logger.info(f"Found {len(processed_ids)} processed chunk IDs in vector store")
         return processed_ids
     except Exception as e:
         logger.error(f"Error getting processed chunk IDs: {e}")
+        logger.exception(e)  # Print full traceback for debugging
         return set()
 
 
@@ -123,29 +130,31 @@ def get_progress() -> Dict[str, Any]:
     }
 
 
-def get_next_chunk_batch(processed_ids: Set[int], batch_size: int = BATCH_SIZE) -> List[DocumentChunk]:
+def get_next_chunk_batch(processed_ids: Set[int], batch_size: int = BATCH_SIZE) -> List[Tuple[DocumentChunk, Document]]:
     """
-    Get the next batch of chunks to process.
+    Get the next batch of chunks to process with their parent documents.
     
     Args:
         processed_ids: Set of chunk IDs that have already been processed
         batch_size: Number of chunks to retrieve
         
     Returns:
-        List of DocumentChunk objects
+        List of tuples (DocumentChunk, Document) containing both chunk and document
     """
     try:
         from app import app
         with app.app_context():
-            # Query for chunks that haven't been processed yet
+            # Join query to get both chunks and their documents in a single query
+            # This avoids lazy loading issues
             unprocessed_chunks = (
-                db.session.query(DocumentChunk)
+                db.session.query(DocumentChunk, Document)
+                .join(Document, DocumentChunk.document_id == Document.id)
                 .filter(~DocumentChunk.id.in_(processed_ids))
                 .limit(batch_size)
                 .all()
             )
             
-            logger.info(f"Retrieved {len(unprocessed_chunks)} unprocessed chunks")
+            logger.info(f"Retrieved {len(unprocessed_chunks)} unprocessed chunks with documents")
             return unprocessed_chunks
     except Exception as e:
         logger.error(f"Error getting next chunk batch: {e}")
@@ -168,17 +177,20 @@ def backup_vector_store():
         return False
 
 
-def process_chunk(chunk: DocumentChunk) -> bool:
+def process_chunk(chunk_tuple: Tuple[DocumentChunk, Document]) -> bool:
     """
-    Process a single chunk and add it to the vector store.
+    Process a single chunk and its document and add it to the vector store.
     
     Args:
-        chunk: The DocumentChunk object to process
+        chunk_tuple: A tuple containing (DocumentChunk, Document) objects
         
     Returns:
         True if successful, False otherwise
     """
     try:
+        # Extract chunk and document from tuple
+        chunk, document = chunk_tuple
+        
         # Initialize services
         vector_store = VectorStore()
         
@@ -188,12 +200,7 @@ def process_chunk(chunk: DocumentChunk) -> bool:
             logger.warning(f"Empty text for chunk ID {chunk.id}, skipping")
             return False
         
-        # Get metadata
-        document = chunk.document
-        if not document:
-            logger.warning(f"No document found for chunk ID {chunk.id}, skipping")
-            return False
-        
+        # Create metadata from chunk and document
         metadata = {
             'document_id': document.id,
             'chunk_id': chunk.id,
@@ -223,16 +230,17 @@ def process_chunk(chunk: DocumentChunk) -> bool:
         logger.info(f"Successfully processed chunk ID {chunk.id}")
         return True
     except Exception as e:
-        logger.error(f"Error processing chunk ID {chunk.id}: {e}")
+        chunk_id = chunk_tuple[0].id if isinstance(chunk_tuple, tuple) and len(chunk_tuple) > 0 else "unknown"
+        logger.error(f"Error processing chunk ID {chunk_id}: {e}")
         return False
 
 
-def process_batch(chunks: List[DocumentChunk]) -> Dict[str, Any]:
+def process_batch(chunks: List[Tuple[DocumentChunk, Document]]) -> Dict[str, Any]:
     """
-    Process a batch of chunks.
+    Process a batch of chunks with their documents.
     
     Args:
-        chunks: List of DocumentChunk objects to process
+        chunks: List of (DocumentChunk, Document) tuples to process
         
     Returns:
         Dictionary with processing results
@@ -244,7 +252,8 @@ def process_batch(chunks: List[DocumentChunk]) -> Dict[str, Any]:
         'details': []
     }
     
-    for chunk in chunks:
+    for chunk_tuple in chunks:
+        chunk, _ = chunk_tuple  # Extract chunk for logging
         success = False
         retries = 0
         
@@ -253,7 +262,7 @@ def process_batch(chunks: List[DocumentChunk]) -> Dict[str, Any]:
                 logger.info(f"Retrying chunk ID {chunk.id} (attempt {retries+1})")
                 time.sleep(random.uniform(1, 3))  # Random backoff
             
-            success = process_chunk(chunk)
+            success = process_chunk(chunk_tuple)
             retries += 1
         
         if success:

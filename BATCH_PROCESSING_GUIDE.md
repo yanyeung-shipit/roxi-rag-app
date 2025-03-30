@@ -1,103 +1,116 @@
-# ROXI Vector Store Processing Guide
+# Batch Processing Guide
 
-This guide explains how to efficiently process and rebuild the vector store in the ROXI system. The vector store is a critical component that enables semantic search functionality across the knowledge base.
+This guide explains how batch processing works in the ROXI system and provides instructions for using the various batch processing tools.
 
-## Current Status
+## Introduction
 
-As of March 29, 2025:
-- 1,261 total document chunks exist in the database across 23 documents
-- ~42.8% of these chunks (540) have been processed and added to the vector store
-- ~721 chunks remain to be processed
+Batch processing in ROXI allows for efficient processing of large numbers of document chunks in a controlled and optimized manner. Instead of processing each chunk individually, which would incur overhead for each operation, batch processing groups chunks together for more efficient handling.
 
-## Processing Methods
+## Available Batch Processing Tools
 
-### Single Chunk Processing
+### 1. `process_chunks_until_50_percent.py`
 
-For reliable, one-at-a-time processing:
+This is our primary batch processing script that will continue running until 50% of all document chunks have been processed.
 
 ```bash
-./process_single_chunk.sh [chunk_id]
+# Run directly
+python process_chunks_until_50_percent.py
+
+# Run in background
+nohup python process_chunks_until_50_percent.py > processing_50_continuous.log 2>&1 &
 ```
 
-Example:
-```bash
-./process_single_chunk.sh 6694
-```
+Features:
+- Processes documents in configurable batch sizes
+- Handles its own error recovery
+- Creates periodic backups
+- Provides detailed logging
+- Will exit when the 50% target is reached
 
-### Multi-Chunk Processing
+### 2. `batch_process_chunks.py`
 
-To process multiple chunks in sequence:
-
-```bash
-./process_n_chunks.sh [starting_chunk_id] [number_of_chunks]
-```
-
-Example (process 30 chunks starting at ID 6695):
-```bash
-./process_n_chunks.sh 6695 30
-```
-
-### Target Percentage Processing
-
-To process chunks until reaching a specific completion percentage:
+Processes a specific number of chunks in a single run.
 
 ```bash
-./process_to_target.sh [target_percentage] [start_chunk_id] [max_chunks]
+# Process 10 chunks
+python batch_process_chunks.py --num-chunks=10
 ```
 
-Example (process until 65% complete):
-```bash
-./process_to_target.sh 65.0 6725 200
-```
+### 3. `batch_rebuild_to_target.py`
 
-### Background Processing
-
-For long-running processing that continues even if your connection drops:
+Advanced batch processor that rebuilds the vector store to a target percentage.
 
 ```bash
-./background_process_to_target.sh [target_percentage] [start_chunk_id] [max_chunks]
+# Process until 75% complete with batches of 10
+python batch_rebuild_to_target.py --target=75 --batch-size=10
 ```
 
-Example:
-```bash
-./background_process_to_target.sh 65.0 6725 200
-```
+## Monitoring Batch Processing
 
-To check the progress of background processing:
+### Progress Checking
 
-```bash
-./check_target_progress.sh
-```
-
-## Monitoring Progress
-
-Check the current status of the vector store:
+Use these tools to monitor the progress of batch processing:
 
 ```bash
-python check_progress.py
+# Simple progress check
+./check_50_percent_progress.sh
+
+# Continuous monitoring with notification
+./check_and_notify_50_percent.sh
+
+# Comprehensive monitoring with backups
+./monitor_and_backup.sh
 ```
 
-For detailed progress with time estimates and completion rates.
+### Log Files
 
-## Tips for Efficient Processing
+The batch processing scripts create detailed logs:
 
-1. **Incremental Processing**: Process chunks in small batches (20-30 at a time) to avoid timeouts
-2. **Background Processing**: For longer batches, use the background scripts
-3. **Regular Monitoring**: Check progress to ensure processing is continuing as expected
-4. **Handling Failures**: If a chunk fails to process, skip it and continue with the next one
-5. **Resource Consideration**: Processing is resource-intensive; limit concurrent processes
+- `process_until_50_percent.log`: Main processing log
+- `notify_50_percent.log`: Notification script log
+- `logs/monitor_YYYYMMDD.log`: Daily monitoring logs
 
-## Troubleshooting
+## Batch Processing Parameters
 
-If processing appears to stall:
+These parameters can be adjusted in the scripts:
 
-1. Check for running processes with `ps aux | grep process`
-2. Look for log files in `logs/batch_processing/` directory
-3. If a process has terminated unexpectedly, check for and remove stale PID files
-4. If the vector store seems corrupted, consider using the rebuild scripts in the repository
+- **Batch Size**: Number of chunks to process at once (default: 5)
+- **Retry Limit**: Maximum number of retries for failed chunks (default: 3) 
+- **Backup Interval**: Number of batches between backups (default: 10)
+- **Delay Between Batches**: Seconds to wait between batches (default: 1)
 
-## Next Steps
+## Best Practices
 
-1. Continue processing chunks until reaching at least 65% completion
-2. Monitor system performance during and after processing
-3. Verify search quality improves as more chunks are added to the vector store
+1. **Start with a backup**: Always create a backup before starting batch processing
+2. **Use reasonable batch sizes**: 5-10 chunks per batch is usually optimal
+3. **Monitor memory usage**: Watch for excessive memory consumption
+4. **Keep logs for troubleshooting**: Don't delete logs until processing is complete
+5. **Schedule during low-usage periods**: Batch processing is resource-intensive
+
+## Common Issues and Solutions
+
+### Processing is too slow
+
+- Reduce batch size
+- Check API rate limits
+- Ensure the system isn't running other resource-intensive tasks
+
+### Memory usage is too high
+
+- Reduce batch size
+- Ensure deep sleep mode is working correctly
+- Check for memory leaks in processing code
+
+### Errors during processing
+
+- Check logs for specific error messages
+- Verify the OpenAI API key is valid
+- Ensure database connections are working properly
+
+## Advanced Batch Processing
+
+For more advanced batch processing needs:
+
+- `enhanced_rebuild.py`: Complete vector store rebuild with advanced recovery
+- `find_unprocessed_chunks.py`: Identify chunks that haven't been processed yet
+- `direct_process_chunk.py`: Process specific chunks by ID
