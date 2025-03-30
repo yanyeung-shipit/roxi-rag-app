@@ -601,6 +601,11 @@ class BackgroundProcessor:
         current_mode = "idle"
         if self.running and unprocessed_documents > 0:
             current_mode = proc_mode
+        
+        # Respect deep sleep mode when set manually
+        if self.in_deep_sleep:
+            current_mode = "deep_sleep"
+            
         set_processing_status(current_mode, resource_data.get('processing_rate', 0))
         
         # Create status object with comprehensive information
