@@ -44,21 +44,31 @@ get_current_progress() {
 
 # Check if processor is running
 is_processor_running() {
-    if pgrep -f "batch_rebuild_to_target.py" > /dev/null; then
-        echo -e "${GREEN}Running${NC}"
-    else
-        # Check PID file if it exists
-        if [ -f "process_50_percent.pid" ]; then
-            pid=$(cat "process_50_percent.pid")
-            if ps -p "$pid" > /dev/null; then
-                echo -e "${GREEN}Running (PID: $pid)${NC}"
-            else
-                echo -e "${RED}Not running (stale PID file)${NC}"
-            fi
-        else
-            echo -e "${RED}Not running${NC}"
+    # Check for batch processor
+    if pid=$(pgrep -f "batch_rebuild_to_target.py" 2>/dev/null); then
+        echo -e "${GREEN}Running (batch_rebuild_to_target.py, PID: $pid)${NC}"
+        return
+    fi
+    
+    # Check for incremental processor by process name
+    if pid=$(pgrep -f "process_chunks_until_50_percent" 2>/dev/null); then
+        echo -e "${GREEN}Running (process_chunks_until_50_percent.py, PID: $pid)${NC}"
+        # Update PID file to stay in sync
+        echo "$pid" > process_50_percent.pid
+        return
+    fi
+    
+    # Check as a fallback using the PID file
+    if [ -f "process_50_percent.pid" ]; then
+        pid=$(cat "process_50_percent.pid")
+        if ps -p "$pid" > /dev/null 2>&1; then
+            echo -e "${GREEN}Running (PID: $pid)${NC}"
+            return
         fi
     fi
+    
+    # No processor is running
+    echo -e "${RED}Not running${NC}"
 }
 
 # Get estimated time remaining based on current progress
