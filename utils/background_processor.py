@@ -819,6 +819,7 @@ class BackgroundProcessor:
         proc_mode, batch_size, resource_limited = resource_monitor.determine_processing_mode(system_resources)
         
         # Count how many documents have more content to load
+        session = None
         try:
             session = self._create_session()
             from sqlalchemy import func
@@ -882,9 +883,18 @@ class BackgroundProcessor:
             else:
                 formatted_time = "Unknown"
             
-            session.close()
+            if session:
+                session.close()
         except Exception as e:
             logger.exception(f"Error getting document counts: {str(e)}")
+            # Make sure we always close the session to prevent connection leaks
+            if session:
+                try:
+                    session.rollback()  # Explicitly rollback any failed transactions
+                    session.close()
+                except Exception as session_error:
+                    logger.exception(f"Error closing session: {str(session_error)}")
+            
             waiting_documents = 0
             unprocessed_documents = 0
             total_documents = 0

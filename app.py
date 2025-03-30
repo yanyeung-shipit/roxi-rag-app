@@ -221,6 +221,12 @@ def manage():
 def upload_pdf():
     """Process and store PDF data. This version is optimized and saves to database."""
     try:
+        # Ensure vector store is loaded if it was unloaded during deep sleep
+        from utils.background_processor import _background_processor
+        if _background_processor and hasattr(_background_processor, 'vector_store_unloaded') and _background_processor.vector_store_unloaded:
+            logger.info("Vector store was unloaded during deep sleep, reloading before PDF upload")
+            _background_processor.ensure_vector_store_loaded()
+            
         # Check if file part exists
         if 'pdf_file' not in request.files:
             logger.warning("No file part in the request")
@@ -639,6 +645,12 @@ def bulk_upload_pdfs():
 def add_website():
     """Process and store website data with multi-page crawling."""
     try:
+        # Ensure vector store is loaded if it was unloaded during deep sleep
+        from utils.background_processor import _background_processor
+        if _background_processor and hasattr(_background_processor, 'vector_store_unloaded') and _background_processor.vector_store_unloaded:
+            logger.info("Vector store was unloaded during deep sleep, reloading before website processing")
+            _background_processor.ensure_vector_store_loaded()
+            
         data = request.form
         url = data.get('website_url', '')
         
@@ -975,8 +987,13 @@ def remove_documents_by_url():
 def add_topic_pages():
     """Add multiple rheum.reviews topic pages at once. Memory-optimized version with incremental processing."""
     try:
+        # Ensure vector store is loaded if it was unloaded during deep sleep
+        from utils.background_processor import _background_processor, exit_deep_sleep
+        if _background_processor and hasattr(_background_processor, 'vector_store_unloaded') and _background_processor.vector_store_unloaded:
+            logger.info("Vector store was unloaded during deep sleep, reloading before topic pages processing")
+            _background_processor.ensure_vector_store_loaded()
+            
         # New document being uploaded - always exit deep sleep mode
-        from utils.background_processor import exit_deep_sleep
         exit_deep_sleep()
         
         # Try to get data from JSON or form data
@@ -1762,6 +1779,7 @@ def delete_document(document_id):
 def get_collections():
     """Get a list of all collections."""
     try:
+        # No need to load vector store for this endpoint since it only accesses database
         collections = Collection.query.all()
         results = []
         
@@ -2116,8 +2134,18 @@ def force_sleep_mode():
         }), 500
 
 @app.route('/background_status', methods=['GET'])
+@app.route('/api/background-status', methods=['GET'])
+@app.route('/get-background-status', methods=['GET'])
 def get_background_status():
     """Get status of background processing and detailed information on unprocessed documents."""
+    # Make sure the vector store is loaded if we need to check its status
+    if hasattr(background_processor, 'vector_store_unloaded') and background_processor.vector_store_unloaded:
+        try:
+            # Log that we're reloading the vector store
+            logger.info("Vector store was unloaded during deep sleep, reloading before status check")
+            background_processor.ensure_vector_store_loaded()
+        except Exception as e:
+            logger.exception(f"Error reloading vector store: {str(e)}")
     try:
         # Import for checking deep sleep status
         from utils.background_processor import is_in_deep_sleep

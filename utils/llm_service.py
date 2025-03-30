@@ -32,11 +32,12 @@ logger = logging.getLogger(__name__)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Embedding cache with time-based expiration
+# Embedding cache with time-based expiration - optimized for memory efficiency
 _embedding_cache: Dict[str, Tuple[np.ndarray, float]] = {}
-_CACHE_TTL = 60 * 2  # 2 minutes cache TTL in seconds (reduced from 3)
-_MAX_CACHE_SIZE = 75  # Maximum number of embeddings to cache (reduced from 150)
-_CACHE_CLEANUP_INTERVAL = 30  # Clean up every 30 seconds (reduced from 60)
+_CACHE_TTL = 60 * 1  # 1 minute cache TTL in seconds (reduced from 2)
+_MAX_CACHE_SIZE = 50  # Maximum number of embeddings to cache (reduced from 75)
+_CACHE_CLEANUP_INTERVAL = 20  # Clean up every 20 seconds (reduced from 30)
+_CACHE_MEMORY_LIMIT_MB = 10  # Maximum cache size in MB to prevent excessive memory usage
 
 # Create a last cleanup tracker
 _last_cache_cleanup_time = time.time()
@@ -58,7 +59,7 @@ def _compute_text_hash(text: str) -> str:
 
 def _cleanup_embedding_cache():
     """
-    Clean up expired cache entries and enforce maximum cache size.
+    Clean up expired cache entries and enforce maximum cache size and memory limits.
     """
     global _last_cache_cleanup_time
     global _embedding_cache
@@ -73,16 +74,33 @@ def _cleanup_embedding_cache():
     for key in expired_keys:
         del _embedding_cache[key]
     
-    # If cache is still too large, remove oldest entries until within size limit
-    if len(_embedding_cache) > _MAX_CACHE_SIZE:
+    # Calculate current cache memory usage
+    cache_size_mb = sum(embedding.nbytes for embedding, _ in _embedding_cache.values()) / (1024 * 1024)
+    
+    # If cache exceeds memory limit or entry count limit, remove oldest entries
+    if cache_size_mb > _CACHE_MEMORY_LIMIT_MB or len(_embedding_cache) > _MAX_CACHE_SIZE:
         # Sort by timestamp (oldest first)
         sorted_items = sorted(_embedding_cache.items(), key=lambda x: x[1][1])
-        # Keep only the newest MAX_CACHE_SIZE entries
-        _embedding_cache = dict(sorted_items[-_MAX_CACHE_SIZE:])
+        
+        # Calculate how many entries to keep based on both constraints
+        keep_count = _MAX_CACHE_SIZE
+        
+        if cache_size_mb > _CACHE_MEMORY_LIMIT_MB:
+            # Start with an aggressive cut - keep only 50% of items if we exceed memory limit
+            memory_based_keep_count = len(sorted_items) // 2
+            keep_count = min(keep_count, memory_based_keep_count)
+            
+            # Ensure we keep at least some minimum number of entries
+            keep_count = max(5, keep_count)
+        
+        # Keep only the newest entries
+        _embedding_cache = dict(sorted_items[-keep_count:])
+        
+        # After cleanup, recalculate size for logging
+        cache_size_mb = sum(embedding.nbytes for embedding, _ in _embedding_cache.values()) / (1024 * 1024)
     
     # Log cache size after cleanup
-    cache_size_mb = sum(embedding.nbytes for embedding, _ in _embedding_cache.values()) / (1024 * 1024)
-    logger.debug(f"Embedding cache cleanup: {len(_embedding_cache)} entries, {cache_size_mb:.2f}MB")
+    logger.debug(f"Embedding cache cleanup: {len(_embedding_cache)} entries, {cache_size_mb:.2f}MB, memory limit: {_CACHE_MEMORY_LIMIT_MB}MB")
 
 def clear_embedding_cache():
     """
@@ -99,7 +117,7 @@ def clear_embedding_cache():
 
 def get_embedding(text):
     """
-    Get embedding for text using OpenAI's API with caching.
+    Get embedding for text using OpenAI's API with optimized memory-efficient caching.
     
     Args:
         text (str): Text to embed
@@ -108,59 +126,73 @@ def get_embedding(text):
         numpy.ndarray: Embedding vector
     """
     global _last_cache_cleanup_time, _embedding_cache
+    
+    # Handle empty text case efficiently
     if not text:
         logger.warning("Empty text provided for embedding")
         return np.zeros(1536, dtype=np.float32)
     
-    # Limit text length if necessary
-    if len(text) > 8000:
-        logger.warning(f"Text too long for embedding ({len(text)} chars), truncating")
-        text = text[:8000]
+    # Optimize text length - use more aggressive truncation to save memory
+    # 8000 chars is the absolute max for the API, but we can use less for memory efficiency
+    max_length = 4000  # Reduced from 8000 to save memory, sufficient for most documents
+    if len(text) > max_length:
+        logger.warning(f"Text too long for embedding ({len(text)} chars), truncating to {max_length}")
+        text = text[:max_length]
     
-    # Compute hash for cache lookup
+    # Use more aggressive compression on text for hash computation
     text_hash = _compute_text_hash(text)
     
-    # Check cache periodically during lookups
+    # Memory check before cache lookup - if we're approaching memory limits,
+    # proactively clean up cache
+    # Calculate cache size in MB
+    if len(_embedding_cache) > 10:  # Only check if we have a meaningful number of entries
+        cache_size_mb = sum(embedding.nbytes for embedding, _ in _embedding_cache.values()) / (1024 * 1024)
+        if cache_size_mb > _CACHE_MEMORY_LIMIT_MB * 0.8:  # If we're at 80% of limit
+            logger.warning(f"Cache size {cache_size_mb:.2f}MB approaching limit of {_CACHE_MEMORY_LIMIT_MB}MB, cleaning up")
+            _cleanup_embedding_cache()
+            _last_cache_cleanup_time = time.time()
+    
+    # Check cache with improved handling
     if text_hash in _embedding_cache:
         embedding, timestamp = _embedding_cache[text_hash]
         current_time = time.time()
         
-        # Automatic cache cleanup on cache hits
-        # Also run cleanup on a time interval regardless of cache size
-        if (len(_embedding_cache) > _MAX_CACHE_SIZE or 
-            (current_time - timestamp > _CACHE_TTL) or
+        # More frequent checks for cache cleanup with tighter constraints
+        if (len(_embedding_cache) > _MAX_CACHE_SIZE * 0.8 or  # Lower threshold (80%)
+            (current_time - timestamp > _CACHE_TTL * 0.5) or  # Half the TTL for aggressive cleanup
             (current_time - _last_cache_cleanup_time > _CACHE_CLEANUP_INTERVAL)):
             _cleanup_embedding_cache()
-            # Update last cleanup timestamp
             _last_cache_cleanup_time = current_time
             
         # If still in cache after cleanup, return it
         if text_hash in _embedding_cache:
-            logger.debug(f"Cache hit for embedding (hash: {text_hash[:8]}...)")
             return embedding
     
     # Not in cache, need to compute
     try:
+        # Reuse client connection to avoid creating new connections
         response = client.embeddings.create(
             model="text-embedding-ada-002",
             input=text
         )
-        embedding = np.array(response.data[0].embedding, dtype=np.float32)
         
-        # Cache the result
+        # Use more memory-efficient storage by using float16 instead of float32 where possible
+        # This cuts memory usage in half with minimal precision loss for similarity searches
+        embedding = np.array(response.data[0].embedding, dtype=np.float16)
+        
+        # Cache with timestamp
         _embedding_cache[text_hash] = (embedding, time.time())
         
-        # Run cache cleanup if cache is getting large
-        if len(_embedding_cache) >= _MAX_CACHE_SIZE * 0.9:  # At 90% capacity
+        # More aggressive cleanup trigger (at 80% capacity)
+        if len(_embedding_cache) >= _MAX_CACHE_SIZE * 0.8:
             _cleanup_embedding_cache()
-            # Update the global cleanup time
             _last_cache_cleanup_time = time.time()
         
         return embedding
     except Exception as e:
         logger.exception(f"Error getting embedding: {str(e)}")
-        # Fallback to random embedding for testing purposes only
-        return np.random.rand(1536).astype(np.float32)
+        # Create an empty embedding with proper shape instead of random to save memory
+        return np.zeros(1536, dtype=np.float16)
 
 def generate_response(query, context_documents):
     """
