@@ -38,6 +38,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from app import app, db
 from models import DocumentChunk
 from utils.vector_store import VectorStore
+from utils.llm_service import get_embedding
 
 # Constants
 CHECKPOINT_DIR = "logs/checkpoints"

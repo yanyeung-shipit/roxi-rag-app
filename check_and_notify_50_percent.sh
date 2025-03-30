@@ -1,92 +1,116 @@
 #!/bin/bash
 
-# Script to check for 50% progress and send notifications
-# This script will send an alert when the 50% target is reached
-# Run with: ./check_and_notify_50_percent.sh
+# Script to monitor progress towards 50% and notify when target is reached
+# This is designed to be run in the background or via cron
 
-# Import utility functions
-source ./utils/bash_colors.sh 2>/dev/null || true
+# Configuration
+TARGET_PERCENTAGE=50.0
+CHECK_INTERVAL=300  # Check every 5 minutes (300 seconds)
+LOG_FILE="notify_50_percent.log"
 
-# Path for tracking notification status
-NOTIFICATION_SENT_FILE=".notification_sent"
-
-# Check if notification has already been sent
-notification_already_sent() {
-  [ -f "$NOTIFICATION_SENT_FILE" ]
+# Log with timestamp
+log_message() {
+    echo "$(date +'%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
 }
 
-# Mark notification as sent
-mark_notification_sent() {
-  echo "$(date)" > "$NOTIFICATION_SENT_FILE"
-}
-
-# Draw a progress bar
-draw_progress_bar() {
-  local percent=$1
-  local width=50
-  local filled=$(echo "$percent * $width / 100" | bc -l | xargs printf "%.0f")
-  local empty=$((width - filled))
-  
-  # Create the bar
-  printf "["
-  printf "%${filled}s" | tr ' ' '='
-  printf ">"
-  printf "%${empty}s" | tr ' ' ' '
-  printf "] %.2f%%\n" "$percent"
-}
-
-# Show a notification banner
-show_notification_banner() {
-  local message=$1
-  local length=${#message}
-  local border=$(printf '%*s' "$length" | tr ' ' '=')
-  
-  echo -e "${BOLD_GREEN}"
-  echo "$border"
-  echo "$message"
-  echo "$border"
-  echo -e "${RESET}"
-}
-
-# Main function
-main() {
-  # Check if notification was already sent
-  if notification_already_sent; then
-    echo -e "${YELLOW}✓ Notification for 50% completion was already sent on:${RESET}"
-    cat "$NOTIFICATION_SENT_FILE"
-    return 0
-  fi
-  
-  # Check current progress
-  ./check_50_percent_progress.sh > /dev/null
-  
-  # If we reached 50%, send notification
-  if [ $? -eq 0 ]; then
-    # Get the exact progress percentage
-    local result=$(python check_progress.py --json 2>/dev/null)
-    local current_percent=$(echo "$result" | grep -o '"percent_processed": [0-9.]*' | grep -o '[0-9.]*')
+# Check if target has been reached
+check_target_reached() {
+    progress_output=$(python check_progress.py)
+    current_percentage=$(echo "$progress_output" | grep -o '[0-9]\+\.[0-9]\+%' | head -1 | sed 's/%//')
     
-    # Create celebratory banner
-    echo -e "\n\n"
-    show_notification_banner "🎉 TARGET REACHED: ${current_percent}% PROCESSED! 🎉"
-    echo -e "\n"
-    draw_progress_bar "$current_percent"
-    echo -e "\n"
-    echo -e "${BOLD_CYAN}The vector store rebuild has reached the 50% target!${RESET}"
-    echo -e "${CYAN}Date: $(date)${RESET}"
-    echo -e "${CYAN}Time to reach target: $(python -c 'import json; print(json.loads(open("continuous_processing.log").read())["elapsed_time"] if os.path.exists("continuous_processing.log") else "Unknown")')${RESET}"
-    echo -e "\n"
+    # If no percentage found, default to 0
+    if [ -z "$current_percentage" ]; then
+        current_percentage="0.0"
+    fi
     
-    # Mark notification as sent to avoid duplicate notifications
-    mark_notification_sent
+    log_message "Current progress: ${current_percentage}%"
     
-    return 0
-  else
-    # Not yet at 50%
-    echo -e "${YELLOW}Still working toward 50% target...${RESET}"
-    return 1
-  fi
+    # Check if we've reached target
+    if (( $(echo "$current_percentage >= $TARGET_PERCENTAGE" | bc -l) )); then
+        return 0  # Target reached
+    else
+        return 1  # Target not reached yet
+    fi
 }
 
-# Run the main function
-main
+# Notify function - this can be expanded with additional notification methods
+notify_target_reached() {
+    # Create a notification file
+    echo "$(date +'%Y-%m-%d %H:%M:%S') - TARGET REACHED: 50% processing complete" > "TARGET_50_PERCENT_REACHED.txt"
+    
+    # Print clear console notification
+    clear
+    echo "=================================================="
+    echo "                 🎉 TARGET REACHED 🎉              "
+    echo "  Processing has reached the 50% milestone!"
+    echo "  $(date +'%Y-%m-%d %H:%M:%S')"
+    echo "=================================================="
+    
+    # Log the milestone
+    log_message "TARGET REACHED: Processing has reached 50% milestone!"
+    
+    # You could add additional notification methods here:
+    # - Send email notification
+    # - Trigger webhook
+    # - Push notification, etc.
+}
+
+# Main monitoring loop
+monitor_until_target() {
+    log_message "Starting monitoring for 50% target"
+    
+    while true; do
+        if check_target_reached; then
+            notify_target_reached
+            log_message "Notification sent, monitoring complete"
+            break
+        else
+            log_message "Target not yet reached, checking again in ${CHECK_INTERVAL} seconds"
+            sleep $CHECK_INTERVAL
+        fi
+    done
+}
+
+# Run in the background
+if [ "$1" == "background" ]; then
+    log_message "Starting background monitoring"
+    nohup bash "$0" run > /dev/null 2>&1 &
+    echo $! > "notify_monitor.pid"
+    echo "Started background monitoring with PID: $(cat notify_monitor.pid)"
+    exit 0
+fi
+
+# Run directly
+if [ "$1" == "run" ]; then
+    monitor_until_target
+    exit 0
+fi
+
+# Default behavior - show usage
+if [ -z "$1" ]; then
+    echo "Usage: $0 [background|run|status]"
+    echo "  background  - Start monitoring in the background"
+    echo "  run         - Run monitoring in the foreground"
+    echo "  status      - Check the status of background monitoring"
+    exit 1
+fi
+
+# Check status
+if [ "$1" == "status" ]; then
+    if [ -f "notify_monitor.pid" ]; then
+        pid=$(cat "notify_monitor.pid")
+        if ps -p "$pid" > /dev/null; then
+            echo "Monitoring is running with PID: $pid"
+            echo "Current progress: $(python check_progress.py | grep -o '[0-9]\+\.[0-9]\+%' | head -1)"
+        else
+            echo "Monitoring is not running (stale PID file)"
+        fi
+    else
+        echo "Monitoring is not running (no PID file found)"
+    fi
+    exit 0
+fi
+
+echo "Unknown command: $1"
+echo "Usage: $0 [background|run|status]"
+exit 1

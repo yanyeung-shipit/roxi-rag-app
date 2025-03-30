@@ -1,111 +1,187 @@
 #!/bin/bash
 
-# Script to monitor and automatically restart the processing script if it fails
-# This ensures continuous processing even if there are temporary errors
-# Run with: ./monitor_and_restart.sh
+# Monitor and Restart Processing Script
+# This script continuously monitors the progress of processing and restarts
+# the process if it fails or stops.
 
-# Configure settings
-MAX_RETRIES=10
-CHECK_INTERVAL=60  # seconds
-PROCESSOR_SCRIPT="process_chunks_until_50_percent.py"
-LOG_FILE="continuous_processing.log"
-PID_FILE=".processor.pid"
+# Configuration
+CHECK_INTERVAL=300  # Check every 5 minutes
+MAX_RETRIES=3       # Maximum number of consecutive retries before giving up
+LOG_FILE="monitoring.log"
+MAX_RESTART_WAIT=15  # Maximum wait time between restart attempts (minutes)
+
+# Import utilities for colored output
+source utils/bash_colors.sh || {
+    # Define fallback colors if import fails
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    BLUE='\033[0;34m'
+    NC='\033[0m' # No Color
+}
 
 # Log with timestamp
-log() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+log_message() {
+    local timestamp=$(date +'%Y-%m-%d %H:%M:%S')
+    local message="$1"
+    local level=${2:-"INFO"}
+    
+    case "$level" in
+        "ERROR")
+            echo -e "${timestamp} - ${RED}ERROR${NC} - $message" | tee -a "$LOG_FILE"
+            ;;
+        "WARNING")
+            echo -e "${timestamp} - ${YELLOW}WARNING${NC} - $message" | tee -a "$LOG_FILE"
+            ;;
+        "SUCCESS")
+            echo -e "${timestamp} - ${GREEN}SUCCESS${NC} - $message" | tee -a "$LOG_FILE"
+            ;;
+        *)
+            echo -e "${timestamp} - ${BLUE}INFO${NC} - $message" | tee -a "$LOG_FILE"
+            ;;
+    esac
 }
 
-# Start the processor
-start_processor() {
-  log "Starting processor: $PROCESSOR_SCRIPT"
-  python "$PROCESSOR_SCRIPT" >> "$LOG_FILE" 2>&1 &
-  
-  # Save PID
-  PID=$!
-  echo $PID > "$PID_FILE"
-  log "Processor started with PID: $PID"
-  
-  # Wait for startup
-  sleep 5
-  
-  # Verify process is running
-  if ps -p $PID > /dev/null; then
-    log "Processor started successfully"
-    return 0
-  else
-    log "Failed to start processor"
-    return 1
-  fi
-}
-
-# Check if processor is running
-check_processor() {
-  if [ -f "$PID_FILE" ]; then
-    PID=$(cat "$PID_FILE")
-    if ps -p $PID > /dev/null; then
-      log "Processor is running (PID: $PID)"
-      return 0
+# Check current progress
+get_current_progress() {
+    local progress_output=$(python check_progress.py)
+    local current_percentage=$(echo "$progress_output" | grep -o '[0-9]\+\.[0-9]\+%' | head -1 | sed 's/%//')
+    
+    # If no percentage found, default to 0
+    if [ -z "$current_percentage" ]; then
+        echo "0.0"
     else
-      log "Processor not running (PID: $PID)"
-      rm -f "$PID_FILE"
-      return 1
+        echo "$current_percentage"
     fi
-  else
-    log "No PID file found"
-    return 1
-  fi
 }
 
-# Check if we've reached 50%
-check_completion() {
-  # Run the check script silently and get its exit code
-  ./check_50_percent_progress.sh > /dev/null 2>&1
-  return $?
+# Check if the target has been reached
+is_target_reached() {
+    local current_percentage=$1
+    local target_percentage=${2:-50.0}
+    
+    # Compare with bc for floating point comparison
+    if (( $(echo "$current_percentage >= $target_percentage" | bc -l) )); then
+        return 0  # True, target reached
+    else
+        return 1  # False, target not reached
+    fi
+}
+
+# Check if the processor is running
+is_processor_running() {
+    if pgrep -f "process_to_50_percent.py" > /dev/null || pgrep -f "batch_rebuild_to_target.py" > /dev/null; then
+        return 0  # True, processor is running
+    fi
+    
+    # Check PID file
+    if [ -f "process_50_percent.pid" ]; then
+        pid=$(cat "process_50_percent.pid")
+        if ps -p "$pid" > /dev/null; then
+            return 0  # True, processor is running based on PID file
+        fi
+    fi
+    
+    return 1  # False, processor is not running
+}
+
+# Restart the processor
+restart_processor() {
+    local retry_count=$1
+    
+    # Calculate exponential backoff wait time (1min, 3min, 9min, 15min max)
+    local wait_time=$((2 ** retry_count))
+    if [ $wait_time -gt $MAX_RESTART_WAIT ]; then
+        wait_time=$MAX_RESTART_WAIT
+    fi
+    
+    log_message "Restarting processor (retry $retry_count)..." "WARNING"
+    
+    # Clean up any existing PID file
+    if [ -f "process_50_percent.pid" ]; then
+        rm "process_50_percent.pid"
+        log_message "Removed stale PID file" "WARNING"
+    fi
+    
+    # Start the processor and save PID
+    nohup python process_to_50_percent.py >> "process_to_50_percent.log" 2>&1 &
+    local pid=$!
+    echo $pid > "process_50_percent.pid"
+    
+    log_message "Started processor with PID: $pid" "SUCCESS"
+    log_message "Waiting ${wait_time} minutes before next check..." "INFO"
+    
+    # Wait before next check (exponential backoff)
+    sleep $((wait_time * 60))
 }
 
 # Main monitoring loop
 main() {
-  log "Starting processor monitor"
-  
-  retries=0
-  
-  while [ $retries -lt $MAX_RETRIES ]; do
-    # Check if target reached
-    if check_completion; then
-      log "🎉 Target of 50% has been reached! Monitoring complete."
-      exit 0
-    fi
+    log_message "Starting monitoring process" "INFO"
     
-    # Check if processor is running
-    if ! check_processor; then
-      retries=$((retries + 1))
-      log "Processor not running. Attempt $retries of $MAX_RETRIES"
-      
-      # Create backup before restarting
-      log "Creating backup before restart..."
-      python backup_vector_store.py >> "$LOG_FILE" 2>&1
-      
-      # Restart processor
-      if start_processor; then
-        log "Processor restarted successfully"
-        retries=0  # Reset retry counter on successful restart
-      else
-        log "Failed to restart processor"
-        sleep $((CHECK_INTERVAL * 2))  # Wait longer after failure
-      fi
-    fi
+    local retry_count=0
+    local previous_percentage=0
+    local stalled_count=0
     
-    # Sleep before next check
-    sleep $CHECK_INTERVAL
-  done
-  
-  log "Maximum retries reached. Monitoring stopped."
-  exit 1
+    while true; do
+        local current_percentage=$(get_current_progress)
+        log_message "Current progress: ${current_percentage}%" "INFO"
+        
+        # Check if target reached
+        if is_target_reached $current_percentage; then
+            log_message "Target reached! Processing is complete (${current_percentage}%)" "SUCCESS"
+            break
+        fi
+        
+        # Check if processor is running
+        if is_processor_running; then
+            log_message "Processor is running" "INFO"
+            
+            # Check if progress is stalled (same percentage for multiple checks)
+            if (( $(echo "$current_percentage == $previous_percentage" | bc -l) )); then
+                stalled_count=$((stalled_count + 1))
+                if [ $stalled_count -ge 3 ]; then
+                    log_message "Progress appears stalled at ${current_percentage}% for ${stalled_count} checks" "WARNING"
+                    
+                    # Find process and send SIGTERM to allow clean shutdown
+                    local pid=$(cat "process_50_percent.pid" 2>/dev/null)
+                    if [ -n "$pid" ] && ps -p "$pid" > /dev/null; then
+                        log_message "Sending signal to PID $pid to allow clean shutdown" "WARNING"
+                        kill -15 $pid 2>/dev/null
+                        sleep 10  # Give it time to clean up
+                    fi
+                    
+                    restart_processor $retry_count
+                    retry_count=$((retry_count + 1))
+                    stalled_count=0
+                fi
+            else
+                # Progress changed, reset stall counter
+                stalled_count=0
+            fi
+        else
+            log_message "Processor is not running" "ERROR"
+            restart_processor $retry_count
+            retry_count=$((retry_count + 1))
+        fi
+        
+        # Update previous percentage
+        previous_percentage=$current_percentage
+        
+        # Give up after too many retries
+        if [ $retry_count -ge $MAX_RETRIES ]; then
+            log_message "Maximum retries ($MAX_RETRIES) reached. Manual intervention required." "ERROR"
+            break
+        fi
+        
+        log_message "Sleeping for $CHECK_INTERVAL seconds before next check" "INFO"
+        sleep $CHECK_INTERVAL
+    done
 }
 
-# Handle termination signals
-trap 'log "Monitor interrupted. Exiting."; exit 1' INT TERM
+# Set permissions to make executable if needed
+chmod +x check_progress.py 2>/dev/null
+chmod +x process_to_50_percent.py 2>/dev/null
 
-# Start the main loop
+# Run the main monitoring loop
 main
