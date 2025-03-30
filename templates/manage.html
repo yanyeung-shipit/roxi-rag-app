@@ -398,6 +398,30 @@
         </div>
     </div>
 </div>
+<!-- System Resources Card -->
+<div class="row mb-4" id="system-resources-section">
+    <div class="col-12">
+        <div class="card bg-dark border-secondary">
+            <div class="card-header bg-dark text-light d-flex justify-content-between align-items-center">
+                <h4><i class="fas fa-server me-2"></i>System Resources</h4>
+                <button class="btn btn-sm btn-outline-secondary" onclick="refreshSystemResources()">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+            </div>
+            <div class="card-body">
+                <div id="system-resources-content">
+                    <div class="d-flex justify-content-center my-4">
+                        <div class="spinner-border text-secondary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                    <p class="text-center text-muted">Loading system resources...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Background Processing Status Card -->
 <div class="row mb-4" id="background-status-section">
     <div class="col-12">
@@ -422,20 +446,53 @@
     </div>
 </div>
 
-<!-- JavaScript for background status -->
+<!-- JavaScript for resource and status monitoring -->
 <script>
-    // Load background status when the page loads
+    // Load both resources and status when the page loads
     document.addEventListener('DOMContentLoaded', function() {
+        refreshSystemResources();
         refreshBackgroundStatus();
+        
         // Auto-refresh every 30 seconds
+        setInterval(refreshSystemResources, 30000);
         setInterval(refreshBackgroundStatus, 30000);
         
         // Check for element existence every 5 seconds
-        // This ensures we can recover if the element is removed from the DOM
+        // This ensures we can recover if elements are removed from the DOM
         setInterval(function() {
+            ensureSystemResourcesElement();
             ensureBackgroundStatusElement();
         }, 5000);
     });
+    
+    // Function to ensure the system-resources-content element exists
+    function ensureSystemResourcesElement() {
+        if (!document.getElementById('system-resources-content')) {
+            console.log("Restoring system-resources-content element...");
+            
+            // Find the system-resources-section
+            const resourcesSection = document.getElementById('system-resources-section');
+            if (resourcesSection) {
+                // Find the card-body inside it
+                const cardBody = resourcesSection.querySelector('.card-body');
+                if (cardBody) {
+                    // Recreate the content element
+                    cardBody.innerHTML = `
+                        <div id="system-resources-content">
+                            <div class="d-flex justify-content-center my-4">
+                                <div class="spinner-border text-secondary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                            </div>
+                            <p class="text-center text-muted">Loading system resources...</p>
+                        </div>
+                    `;
+                    // Trigger a refresh
+                    setTimeout(refreshSystemResources, 500);
+                }
+            }
+        }
+    }
     
     // Function to ensure the background-status-content element exists
     function ensureBackgroundStatusElement() {
@@ -464,6 +521,125 @@
                 }
             }
         }
+    }
+    
+    function refreshSystemResources() {
+        console.log("Loading system resources...");
+        const resourcesContent = document.getElementById('system-resources-content');
+        
+        if (!resourcesContent) {
+            console.error("Cannot load system resources: system-resources-content element not found");
+            ensureSystemResourcesElement();
+            return;
+        }
+        
+        // Show loading spinner
+        resourcesContent.innerHTML = `
+            <div class="d-flex justify-content-center my-4">
+                <div class="spinner-border text-secondary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+            </div>
+            <p class="text-center text-muted">Loading system resources...</p>
+        `;
+        
+        // Fetch resource status
+        fetch('/background_status')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Status error: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success && data.system_resources) {
+                    const resources = data.system_resources;
+                    
+                    // Determine status classes based on usage levels
+                    const cpuClass = resources.cpu_percent > 80 ? 'danger' : 
+                                  resources.cpu_percent > 60 ? 'warning' : 'success';
+                    const memoryClass = resources.memory_percent > 80 ? 'danger' : 
+                                     resources.memory_percent > 60 ? 'warning' : 'success';
+                    
+                    // Process mode info if available
+                    let processModeHtml = '';
+                    if (data.processor_status && data.processor_status.processing_mode) {
+                        const mode = data.processor_status.processing_mode;
+                        processModeHtml = `
+                            <h6 class="text-light">Processing Mode</h6>
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <span class="text-light">Current Mode:</span>
+                                <span class="badge bg-info">${mode.current_mode}</span>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <span class="text-light">Recommended Batch Size:</span>
+                                <span class="badge bg-secondary">${mode.recommended_batch_size}</span>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span class="text-light">Resource Constrained:</span>
+                                <span class="badge ${mode.resource_constrained ? 'bg-warning' : 'bg-success'}">
+                                    ${mode.resource_constrained ? 'Yes' : 'No'}
+                                </span>
+                            </div>
+                        `;
+                    }
+                    
+                    const html = `
+                        <div class="row">
+                            <div class="col-md-6">
+                                <h6 class="text-light">CPU Usage</h6>
+                                <div class="progress mb-3" style="height: 25px;">
+                                    <div class="progress-bar bg-${cpuClass}" role="progressbar" 
+                                        style="width: ${resources.cpu_percent}%;" 
+                                        aria-valuenow="${resources.cpu_percent}" aria-valuemin="0" aria-valuemax="100">
+                                        ${resources.cpu_percent.toFixed(1)}%
+                                    </div>
+                                </div>
+                                
+                                <h6 class="text-light">Memory Usage</h6>
+                                <div class="progress" style="height: 25px;">
+                                    <div class="progress-bar bg-${memoryClass}" role="progressbar" 
+                                        style="width: ${resources.memory_percent}%;" 
+                                        aria-valuenow="${resources.memory_percent}" aria-valuemin="0" aria-valuemax="100">
+                                        ${resources.memory_percent.toFixed(1)}%
+                                    </div>
+                                </div>
+                                <p class="text-light mt-2"><strong>Available Memory:</strong> ${resources.memory_available_mb.toFixed(1)} MB</p>
+                            </div>
+                            <div class="col-md-6">
+                                ${processModeHtml}
+                            </div>
+                        </div>
+                        <div class="text-muted small mt-2">
+                            <p><i class="fas fa-clock me-1"></i>Last updated: ${new Date().toLocaleTimeString()}</p>
+                        </div>
+                    `;
+                    
+                    resourcesContent.innerHTML = html;
+                } else {
+                    resourcesContent.innerHTML = `
+                        <div class="alert alert-warning">
+                            <h5><i class="fas fa-exclamation-triangle me-2"></i>System Resources Not Available</h5>
+                            <p>The system resource information is currently not available.</p>
+                        </div>
+                        <div class="text-muted small mt-2">
+                            <p><i class="fas fa-clock me-1"></i>Last updated: ${new Date().toLocaleTimeString()}</p>
+                        </div>
+                    `;
+                }
+            })
+            .catch(error => {
+                console.error("Cannot load system resources:", error);
+                resourcesContent.innerHTML = `
+                    <div class="alert alert-danger">
+                        <h5><i class="fas fa-exclamation-triangle me-2"></i>Error</h5>
+                        <p>Failed to load system resources: ${error.message}</p>
+                    </div>
+                    <div class="text-muted small mt-2">
+                        <p><i class="fas fa-clock me-1"></i>Last updated: ${new Date().toLocaleTimeString()}</p>
+                    </div>
+                `;
+            });
     }
     
     function refreshBackgroundStatus() {
