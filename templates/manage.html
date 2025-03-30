@@ -683,7 +683,8 @@
                         }
                         
                         // No documents being processed
-                        statusContent.innerHTML = `
+                        // Create the HTML for the main content
+                        const statusHTML = `
                             <div class="alert alert-success">
                                 <h5><i class="fas fa-check-circle me-2"></i>All Documents Processed</h5>
                                 <p>No documents are currently being processed in the background.</p>
@@ -701,25 +702,61 @@
                                 </p>
                             </div>
                         `;
+                        
+                        // Use a safer approach to update the inner HTML
+                        // First check if the element still exists
+                        if (document.getElementById('background-status-content')) {
+                            statusContent.innerHTML = statusHTML;
+                        } else {
+                            console.log("Element disappeared, recreating it...");
+                            ensureBackgroundStatusElement();
+                            // After ensuring it exists, try again
+                            const newStatusContent = document.getElementById('background-status-content');
+                            if (newStatusContent) {
+                                newStatusContent.innerHTML = statusHTML;
+                            }
+                        }
                     }
                 } else {
                     // Error fetching status
-                    statusContent.innerHTML = `
+                    const errorHTML = `
                         <div class="alert alert-danger">
                             <h5><i class="fas fa-exclamation-triangle me-2"></i>Error</h5>
                             <p>${data.message || 'Failed to load background processing status'}</p>
                         </div>
                     `;
+                    
+                    if (document.getElementById('background-status-content')) {
+                        statusContent.innerHTML = errorHTML;
+                    } else {
+                        console.log("Element disappeared during error handling, recreating it...");
+                        ensureBackgroundStatusElement();
+                        const newStatusContent = document.getElementById('background-status-content');
+                        if (newStatusContent) {
+                            newStatusContent.innerHTML = errorHTML;
+                        }
+                    }
                 }
             })
             .catch(error => {
                 console.error("Cannot load background status:", error);
-                statusContent.innerHTML = `
+                const errorHTML = `
                     <div class="alert alert-danger">
                         <h5><i class="fas fa-exclamation-triangle me-2"></i>Error</h5>
                         <p>Failed to load background processing status: ${error.message}</p>
                     </div>
                 `;
+                
+                if (document.getElementById('background-status-content')) {
+                    statusContent.innerHTML = errorHTML;
+                } else {
+                    console.log("Element disappeared during error handling, recreating it...");
+                    ensureBackgroundStatusElement();
+                    const newStatusContent = document.getElementById('background-status-content');
+                    if (newStatusContent) {
+                        newStatusContent.innerHTML = errorHTML;
+                    }
+                }
             });
     }
 </script>
