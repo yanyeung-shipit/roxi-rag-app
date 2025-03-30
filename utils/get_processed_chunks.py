@@ -22,17 +22,20 @@ if parent_dir not in sys.path:
 # Import VectorStore class
 from utils.vector_store import VectorStore
 
-def get_processed_chunk_ids() -> Set[int]:
+def get_processed_chunk_ids(force_refresh=False) -> Set[int]:
     """
     Get the set of chunk IDs that have been processed and added to the vector store.
+    
+    Args:
+        force_refresh (bool): If True, force a refresh of the cache
     
     Returns:
         Set[int]: Set of processed chunk IDs
     """
     try:
-        # Initialize VectorStore and use its get_processed_chunk_ids method
+        # Initialize VectorStore and use its get_processed_chunk_ids method with caching
         vector_store = VectorStore()
-        processed_ids = vector_store.get_processed_chunk_ids()
+        processed_ids = vector_store.get_processed_chunk_ids(force_refresh=force_refresh)
         return processed_ids
     except Exception as e:
         logger.error(f"Error loading vector store data: {e}")

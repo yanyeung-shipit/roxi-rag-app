@@ -4,6 +4,7 @@ import numpy as np
 import faiss
 import pickle
 import uuid
+import time
 from collections import defaultdict
 
 # Configure logging
@@ -578,13 +579,31 @@ class VectorStore:
             logger.exception(f"Error searching vector store: {str(e)}")
             raise
     
-    def get_processed_chunk_ids(self):
+    # Cache for processed chunk IDs
+    _processed_chunk_ids_cache = None
+    _last_cache_update_time = 0
+    _cache_ttl = 60  # Cache time-to-live in seconds
+    
+    def get_processed_chunk_ids(self, force_refresh=False):
         """
         Get the set of chunk IDs that have been processed and added to the vector store.
+        Uses a caching mechanism to avoid frequent recomputations.
         
+        Args:
+            force_refresh (bool): If True, ignore the cache and recalculate
+            
         Returns:
             set: Set of processed chunk IDs
         """
+        current_time = time.time()
+        
+        # Check if we can use the cached value
+        if not force_refresh and self._processed_chunk_ids_cache is not None:
+            # If cache is fresh (within TTL), return cached value without logging
+            if current_time - self._last_cache_update_time < self._cache_ttl:
+                return self._processed_chunk_ids_cache
+        
+        # Need to recompute the processed IDs
         processed_ids = set()
         
         for doc_id, doc in self.documents.items():
@@ -597,7 +616,12 @@ class VectorStore:
                 except (ValueError, TypeError):
                     # Skip invalid chunk IDs
                     pass
-                    
+        
+        # Update the cache
+        self._processed_chunk_ids_cache = processed_ids
+        self._last_cache_update_time = current_time
+        
+        # Only log when we actually recompute
         logger.info(f"Found {len(processed_ids)} processed chunk IDs in vector store")
         return processed_ids
     

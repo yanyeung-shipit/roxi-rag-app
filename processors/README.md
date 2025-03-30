@@ -88,4 +88,10 @@ The background processor now includes several resource conservation features:
    - Efficiently manages memory by releasing resources during idle periods
    - Automatically scales up responsiveness when work is available
 
+4. **Vector Store Caching**:
+   - Caches results of expensive vector store operations
+   - Reduces redundant log messages and disk reads
+   - TTL-based cache invalidation (60-second default lifetime)
+   - Significantly reduces system load during background status checks
+
 These features ensure optimal resource utilization, allowing the system to process documents quickly when needed while minimizing resource consumption during inactive periods.
