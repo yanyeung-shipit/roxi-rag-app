@@ -54,7 +54,8 @@ def force_deep_sleep():
         _background_processor.sleep_time = _background_processor.deep_sleep_time * 2  # 20 minutes
         
         logger.info(f"Deep sleep mode activated manually. Sleep time set to {_background_processor.sleep_time}s")
-        set_processing_status("deep_sleep")
+        # Pass 0.0 as rate when manually activating deep sleep
+        set_processing_status("deep_sleep", 0.0)
         return True
     except Exception as e:
         logger.error(f"Error forcing deep sleep mode: {str(e)}")
