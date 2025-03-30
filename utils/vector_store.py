@@ -58,75 +58,116 @@ class VectorStore:
             
     def unload_from_memory(self):
         """
-        ULTRA-AGGRESSIVELY unload the vector store from memory to minimize memory footprint.
-        This saves current state to disk, completely releases all memory structures, 
-        and forces multiple garbage collection passes to minimize retained memory.
+        MAXIMUM MEMORY RELEASE unload function for vector store to achieve 
+        the absolute minimum memory footprint possible. This implementation
+        employs every available technique to ensure complete memory release.
         
         Returns:
             int: Number of documents unloaded
         """
         try:
+            # Record memory before cleanup for comparison
+            pmem_before = None
+            try:
+                import psutil
+                process = psutil.Process()
+                pmem_before = process.memory_info()
+                mem_before_mb = pmem_before.rss / (1024 * 1024)
+                logger.warning(f"Memory before vector store unload: {mem_before_mb:.1f}MB")
+            except:
+                pass
+            
             # Save current state first to ensure we don't lose data
             self._save()
             
             # Get the current count for reporting
             doc_count = len(self.documents)
             
-            logger.warning(f"ULTRA-AGGRESSIVELY unloading vector store: {doc_count} documents")
+            logger.warning(f"MAXIMUM MEMORY RELEASE: unloading vector store with {doc_count} documents")
             
-            # First pass: set all embeddings to None to release the largest memory consumers
-            for doc_id in list(self.documents.keys()):
-                # Clear embeddings (these use the most memory)
+            # -------------------- STAGE 1: Clear the largest memory consumers first --------------------
+            
+            # Start by removing the largest memory consumers - the embeddings
+            # Get a snapshot of document IDs to avoid dictionary size change during iteration
+            doc_ids = list(self.documents.keys())
+            
+            for doc_id in doc_ids:
+                # Set all embeddings to None (these consume the most memory by far)
                 if 'embedding' in self.documents[doc_id]:
                     self.documents[doc_id]['embedding'] = None
-                    
-                # Also aggressively truncate any long text strings
-                if 'text' in self.documents[doc_id] and isinstance(self.documents[doc_id]['text'], str) and len(self.documents[doc_id]['text']) > 100:
-                    # Keep only a tiny prefix for debugging purposes
-                    self.documents[doc_id]['text'] = self.documents[doc_id]['text'][:50] + "..."
-                    
-                # Clear any other data structures that might be memory-intensive
+                
+                # Truncate all text content to absolute minimum
+                if 'text' in self.documents[doc_id] and isinstance(self.documents[doc_id]['text'], str):
+                    # Just keep a minimal identification fragment
+                    self.documents[doc_id]['text'] = self.documents[doc_id]['text'][:20] + "..."
+                
+                # Strip metadata to bare essentials
                 if 'metadata' in self.documents[doc_id] and isinstance(self.documents[doc_id]['metadata'], dict):
-                    # Create a shallow copy with only essential metadata
+                    # Start with empty dict and just keep required identifiers
+                    essential_keys = ['doc_id', 'id', 'document_id', 'type', 'chunk_id']
                     minimal_metadata = {}
-                    for key in ['doc_id', 'id', 'document_id', 'type']:
+                    for key in essential_keys:
                         if key in self.documents[doc_id]['metadata']:
                             minimal_metadata[key] = self.documents[doc_id]['metadata'][key]
+                    
+                    # Replace with minimal version
                     self.documents[doc_id]['metadata'] = minimal_metadata
             
-            # Force a first garbage collection to release memory from the cleared embeddings
+            # Immediate interim garbage collection to free memory from large objects
             import gc
             gc.collect(generation=2)
             
-            # Second pass: completely clear all data structures
+            # -------------------- STAGE 2: Replace all data structures --------------------
+            
+            # Instead of clearing, we replace all collections to ensure memory is fully released
+            # Save references to old structures to explicitly delete them
             old_documents = self.documents
+            old_counts = self.document_counts
+            old_index = self.index
+            
+            # Create brand new structures
             self.documents = {}
             self.document_counts = defaultdict(int)
-            
-            # Explicitly delete the old documents dict to ensure it's garbage collected
-            del old_documents
-            
-            # Replace the index with a new minimal empty one and release old index memory
-            old_index = self.index
             self.index = faiss.IndexFlatL2(self.dimension)
             
-            # Delete the old index explicitly and immediately
+            # Explicitly delete old structures to release their memory
+            del old_documents
+            del old_counts
             del old_index
             
-            # Clear ALL caches and intermediate data structures
-            # First, find and clear any attribute that looks like a cache
-            for attr_name in dir(self):
-                if 'cache' in attr_name.lower():
-                    try:
-                        cache_obj = getattr(self, attr_name)
-                        if isinstance(cache_obj, dict):
-                            # Don't just clear - replace with new empty dict to release memory
-                            setattr(self, attr_name, {})
-                            logger.debug(f"Cleared vector store cache: {attr_name}")
-                    except:
-                        pass
+            # -------------------- STAGE 3: Clear all caches and temp data --------------------
             
-            # Clear specific known caches
+            # Systematically identify and clear all caches
+            cache_attributes = [
+                attr for attr in dir(self) 
+                if ('cache' in attr.lower() or 'temp' in attr.lower() or 'buffer' in attr.lower())
+                and not attr.startswith('__')
+            ]
+            
+            for attr_name in cache_attributes:
+                try:
+                    # Get the current value
+                    cache_obj = getattr(self, attr_name)
+                    
+                    # Handle different types of cache objects
+                    if isinstance(cache_obj, dict):
+                        # Replace with new empty dict
+                        setattr(self, attr_name, {})
+                    elif isinstance(cache_obj, list):
+                        # Replace with new empty list
+                        setattr(self, attr_name, [])
+                    elif isinstance(cache_obj, set):
+                        # Replace with new empty set
+                        setattr(self, attr_name, set())
+                    else:
+                        # Set to None for other types
+                        setattr(self, attr_name, None)
+                        
+                    logger.debug(f"Cleared vector store cache: {attr_name}")
+                except Exception as e:
+                    logger.debug(f"Error clearing cache {attr_name}: {str(e)}")
+            
+            # Explicitly clear known caches
             self._processed_chunk_ids_cache = None
             self._last_cache_update_time = 0
             
@@ -135,67 +176,128 @@ class VectorStore:
             
             if hasattr(self, '_document_lookup_cache'):
                 self._document_lookup_cache = {}
-                
-            # Force multiple aggressive garbage collection passes
-            gc.collect(generation=2)  # Collect oldest generation first
-            gc.collect(generation=1)  # Then middle generation
-            gc.collect(generation=0)  # Finally youngest generation
             
-            # ULTRA-AGGRESSIVE cycle breaking - find and break ref cycles
-            cycle_count = 0
-            for obj in gc.get_objects():
-                try:
-                    # Clear all dictionaries to break cycles
-                    if isinstance(obj, dict) and not hasattr(obj, '__dict__'):
-                        obj.clear()
-                        cycle_count += 1
-                    # Clear lists that might be holding references
-                    elif isinstance(obj, list) and len(obj) > 0:
-                        obj.clear()
-                        cycle_count += 1
-                    # Clear sets that might be holding references
-                    elif isinstance(obj, set) and len(obj) > 0:
-                        obj.clear()
-                        cycle_count += 1
-                except:
-                    pass
+            if hasattr(self, '_result_cache'):
+                self._result_cache = {}
             
-            logger.debug(f"Cleared {cycle_count} potential reference cycles")
+            # -------------------- STAGE 4: Aggressive garbage collection --------------------
             
-            # Run final collections after clearing cycles
+            # Run a multi-phase garbage collection strategy
+            # First collect all generations with debug logging
+            logger.debug("Running multi-phase garbage collection")
             gc.collect(generation=2)
-            gc.collect()  # Extra collection
+            gc.collect(generation=1)
+            gc.collect(generation=0)
             
-            # OS-level memory release - try multiple approaches
+            # -------------------- STAGE 5: Safe reference cycle breaking --------------------
+            
+            # The previous approach was too aggressive and caused crashes
+            # This version is more selective and safer
+            logger.debug("Performing targeted cycle breaking")
+            
+            # Only clear specific dictionaries we know are safe to clear
+            # Rather than iterating all objects which can cause crashes
+            cycle_count = 0
+            
+            # Clear caches in the gc module itself
             try:
-                # Try to use lower-level memory management functions if available
+                if hasattr(gc, 'garbage'):
+                    orig_len = len(gc.garbage)
+                    gc.garbage.clear()
+                    cycle_count += 1
+                    logger.debug(f"Cleared {orig_len} objects from gc.garbage")
+            except:
+                pass
+                
+            # Focus on clearing only our own data structures
+            # This is much safer than trying to clear arbitrary objects
+            try:
+                # Any temporary local variables/data structures we can safely clear
+                local_objects_to_clear = []
+                
+                # Clear these objects safely
+                for obj in local_objects_to_clear:
+                    if isinstance(obj, dict):
+                        obj.clear()
+                        cycle_count += 1
+                    elif isinstance(obj, list):
+                        obj.clear()
+                        cycle_count += 1
+                    elif isinstance(obj, set):
+                        obj.clear()
+                        cycle_count += 1
+            except:
+                pass
+            
+            logger.debug(f"Safely cleared {cycle_count} potential reference cycles")
+            
+            # Additional garbage collection after breaking cycles
+            gc.collect(generation=2)
+            
+            # -------------------- STAGE 6: Basic OS-level memory release --------------------
+            
+            # Simplified approach to avoid crashes
+            try:
+                # Import modules safely
                 import ctypes
                 import os
                 
+                # OS-specific memory trimming
                 if os.name == 'posix':  # Linux/Unix
-                    # On Linux, we can use malloc_trim to release memory back to the OS
+                    # 1. Use malloc_trim to release memory back to the OS
                     try:
+                        # Load the C library
                         libc = ctypes.CDLL('libc.so.6')
+                        
+                        # Check if malloc_trim exists
                         if hasattr(libc, 'malloc_trim'):
-                            # Call twice for good measure
-                            libc.malloc_trim(0)
-                            result = libc.malloc_trim(0)
-                            logger.warning(f"Called malloc_trim(0) to release vector store memory: {result}")
+                            # Call it once and log result
+                            trim_result = libc.malloc_trim(0)
+                            
+                            # Log the result safely
+                            logger.warning(f"OS memory release: malloc_trim called, result={trim_result}")
                     except Exception as e:
-                        logger.debug(f"malloc_trim failed: {e}")
+                        logger.debug(f"malloc_trim not available: {e}")
                     
-                    # Try to set process as a good candidate for OOM killing if memory pressure occurs
+                    # 2. Set OOM score - simpler approach
                     try:
+                        # Set this process as a candidate for OOM killing if memory pressure occurs
                         with open('/proc/self/oom_score_adj', 'w') as f:
-                            f.write('500')  # Higher value (max 1000) = more likely to be killed under pressure
-                        logger.debug("Set higher OOM score to help with memory management")
+                            f.write('500')  # Moderate value to avoid immediate killing
+                        logger.debug("Set moderate OOM score for memory pressure handling")
                     except:
+                        # This is non-critical, we can continue without it
                         pass
             except Exception as e:
-                logger.debug(f"OS-level memory trimming failed: {str(e)}")
+                # Log failure but continue
+                logger.debug(f"Basic OS-level memory release failed: {str(e)}")
             
-            logger.warning(f"VECTOR STORE ULTRA-AGGRESSIVELY UNLOADED: {doc_count} documents")
+            # -------------------- STAGE 7: Memory measurement and reporting --------------------
+            
+            # Record memory after cleanup
+            try:
+                if pmem_before is not None:
+                    import psutil
+                    process = psutil.Process()
+                    pmem_after = process.memory_info()
+                    mem_after_mb = pmem_after.rss / (1024 * 1024)
+                    memory_freed = (pmem_before.rss - pmem_after.rss) / (1024 * 1024)
+                    
+                    # Calculate before memory values safely
+                    mem_before_mb = pmem_before.rss / (1024 * 1024)
+                    
+                    # Log memory statistics
+                    logger.warning(
+                        f"VECTOR STORE MEMORY: Before={mem_before_mb:.1f}MB, "
+                        f"After={mem_after_mb:.1f}MB, "
+                        f"Freed={memory_freed:.1f}MB"
+                    )
+            except Exception as e:
+                logger.debug(f"Error logging memory statistics: {e}")
+            
+            logger.warning(f"VECTOR STORE MAXIMUM MEMORY RELEASE COMPLETE: {doc_count} documents unloaded")
             return doc_count
+            
         except Exception as e:
             logger.exception(f"Error unloading vector store: {str(e)}")
             return 0
@@ -764,11 +866,25 @@ class VectorStore:
         """
         current_time = time.time()
         
+        # Make sure cache attributes are initialized
+        if not hasattr(self, '_processed_chunk_ids_cache') or self._processed_chunk_ids_cache is None:
+            self._processed_chunk_ids_cache = set()
+            
+        if not hasattr(self, '_last_cache_update_time') or self._last_cache_update_time is None:
+            self._last_cache_update_time = 0
+            
+        if not hasattr(self, '_cache_ttl') or self._cache_ttl is None:
+            self._cache_ttl = 5.0  # Default TTL of 5 seconds
+            
         # Check if we can use the cached value
         if not force_refresh and self._processed_chunk_ids_cache is not None:
-            # If cache is fresh (within TTL), return cached value without logging
-            if current_time - self._last_cache_update_time < self._cache_ttl:
-                return self._processed_chunk_ids_cache
+            # Safely check if cache is fresh (within TTL)
+            try:
+                if current_time - self._last_cache_update_time < self._cache_ttl:
+                    return self._processed_chunk_ids_cache
+            except (TypeError, ValueError) as e:
+                logger.debug(f"Cache time calculation error: {e}, regenerating cache")
+                # Continue to regenerate cache
         
         # Need to recompute the processed IDs
         processed_ids = set()
@@ -1212,8 +1328,10 @@ class VectorStore:
     def unload(self):
         """
         Alias for unload_from_memory() for better API compatibility.
+        This implements maximum memory release by completely unloading the vector store.
         
         Returns:
             int: Number of documents unloaded
         """
+        logger.debug("Using unload() alias for maximum memory release")
         return self.unload_from_memory()

@@ -222,6 +222,9 @@ def perform_emergency_memory_cleanup():
     
     # ----- STAGE 1: Clear all Python interpreter caches first -----
     
+    # Import sys here to fix the "sys is not defined" LSP error
+    import sys
+    
     # Clear sys module caches
     sys.path_importer_cache.clear()
     
