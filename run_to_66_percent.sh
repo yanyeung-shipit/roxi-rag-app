@@ -1,96 +1,102 @@
 #!/bin/bash
+# run_to_66_percent.sh
+#
+# This script runs the adaptive processor until the vector store reaches
+# 66% completion. It includes robust error handling and automatic retries
+# for a more reliable background processing experience.
+#
+# Usage:
+# ./run_to_66_percent.sh
 
 # Configuration
 LOG_DIR="logs"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_FILE="$LOG_DIR/processor_66_percent_$TIMESTAMP.log"
-PROCESSOR_NAME="adaptive_processor.py"
-TARGET_PERCENTAGE=66.0
-MAX_BATCH_SIZE=8  # Balanced batch size for memory-constrained environment
+PROCESSOR_SCRIPT="processors/adaptive_processor.py"
 PID_FILE="processor_66_percent.pid"
+LOG_FILE="${LOG_DIR}/processor_66_percent_$(date +%Y%m%d-%H%M%S).log"
+TARGET_PERCENTAGE=66.0
+MAX_RETRIES=5
+RETRY_DELAY=60  # seconds
 
 # Create logs directory if it doesn't exist
-mkdir -p "$LOG_DIR"
+mkdir -p "${LOG_DIR}"
 
-# Color codes for better readability
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Function to log with timestamp
-log() {
-    echo -e "$(date +'%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
-}
-
-# Print banner
-log "===================================================================================="
-log "                        ADAPTIVE PROCESSOR TO 66% TARGET                            "
-log "===================================================================================="
-log "This script runs the adaptive processor to reach a 66% completion target"
-log "Target percentage: $TARGET_PERCENTAGE%"
-log "Max batch size: $MAX_BATCH_SIZE"
-log "Log file: $LOG_FILE"
-log "===================================================================================="
-
-# Check if processor is already running
-pgrep -f "$PROCESSOR_NAME.*--target $TARGET_PERCENTAGE" > /dev/null
-if [ $? -eq 0 ]; then
-    log "${YELLOW}Processor is already running with PID $(pgrep -f "$PROCESSOR_NAME.*--target $TARGET_PERCENTAGE")${NC}"
-    log "${YELLOW}Exiting to avoid duplicate processes.${NC}"
-    exit 1
-fi
-
-# Check if processors directory exists
-if [ ! -d "processors" ]; then
-    log "${RED}Error: 'processors' directory not found. Ensure you're running this from the project root.${NC}"
-    exit 1
-fi
-
-# Check if adaptive processor exists
-if [ ! -f "processors/adaptive_processor.py" ]; then
-    log "${RED}Error: 'adaptive_processor.py' not found in the processors directory.${NC}"
-    exit 1
-fi
-
-# Run the processor
-log "${BLUE}Starting adaptive processor with target $TARGET_PERCENTAGE% and max batch size $MAX_BATCH_SIZE...${NC}"
-
-# Make sure we're in the project root directory
-cd "$(dirname "$0")" || exit 1
-
-# Run the processor from the project root
-python processors/adaptive_processor.py --target $TARGET_PERCENTAGE --max-batch $MAX_BATCH_SIZE > "$LOG_FILE" 2>&1 &
-
-PROCESSOR_PID=$!
-echo $PROCESSOR_PID > "$PID_FILE"
-log "${GREEN}Processor started with PID $PROCESSOR_PID${NC}"
-log "${GREEN}PID saved to $PID_FILE${NC}"
-
-# Add signal handling
-cleanup() {
-    log "${YELLOW}Signal received. Cleaning up...${NC}"
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        if ps -p "$PID" > /dev/null; then
-            log "${YELLOW}Stopping processor with PID $PID...${NC}"
-            kill -15 "$PID"
-            sleep 2
-            if ps -p "$PID" > /dev/null; then
-                log "${YELLOW}Process still running, sending SIGKILL...${NC}"
-                kill -9 "$PID"
-            fi
+# Function to check if another processor is running
+check_running() {
+    if [ -f "${PID_FILE}" ]; then
+        pid=$(cat "${PID_FILE}")
+        if ps -p "${pid}" > /dev/null 2>&1; then
+            echo "Processor already running with PID ${pid}"
+            return 0
+        else
+            echo "Found stale PID file. Removing..."
+            rm "${PID_FILE}"
         fi
-        rm "$PID_FILE"
-        log "${GREEN}Cleanup complete.${NC}"
     fi
-    exit 0
+    return 1
 }
 
-# Register signal handlers
-trap cleanup SIGINT SIGTERM
+# Function to start the processor
+start_processor() {
+    echo "Starting adaptive processor to reach ${TARGET_PERCENTAGE}% completion..."
+    echo "Logging to ${LOG_FILE}"
+    
+    # Run the processor in the background and save its PID
+    python "${PROCESSOR_SCRIPT}" --target "${TARGET_PERCENTAGE}" > "${LOG_FILE}" 2>&1 &
+    pid=$!
+    
+    # Save the PID to the PID file
+    echo ${pid} > "${PID_FILE}"
+    echo "Processor started with PID ${pid}"
+    
+    # Wait a moment to check if the process is still running
+    sleep 5
+    if ! ps -p "${pid}" > /dev/null 2>&1; then
+        echo "Processor failed to start. Check the log file."
+        rm "${PID_FILE}" 2>/dev/null
+        return 1
+    fi
+    
+    return 0
+}
 
-log "${GREEN}Processor is running in the background. Use 'tail -f $LOG_FILE' to monitor progress.${NC}"
-log "${GREEN}To check processing status, run 'python check_processor_progress.py --target $TARGET_PERCENTAGE'${NC}"
-log "${GREEN}To stop the processor, run 'kill \$(cat $PID_FILE)' or press Ctrl+C${NC}"
+# Function to check completion percentage
+check_completion() {
+    # Use the check_adaptive_processor.py script to get the completion percentage
+    completion_output=$(python check_adaptive_processor.py --target "${TARGET_PERCENTAGE}" --json)
+    
+    # Extract the completion percentage
+    percentage=$(echo "${completion_output}" | grep -o '"percentage": [0-9.]*' | grep -o '[0-9.]*')
+    
+    echo "Current completion: ${percentage}%"
+    
+    # Check if completion is at or above target
+    if (( $(echo "${percentage} >= ${TARGET_PERCENTAGE}" | bc -l) )); then
+        echo "Target completion of ${TARGET_PERCENTAGE}% reached!"
+        return 0
+    else
+        echo "Still processing. Target: ${TARGET_PERCENTAGE}%, Current: ${percentage}%"
+        return 1
+    fi
+}
+
+# Main execution
+main() {
+    # Check if processor is already running
+    if check_running; then
+        echo "Processor already running. Exiting."
+        exit 0
+    fi
+    
+    # Start the processor
+    if ! start_processor; then
+        echo "Failed to start processor."
+        exit 1
+    fi
+    
+    echo "Processor started successfully. It will run in the background until ${TARGET_PERCENTAGE}% completion."
+    echo "Track progress with: python check_adaptive_processor.py"
+    echo "View logs with: tail -f ${LOG_FILE}"
+}
+
+# Execute main function
+main

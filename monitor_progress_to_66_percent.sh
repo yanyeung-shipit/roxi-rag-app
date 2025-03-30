@@ -39,12 +39,18 @@ is_running() {
 }
 
 # Make sure we're in the project root directory
-cd "$(dirname "$0")" || exit 1
+PROJECT_ROOT=$(realpath "$(dirname "$0")")
+cd "$PROJECT_ROOT" || exit 1
+
+log "${BLUE}Project root directory: $PROJECT_ROOT${NC}"
+
+# Add project root to PYTHONPATH to ensure imports work correctly
+export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
 
 # Function to get current progress percentage
 get_progress() {
     if [ -f "check_processor_progress.py" ]; then
-        PROGRESS=$(python check_processor_progress.py --json | grep -o '"percentage": [0-9.]*' | cut -d' ' -f2)
+        PROGRESS=$(PYTHONPATH="$PROJECT_ROOT" python "$PROJECT_ROOT/check_processor_progress.py" --json | grep -o '"percentage": [0-9.]*' | cut -d' ' -f2)
         echo "$PROGRESS"
     else
         echo "0.0"  # Default if can't check progress
@@ -56,12 +62,12 @@ get_time_estimate() {
     if [ -f "check_processor_progress.py" ]; then
         CURRENT=$(get_progress)
         REMAINING=$(echo "$TARGET_PERCENTAGE - $CURRENT" | bc)
-        PROCESSED=$(python check_processor_progress.py --json | grep -o '"processed_chunks": [0-9]*' | cut -d' ' -f2)
-        TOTAL=$(python check_processor_progress.py --json | grep -o '"total_chunks": [0-9]*' | cut -d' ' -f2)
+        PROCESSED=$(PYTHONPATH="$PROJECT_ROOT" python "$PROJECT_ROOT/check_processor_progress.py" --json | grep -o '"processed_chunks": [0-9]*' | cut -d' ' -f2)
+        TOTAL=$(PYTHONPATH="$PROJECT_ROOT" python "$PROJECT_ROOT/check_processor_progress.py" --json | grep -o '"total_chunks": [0-9]*' | cut -d' ' -f2)
         NEEDED=$(echo "($TARGET_PERCENTAGE * $TOTAL / 100) - $PROCESSED" | bc)
         
         # Get processing rate (chunks per minute)
-        RATE=$(python check_processor_progress.py --json | grep -o '"rate_per_minute": [0-9.]*' | cut -d' ' -f2)
+        RATE=$(PYTHONPATH="$PROJECT_ROOT" python "$PROJECT_ROOT/check_processor_progress.py" --json | grep -o '"rate_per_minute": [0-9.]*' | cut -d' ' -f2)
         
         if (( $(echo "$RATE > 0" | bc -l) )); then
             # Calculate estimated minutes remaining
