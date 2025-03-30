@@ -11,6 +11,7 @@ from utils.document_processor import process_pdf
 from utils.vector_store import VectorStore
 from utils.citation_manager import extract_citation_info
 from utils.web_scraper import scrape_website, chunk_text
+from utils.resource_monitor import get_resource_data, determine_processing_mode, get_system_resources, set_processing_status
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -429,7 +430,16 @@ class BackgroundProcessor:
         logger.info("Background processing loop ended")
         
     def get_status(self):
-        """Get the current status of the background processor."""
+        """Get the current status of the background processor with resource information."""
+        # Get current resource information
+        resource_data = get_resource_data()
+        
+        # Get system resources for real-time data
+        system_resources = get_system_resources()
+        
+        # Determine optimal processing mode based on resources
+        proc_mode, batch_size, resource_limited = determine_processing_mode(system_resources)
+        
         # Count how many documents have more content to load
         try:
             session = self._create_session()
@@ -457,18 +467,90 @@ class BackgroundProcessor:
                 processed=False
             ).count()
             
+            # Count total documents and chunks in database
+            total_documents = session.query(Document).count()
+            total_chunks = session.query(DocumentChunk).count()
+            
+            # Count processed chunks in vector store
+            processed_chunks = len(self.vector_store.get_processed_chunk_ids())
+            
+            # Calculate processing metrics
+            processing_complete_percent = (processed_chunks / total_chunks * 100) if total_chunks > 0 else 0
+            
+            # Calculate estimated remaining time
+            estimated_seconds_remaining = 0
+            processing_rate = resource_data.get('processing_rate', 0)
+            
+            if processing_rate > 0:
+                remaining_chunks = total_chunks - processed_chunks
+                estimated_seconds_remaining = remaining_chunks / processing_rate
+            
+            # Format time for display
+            if estimated_seconds_remaining > 0:
+                minutes, seconds = divmod(int(estimated_seconds_remaining), 60)
+                hours, minutes = divmod(minutes, 60)
+                days, hours = divmod(hours, 24)
+                
+                if days > 0:
+                    formatted_time = f"{days}d {hours}h {minutes}m"
+                elif hours > 0:
+                    formatted_time = f"{hours}h {minutes}m"
+                else:
+                    formatted_time = f"{minutes}m {seconds}s"
+            else:
+                formatted_time = "Unknown"
+            
             session.close()
         except Exception as e:
             logger.exception(f"Error getting document counts: {str(e)}")
             waiting_documents = 0
             unprocessed_documents = 0
-            
+            total_documents = 0
+            total_chunks = 0
+            processed_chunks = 0
+            processing_complete_percent = 0
+            formatted_time = "Unknown"
+        
+        # Set current processing status in resource monitor
+        current_mode = "idle"
+        if self.running and unprocessed_documents > 0:
+            current_mode = proc_mode
+        set_processing_status(current_mode, resource_data.get('processing_rate', 0))
+        
+        # Create status object with comprehensive information
         return {
+            # Basic status
             'running': self.running,
             'last_run': self.last_run_time.isoformat() if self.last_run_time else None,
             'documents_processed': self.documents_processed,
             'unprocessed_documents': unprocessed_documents,
-            'documents_waiting_for_more_content': waiting_documents
+            'documents_waiting_for_more_content': waiting_documents,
+            
+            # Resource information
+            'system_resources': {
+                'cpu_percent': system_resources['cpu_percent'],
+                'memory_percent': system_resources['memory_percent'],
+                'memory_available_mb': system_resources['memory_available_mb'],
+                'resource_limited': resource_limited
+            },
+            
+            # Processing mode information
+            'processing_mode': {
+                'current_mode': current_mode,
+                'recommended_mode': proc_mode,
+                'recommended_batch_size': batch_size,
+                'resource_constrained': resource_limited
+            },
+            
+            # Processing progress metrics
+            'processing_metrics': {
+                'total_documents': total_documents,
+                'total_chunks': total_chunks,
+                'processed_chunks': processed_chunks,
+                'percent_complete': round(processing_complete_percent, 1),
+                'estimated_time_remaining': formatted_time,
+                'processing_rate_chunks_per_second': round(resource_data.get('processing_rate', 0), 2)
+            }
         }
 
 

@@ -1,19 +1,20 @@
 #!/bin/bash
 
 # This script is a convenience wrapper that runs the preferred 
-# batch processor from the processors directory
+# processor from the processors directory
 
-echo "ROXI Vector Store Batch Processor"
-echo "=================================="
+echo "ROXI Vector Store Processor"
+echo "==========================="
 echo ""
-echo "This script will run the most reliable batch processor"
-echo "to process document chunks up to 40% completion."
+echo "This script will run the most advanced processor"
+echo "to process document chunks efficiently."
 echo ""
-echo "Running processors/run_batch_to_40_percent.sh..."
+echo "Using the adaptive processor that automatically"
+echo "adjusts to available system resources."
 echo ""
 
 # Make it executable first (just in case)
-chmod +x processors/run_batch_to_40_percent.sh
+chmod +x run_adaptive_processor.sh
 
-# Run the processor
-./processors/run_batch_to_40_percent.sh
+# Run the adaptive processor
+./run_adaptive_processor.sh

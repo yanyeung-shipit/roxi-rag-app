@@ -1006,3 +1006,13 @@ class VectorStore:
             # Fallback to random embedding for testing
             logger.warning("Using random embedding (for testing only)")
             return np.random.rand(self.dimension).astype(np.float32)
+            
+    @property
+    def document_ids(self):
+        """
+        Get a list of all document IDs in the vector store.
+        
+        Returns:
+            list: List of all document IDs
+        """
+        return list(self.documents.keys())

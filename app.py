@@ -2052,6 +2052,36 @@ def get_background_status():
         except Exception:
             unprocessed_count = len(unprocessed_docs)
         
+        # Get vector store statistics
+        from utils.vector_store import VectorStore
+        vector_store = VectorStore()
+        vector_stats = {
+            "total_documents": 0,
+            "document_count": 0
+        }
+        
+        try:
+            # Get vector store document count
+            vector_stats["document_count"] = len(vector_store.document_ids)
+            
+            # Get processed chunk count
+            processed_chunks = len(vector_store.get_processed_chunk_ids())
+            vector_stats["processed_chunks"] = processed_chunks
+            
+            # Calculate percentage complete (from vector store and database)
+            if "processing_metrics" in processor_status and processor_status["processing_metrics"]["total_chunks"] > 0:
+                vector_stats["percent_complete"] = processor_status["processing_metrics"]["percent_complete"]
+            else:
+                # Fallback calculation
+                total_chunks = Document.query.join(DocumentChunk).count()
+                vector_stats["percent_complete"] = round((processed_chunks / total_chunks * 100) if total_chunks > 0 else 0, 1)
+        except Exception as ve:
+            logger.warning(f"Error getting vector statistics: {str(ve)}")
+            
+        # Get system resources
+        from utils.resource_monitor import get_system_resources
+        system_resources = get_system_resources()
+            
         # Return JSON response with consistent key names that match frontend expectations
         return jsonify({
             'success': True, 
@@ -2060,7 +2090,9 @@ def get_background_status():
             'unprocessed_documents': unprocessed_count,  # Return the count, not the detailed objects
             'unprocessed_document_details': unprocessed_docs,  # Detailed object list
             'total_unprocessed_count': unprocessed_count,
-            'has_pending_work': len(unprocessed_docs) > 0 or unprocessed_count > 0
+            'has_pending_work': len(unprocessed_docs) > 0 or unprocessed_count > 0,
+            'vector_store': vector_stats,  # Add vector store metrics
+            'system_resources': system_resources  # Add system resource metrics
         })
     except Exception as e:
         logger.exception(f"Error getting background processor status: {str(e)}")

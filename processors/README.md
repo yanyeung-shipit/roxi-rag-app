@@ -4,8 +4,21 @@ This directory contains our most valuable and reliable document processors for t
 
 ## Key Processors
 
+### adaptive_processor.py (RECOMMENDED)
+Our most advanced processor that automatically adapts to available system resources:
+- Dynamically adjusts batch size based on CPU and memory availability
+- Uses batch processing when resources are plentiful
+- Falls back to single-chunk processing when resources are constrained
+- Includes all the benefits of the batch processor (checkpoints, monitoring, etc.)
+- Provides detailed resource usage statistics
+
+Usage:
+```
+python processors/adaptive_processor.py --target 40.0 --max-batch 10
+```
+
 ### batch_rebuild_to_target.py
-Our most sophisticated batch processor with the following features:
+Our sophisticated batch processor with the following features:
 - Processes documents in configurable batch sizes
 - Targets a specific completion percentage
 - Includes checkpoint capabilities for resuming work
@@ -47,7 +60,8 @@ We maintain several other processors in the main directory for different use cas
 
 ## Best Practices
 
-1. For bulk processing, use `batch_rebuild_to_target.py` with appropriate batch sizes
-2. For overnight processing in Replit's resource-constrained environment, use single processors with monitoring
-3. Always check progress with `check_processor_progress.py` before and after processing
-4. Use checkpoint capabilities to resume interrupted processing
+1. For most scenarios, use `adaptive_processor.py` which automatically optimizes based on available resources
+2. For bulk processing on high-resource systems, use `batch_rebuild_to_target.py` with appropriate batch sizes
+3. For overnight processing in Replit's resource-constrained environment, use the adaptive processor
+4. Always check progress with `check_processor_progress.py` before and after processing
+5. Use checkpoint capabilities to resume interrupted processing
