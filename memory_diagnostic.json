@@ -2,16 +2,16 @@
   "memory_profile": {
     "system": {
       "total_memory_mb": 64312.6953125,
-      "available_memory_mb": 15983.64453125,
-      "used_memory_mb": 47596.5546875,
-      "memory_percent": 75.1
+      "available_memory_mb": 15286.48828125,
+      "used_memory_mb": 48293.12109375,
+      "memory_percent": 76.2
     },
     "process": {
-      "rss_mb": 15.125,
-      "vms_mb": 21.5546875,
-      "shared_mb": 7.25,
+      "rss_mb": 15.25,
+      "vms_mb": 21.55859375,
+      "shared_mb": 7.375,
       "text_mb": 0.00390625,
-      "data_mb": 9.84765625,
+      "data_mb": 9.8515625,
       "lib_mb": 0.0,
       "dirty_mb": 0.0,
       "process_percent": 0.023712270067207036
@@ -60,7 +60,7 @@
         }
       ]
     },
-    "timestamp": 1743360975.2475457
+    "timestamp": 1743361355.498255
   },
   "top_modules": [
     {
@@ -230,8 +230,8 @@
     "max_size": 2,
     "memory_limit_mb": 0.5,
     "cleanup_interval": 1,
-    "last_cleanup": 1743360976.5326862,
-    "seconds_since_cleanup": 3.790855407714844e-05
+    "last_cleanup": 1743361356.2825305,
+    "seconds_since_cleanup": 2.3126602172851562e-05
   },
   "deep_sleep": {
     "in_deep_sleep": true,
@@ -248,11 +248,11 @@
     }
   },
   "resource_monitor": {
-    "cpu_percent": 79.3,
-    "memory_percent": 75.6,
-    "memory_available_mb": 15662.4,
-    "memory_used_mb": 47917.8,
-    "last_updated": "2025-03-30T18:56:17.504270",
+    "cpu_percent": 12.8,
+    "memory_percent": 76.3,
+    "memory_available_mb": 15210.8,
+    "memory_used_mb": 48368.8,
+    "last_updated": "2025-03-30T19:02:37.069449",
     "recommended_mode": "single-chunk",
     "recommended_batch_size": 1,
     "resource_limited": true,
@@ -261,11 +261,11 @@
     "memory_trend": "stable",
     "potential_leak_detected": false,
     "last_emergency_cleanup": null,
-    "process_memory_mb": 110.4,
+    "process_memory_mb": 110.2,
     "python_memory": {
-      "rss_mb": 110.4,
+      "rss_mb": 110.2,
       "vms_mb": 446.1,
-      "shared_mb": 30.8,
+      "shared_mb": 30.6,
       "process_percent": 0.2,
       "open_files": 0,
       "thread_count": 6
