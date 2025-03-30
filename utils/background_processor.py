@@ -562,6 +562,38 @@ def is_in_deep_sleep():
         
     return _background_processor.in_deep_sleep
 
+def get_processor_status():
+    """
+    Get the current status of the background processor for monitoring.
+    
+    Returns:
+        dict: Status information about the background processor
+    """
+    global _background_processor
+    
+    if _background_processor is None:
+        return {
+            "status": "not_initialized",
+            "in_deep_sleep": False,
+            "vector_store_unloaded": True,
+            "documents_processed": 0,
+            "sleep_time": 0,
+            "last_run_time": None
+        }
+    
+    # Get status from the processor
+    return {
+        "status": "deep_sleep" if _background_processor.in_deep_sleep else "active",
+        "in_deep_sleep": _background_processor.in_deep_sleep,
+        "vector_store_unloaded": _background_processor.vector_store_unloaded,
+        "documents_processed": _background_processor.documents_processed,
+        "sleep_time": _background_processor.sleep_time,
+        "last_run_time": _background_processor.last_run_time,
+        "consecutive_idle_cycles": _background_processor.consecutive_idle_cycles,
+        "deep_sleep_threshold": _background_processor.deep_sleep_threshold,
+        "manually_activated_sleep": _background_processor.manually_activated_sleep
+    }
+
 def initialize_background_processor(batch_size=1, sleep_time=5):
     """
     Initialize and start the background processor.

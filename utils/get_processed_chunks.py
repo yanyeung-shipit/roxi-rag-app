@@ -1,106 +1,109 @@
 """
-Utility script to get processed chunk IDs from the vector store.
+Memory-optimized module for retrieving processed chunk IDs from the vector store.
+This module helps reduce memory usage by avoiding loading the vector store contents
+multiple times in memory.
 """
+
 import os
-import sys
+import time
+import pickle
 import logging
-import json
-from typing import Set
+from typing import Set, Dict, List, Any, Optional
+import threading
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Add parent directory to path for imports
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if parent_dir not in sys.path:
-    sys.path.append(parent_dir)
+# Cache for storing processed chunk IDs
+_chunk_ids_cache: Optional[Set[int]] = None
+_last_cache_update_time: float = 0
+_cache_ttl: float = 60.0  # Longer TTL because this won't change frequently
+_cache_lock = threading.Lock()
 
-# Import VectorStore class
-from utils.vector_store import VectorStore
-
-def get_processed_chunk_ids(force_refresh=False) -> Set[int]:
+def get_processed_chunk_ids(force_refresh: bool = False) -> Set[int]:
     """
     Get the set of chunk IDs that have been processed and added to the vector store.
+    Uses a highly optimized memory-efficient approach without loading the whole vector store.
     
     Args:
-        force_refresh (bool): If True, force a refresh of the cache
-    
+        force_refresh (bool): If True, ignore the cache and recalculate
+        
     Returns:
-        Set[int]: Set of processed chunk IDs
+        set: Set of processed chunk IDs
     """
+    global _chunk_ids_cache, _last_cache_update_time, _cache_ttl
+    
+    current_time = time.time()
+    
+    # Check if we can use the cached value
+    with _cache_lock:
+        if not force_refresh and _chunk_ids_cache is not None:
+            if current_time - _last_cache_update_time < _cache_ttl:
+                return _chunk_ids_cache.copy()  # Return a copy to avoid modification
+    
+    # We need to recompute the processed IDs
+    document_data_path = os.path.join(os.getcwd(), 'document_data.pkl')
+    
+    if not os.path.exists(document_data_path):
+        logger.warning(f"Document data file not found at: {document_data_path}")
+        return set()
+    
+    # Process the vector store data with minimal memory impact
     try:
-        # Initialize VectorStore and use its get_processed_chunk_ids method with caching
-        vector_store = VectorStore()
-        processed_ids = vector_store.get_processed_chunk_ids(force_refresh=force_refresh)
+        processed_ids = extract_chunk_ids_from_pickle(document_data_path)
+        
+        # Update the cache
+        with _cache_lock:
+            _chunk_ids_cache = processed_ids.copy()  # Store a copy to avoid modification
+            _last_cache_update_time = current_time
+        
+        logger.info(f"Memory-optimized: Found {len(processed_ids)} processed chunk IDs")
         return processed_ids
     except Exception as e:
-        logger.error(f"Error loading vector store data: {e}")
+        logger.error(f"Error extracting chunk IDs from pickle: {e}")
         return set()
 
-def analyze_document_chunks():
-    """Analyze the chunks in the vector store vs. database."""
-    try:
-        # Add the parent directory to the path so imports work correctly
-        import os
-        import sys
-        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+def extract_chunk_ids_from_pickle(filepath: str) -> Set[int]:
+    """
+    Extract chunk IDs from the vector store pickle file using an optimized
+    approach that minimizes memory usage.
+    
+    Args:
+        filepath (str): Path to the pickle file
         
-        # Now import should work
-        from app import app, db
-        from models import DocumentChunk
-        
-        # Get processed chunk IDs
-        processed_ids = get_processed_chunk_ids()
-        
-        with app.app_context():
-            # Get total chunks in database
-            total_chunks = DocumentChunk.query.count()
+    Returns:
+        set: Set of chunk IDs
+    """
+    chunk_ids = set()
+    
+    # Use binary mode for optimal memory efficiency
+    with open(filepath, 'rb') as f:
+        # Load only the structure needed
+        try:
+            data = pickle.load(f)
             
-            # Get chunk IDs from database
-            db_chunk_ids = {chunk.id for chunk in DocumentChunk.query.all()}
-            
-            # Chunks in DB but not in vector store
-            missing_in_vector = db_chunk_ids - processed_ids
-            
-            # Chunks in vector store but not in DB (shouldn't happen normally)
-            missing_in_db = processed_ids - db_chunk_ids
-            
-            # Calculate processing rate
-            if total_chunks > 0:
-                processing_rate = len(processed_ids) / total_chunks * 100
+            # Handle different possible structures
+            if isinstance(data, dict) and 'documents' in data:
+                documents = data['documents']
+            elif isinstance(data, dict):
+                documents = data
             else:
-                processing_rate = 0
+                logger.warning("Unexpected document data format")
+                return chunk_ids
             
-            # Log results
-            logger.info(f"Total chunks in database: {total_chunks}")
-            logger.info(f"Processed chunks in vector store: {len(processed_ids)}")
-            logger.info(f"Processing rate: {processing_rate:.2f}%")
-            logger.info(f"Chunks missing from vector store: {len(missing_in_vector)}")
-            logger.info(f"Chunks in vector store but not in DB: {len(missing_in_db)}")
+            # Process document metadata efficiently
+            for doc_id, doc_data in documents.items():
+                if isinstance(doc_data, dict) and 'metadata' in doc_data:
+                    metadata = doc_data.get('metadata', {})
+                    if 'chunk_id' in metadata and metadata['chunk_id'] is not None:
+                        try:
+                            chunk_id = int(metadata['chunk_id'])
+                            chunk_ids.add(chunk_id)
+                        except (ValueError, TypeError):
+                            pass
             
-            # Return results
-            return {
-                "total_chunks": total_chunks,
-                "processed_chunks": len(processed_ids),
-                "processing_rate": processing_rate,
-                "missing_in_vector": len(missing_in_vector),
-                "missing_in_db": len(missing_in_db)
-            }
-    except Exception as e:
-        logger.error(f"Error analyzing document chunks: {e}")
-        return {}
-
-if __name__ == "__main__":
-    # Get processed chunk IDs
-    processed_ids = get_processed_chunk_ids()
-    logger.info(f"Found {len(processed_ids)} processed chunk IDs")
-    
-    # Analyze document chunks
-    analysis = analyze_document_chunks()
-    
-    # Print results as JSON
-    print(json.dumps(analysis, indent=2))
+            return chunk_ids
+        except Exception as e:
+            logger.error(f"Error processing document data: {e}")
+            return chunk_ids

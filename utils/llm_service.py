@@ -42,6 +42,23 @@ _CACHE_MEMORY_LIMIT_MB = 0.5  # Ultra-strict 0.5MB memory limit
 # Create a last cleanup tracker
 _last_cache_cleanup_time = time.time()
 
+def get_embedding_cache_stats():
+    """
+    Get statistics about the embedding cache for diagnostic purposes.
+    
+    Returns:
+        dict: Cache statistics
+    """
+    return {
+        'entries': len(_embedding_cache),
+        'ttl_seconds': _CACHE_TTL,
+        'max_size': _MAX_CACHE_SIZE,
+        'memory_limit_mb': _CACHE_MEMORY_LIMIT_MB,
+        'cleanup_interval': _CACHE_CLEANUP_INTERVAL,
+        'last_cleanup': _last_cache_cleanup_time,
+        'seconds_since_cleanup': time.time() - _last_cache_cleanup_time
+    }
+
 def _compute_text_hash(text: str) -> str:
     """
     Compute a hash of the input text to use as a cache key.

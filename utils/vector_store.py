@@ -856,7 +856,8 @@ class VectorStore:
     def get_processed_chunk_ids(self, force_refresh=False):
         """
         Get the set of chunk IDs that have been processed and added to the vector store.
-        Uses a caching mechanism to avoid frequent recomputations.
+        This version uses a separate memory-optimized module to avoid loading 
+        the entire vector store contents multiple times.
         
         Args:
             force_refresh (bool): If True, ignore the cache and recalculate
@@ -864,49 +865,59 @@ class VectorStore:
         Returns:
             set: Set of processed chunk IDs
         """
-        current_time = time.time()
-        
-        # Make sure cache attributes are initialized
-        if not hasattr(self, '_processed_chunk_ids_cache') or self._processed_chunk_ids_cache is None:
-            self._processed_chunk_ids_cache = set()
+        try:
+            # Use the ultra-memory-optimized implementation
+            from utils.get_processed_chunks import get_processed_chunk_ids as get_optimized_chunk_ids
             
-        if not hasattr(self, '_last_cache_update_time') or self._last_cache_update_time is None:
-            self._last_cache_update_time = 0
+            # Get the processed IDs through the optimized function
+            return get_optimized_chunk_ids(force_refresh=force_refresh)
+        except ImportError:
+            # Fall back to legacy implementation if the optimized module is not available
+            logger.warning("Memory-optimized chunk ID module not available, falling back to legacy implementation")
             
-        if not hasattr(self, '_cache_ttl') or self._cache_ttl is None:
-            self._cache_ttl = 5.0  # Default TTL of 5 seconds
+            # Legacy implementation (for backward compatibility)
+            current_time = time.time()
             
-        # Check if we can use the cached value
-        if not force_refresh and self._processed_chunk_ids_cache is not None:
-            # Safely check if cache is fresh (within TTL)
-            try:
-                if current_time - self._last_cache_update_time < self._cache_ttl:
-                    return self._processed_chunk_ids_cache
-            except (TypeError, ValueError) as e:
-                logger.debug(f"Cache time calculation error: {e}, regenerating cache")
-                # Continue to regenerate cache
-        
-        # Need to recompute the processed IDs
-        processed_ids = set()
-        
-        for doc_id, doc in self.documents.items():
-            metadata = doc.get('metadata', {})
-            if 'chunk_id' in metadata and metadata['chunk_id'] is not None:
-                # Ensure it's an integer
+            # Make sure cache attributes are initialized
+            if not hasattr(self, '_processed_chunk_ids_cache') or self._processed_chunk_ids_cache is None:
+                self._processed_chunk_ids_cache = set()
+                
+            if not hasattr(self, '_last_cache_update_time') or self._last_cache_update_time is None:
+                self._last_cache_update_time = 0
+                
+            if not hasattr(self, '_cache_ttl') or self._cache_ttl is None:
+                self._cache_ttl = 1.0  # Reduced TTL for memory conservation
+                
+            # Check if we can use the cached value
+            if not force_refresh and self._processed_chunk_ids_cache is not None:
+                # Safely check if cache is fresh (within TTL)
                 try:
-                    chunk_id = int(metadata['chunk_id'])
-                    processed_ids.add(chunk_id)
-                except (ValueError, TypeError):
-                    # Skip invalid chunk IDs
-                    pass
-        
-        # Update the cache
-        self._processed_chunk_ids_cache = processed_ids
-        self._last_cache_update_time = current_time
-        
-        # Only log when we actually recompute
-        logger.info(f"Found {len(processed_ids)} processed chunk IDs in vector store")
-        return processed_ids
+                    if current_time - self._last_cache_update_time < self._cache_ttl:
+                        return self._processed_chunk_ids_cache
+                except (TypeError, ValueError) as e:
+                    logger.debug(f"Cache time calculation error: {e}, regenerating cache")
+            
+            # Need to recompute the processed IDs
+            processed_ids = set()
+            
+            for doc_id, doc in self.documents.items():
+                metadata = doc.get('metadata', {})
+                if 'chunk_id' in metadata and metadata['chunk_id'] is not None:
+                    # Ensure it's an integer
+                    try:
+                        chunk_id = int(metadata['chunk_id'])
+                        processed_ids.add(chunk_id)
+                    except (ValueError, TypeError):
+                        # Skip invalid chunk IDs
+                        pass
+            
+            # Update the cache
+            self._processed_chunk_ids_cache = processed_ids
+            self._last_cache_update_time = current_time
+            
+            # Only log when we actually recompute
+            logger.info(f"Found {len(processed_ids)} processed chunk IDs in vector store (legacy method)")
+            return processed_ids
     
     def get_stats(self):
         """

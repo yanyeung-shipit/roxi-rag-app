@@ -1,0 +1,274 @@
+{
+  "memory_profile": {
+    "system": {
+      "total_memory_mb": 64312.6953125,
+      "available_memory_mb": 15983.64453125,
+      "used_memory_mb": 47596.5546875,
+      "memory_percent": 75.1
+    },
+    "process": {
+      "rss_mb": 15.125,
+      "vms_mb": 21.5546875,
+      "shared_mb": 7.25,
+      "text_mb": 0.00390625,
+      "data_mb": 9.84765625,
+      "lib_mb": 0.0,
+      "dirty_mb": 0.0,
+      "process_percent": 0.023712270067207036
+    },
+    "python": {
+      "object_counts": {
+        "str": 0,
+        "dict": 1304,
+        "list": 293,
+        "set": 77,
+        "tuple": 1318
+      },
+      "total_objects": 12653,
+      "garbage_collector": [
+        {
+          "collections": 25,
+          "collected": 431,
+          "uncollectable": 0
+        },
+        {
+          "collections": 2,
+          "collected": 46,
+          "uncollectable": 0
+        },
+        {
+          "collections": 1,
+          "collected": 0,
+          "uncollectable": 0
+        }
+      ],
+      "malloc_stats": [
+        {
+          "collections": 25,
+          "collected": 431,
+          "uncollectable": 0
+        },
+        {
+          "collections": 2,
+          "collected": 46,
+          "uncollectable": 0
+        },
+        {
+          "collections": 1,
+          "collected": 0,
+          "uncollectable": 0
+        }
+      ]
+    },
+    "timestamp": 1743360975.2475457
+  },
+  "top_modules": [
+    {
+      "module": "os",
+      "object_count": 387,
+      "size_estimate_kb": 27.255859375
+    },
+    {
+      "module": "locale",
+      "object_count": 124,
+      "size_estimate_kb": 23.5068359375
+    },
+    {
+      "module": "dis",
+      "object_count": 89,
+      "size_estimate_kb": 22.0966796875
+    },
+    {
+      "module": "socket",
+      "object_count": 427,
+      "size_estimate_kb": 20.7685546875
+    },
+    {
+      "module": "sys",
+      "object_count": 97,
+      "size_estimate_kb": 19.1064453125
+    },
+    {
+      "module": "posix",
+      "object_count": 320,
+      "size_estimate_kb": 18.4521484375
+    },
+    {
+      "module": "tokenize",
+      "object_count": 144,
+      "size_estimate_kb": 18.26953125
+    },
+    {
+      "module": "inspect",
+      "object_count": 166,
+      "size_estimate_kb": 18.240234375
+    },
+    {
+      "module": "re._parser",
+      "object_count": 138,
+      "size_estimate_kb": 15.16796875
+    },
+    {
+      "module": "typing",
+      "object_count": 197,
+      "size_estimate_kb": 14.4052734375
+    },
+    {
+      "module": "re",
+      "object_count": 61,
+      "size_estimate_kb": 12.9033203125
+    },
+    {
+      "module": "_socket",
+      "object_count": 393,
+      "size_estimate_kb": 11.4892578125
+    },
+    {
+      "module": "psutil",
+      "object_count": 146,
+      "size_estimate_kb": 10.9609375
+    },
+    {
+      "module": "psutil._pslinux",
+      "object_count": 113,
+      "size_estimate_kb": 10.55859375
+    },
+    {
+      "module": "opcode",
+      "object_count": 29,
+      "size_estimate_kb": 10.34375
+    },
+    {
+      "module": "re._compiler",
+      "object_count": 138,
+      "size_estimate_kb": 9.798828125
+    },
+    {
+      "module": "encodings",
+      "object_count": 20,
+      "size_estimate_kb": 9.3984375
+    },
+    {
+      "module": "logging",
+      "object_count": 107,
+      "size_estimate_kb": 9.16015625
+    },
+    {
+      "module": "site",
+      "object_count": 41,
+      "size_estimate_kb": 9.1337890625
+    },
+    {
+      "module": "operator",
+      "object_count": 111,
+      "size_estimate_kb": 8.8681640625
+    },
+    {
+      "module": "encodings.aliases",
+      "object_count": 9,
+      "size_estimate_kb": 8.3876953125
+    },
+    {
+      "module": "psutil._common",
+      "object_count": 129,
+      "size_estimate_kb": 8.3583984375
+    },
+    {
+      "module": "base64",
+      "object_count": 59,
+      "size_estimate_kb": 8.341796875
+    },
+    {
+      "module": "importlib._bootstrap",
+      "object_count": 60,
+      "size_estimate_kb": 7.826171875
+    },
+    {
+      "module": "importlib._bootstrap",
+      "object_count": 60,
+      "size_estimate_kb": 7.826171875
+    },
+    {
+      "module": "posixpath",
+      "object_count": 55,
+      "size_estimate_kb": 7.8212890625
+    },
+    {
+      "module": "posixpath",
+      "object_count": 55,
+      "size_estimate_kb": 7.8212890625
+    },
+    {
+      "module": "importlib._bootstrap_external",
+      "object_count": 77,
+      "size_estimate_kb": 7.80078125
+    },
+    {
+      "module": "importlib._bootstrap_external",
+      "object_count": 77,
+      "size_estimate_kb": 7.80078125
+    },
+    {
+      "module": "codecs",
+      "object_count": 92,
+      "size_estimate_kb": 7.2919921875
+    }
+  ],
+  "vector_store": {
+    "documents_loaded": false,
+    "stats": {
+      "total_documents": 0,
+      "chunks": 0,
+      "websites": 0,
+      "pdfs": 0
+    },
+    "metadata_keys": []
+  },
+  "embedding_cache": {
+    "entries": 0,
+    "ttl_seconds": 1,
+    "max_size": 2,
+    "memory_limit_mb": 0.5,
+    "cleanup_interval": 1,
+    "last_cleanup": 1743360976.5326862,
+    "seconds_since_cleanup": 3.790855407714844e-05
+  },
+  "deep_sleep": {
+    "in_deep_sleep": true,
+    "status": {
+      "status": "deep_sleep",
+      "in_deep_sleep": true,
+      "vector_store_unloaded": true,
+      "documents_processed": 0,
+      "sleep_time": 10,
+      "last_run_time": null,
+      "consecutive_idle_cycles": 10,
+      "deep_sleep_threshold": 10,
+      "manually_activated_sleep": true
+    }
+  },
+  "resource_monitor": {
+    "cpu_percent": 79.3,
+    "memory_percent": 75.6,
+    "memory_available_mb": 15662.4,
+    "memory_used_mb": 47917.8,
+    "last_updated": "2025-03-30T18:56:17.504270",
+    "recommended_mode": "single-chunk",
+    "recommended_batch_size": 1,
+    "resource_limited": true,
+    "processing_rate": 0.0,
+    "processing_mode": "idle",
+    "memory_trend": "stable",
+    "potential_leak_detected": false,
+    "last_emergency_cleanup": null,
+    "process_memory_mb": 110.4,
+    "python_memory": {
+      "rss_mb": 110.4,
+      "vms_mb": 446.1,
+      "shared_mb": 30.8,
+      "process_percent": 0.2,
+      "open_files": 0,
+      "thread_count": 6
+    }
+  }
+}

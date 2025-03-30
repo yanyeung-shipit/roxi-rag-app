@@ -1,0 +1,68 @@
+{
+  "timestamp": "2025-03-30 18:56:12",
+  "memory": {
+    "system": {
+      "total": "62.81 GB",
+      "available": "16.07 GB",
+      "used": "46.02 GB",
+      "percent": 74.4
+    },
+    "process": {
+      "rss": "16.50 MB",
+      "vms": "22.38 MB",
+      "process_percent": 0.0256558987612404
+    }
+  },
+  "process": {
+    "pid": 22890,
+    "name": "python",
+    "cpu_percent": 0.0,
+    "threads": 1,
+    "open_files": 0,
+    "create_time": "2025-03-30 18:56:12"
+  },
+  "system": {
+    "cpu_count": 8,
+    "cpu_percent": 70.1,
+    "boot_time": "2025-03-28 15:32:55"
+  },
+  "python_objects": {
+    "str": 0,
+    "dict": 1384,
+    "list": 334,
+    "set": 77,
+    "tuple": 1451,
+    "total": 13432
+  },
+  "memory_leak_check": {
+    "object_count_changes": "No changes detected",
+    "garbage_objects": 0,
+    "potential_leak": false
+  },
+  "vector_store": {
+    "total_documents": 0,
+    "chunks": 0,
+    "websites": 0,
+    "pdfs": 0
+  },
+  "background_processor": {
+    "status": "deep_sleep",
+    "in_deep_sleep": true,
+    "vector_store_unloaded": true,
+    "documents_processed": 0,
+    "sleep_time": 10,
+    "last_run_time": null,
+    "consecutive_idle_cycles": 10,
+    "deep_sleep_threshold": 10,
+    "manually_activated_sleep": true
+  },
+  "embedding_cache": {
+    "entries": 0,
+    "ttl_seconds": 1,
+    "max_size": 2,
+    "memory_limit_mb": 0.5,
+    "cleanup_interval": 1,
+    "last_cleanup": 1743360974.8293881,
+    "seconds_since_cleanup": 3.695487976074219e-05
+  }
+}
