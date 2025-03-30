@@ -77,8 +77,9 @@ def check_progress(json_output=False):
             result = {
                 "total_chunks": total_chunks,
                 "processed_chunks": processed_count,
-                "percentage_complete": round(percentage, 2),
+                "percentage": round(percentage, 2),  # Changed key name to match what the shell script expects
                 "remaining_chunks": total_chunks - processed_count,
+                "target_percentage": 50.0,  # Add target percentage for the shell script
                 "timestamp": None  # Will be filled in when converted to JSON
             }
             
@@ -90,6 +91,7 @@ def check_progress(json_output=False):
             else:
                 logger.info(f"Progress: {processed_count}/{total_chunks} chunks ({percentage:.2f}%)")
                 logger.info(f"Remaining: {total_chunks - processed_count} chunks")
+                logger.info(f"Target: 50.0% ({int(total_chunks * 0.5)} chunks)")
             
             return result
     

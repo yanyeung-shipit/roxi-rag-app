@@ -1,289 +1,362 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
-Process chunks until reaching a target percentage of total chunks.
-This script handles the process in batches for efficiency.
+Process chunks until 50% target is reached
 
-Usage:
-    python process_to_50_percent.py [--batch-size=10] [--target-percentage=50.0]
+This script processes document chunks in batches until 50% of the total chunks are processed.
+It includes automatic backups and progress tracking.
 """
 
 import os
 import sys
 import time
+import random
 import logging
-import datetime
-import argparse
-from typing import Dict, Any, List, Set
-
-# Parse command line arguments
-parser = argparse.ArgumentParser(description='Process chunks to target percentage')
-parser.add_argument('--batch-size', type=int, default=10, help='Number of chunks to process per batch')
-parser.add_argument('--target-percentage', type=float, default=50.0, help='Target percentage of chunks to process')
-args = parser.parse_args()
-
-# Make sure the logs directory exists
-os.makedirs("logs", exist_ok=True)
+import pickle
+import signal
+import atexit
+from datetime import datetime
+from typing import Dict, Any, List, Set, Optional, Tuple, Union
 
 # Configure logging
-log_filename = f"logs/process_to_50_percent_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(log_filename),
-        logging.StreamHandler()
+        logging.FileHandler("process_to_50_percent.log"),
+        logging.StreamHandler(sys.stdout)
     ]
 )
+
 logger = logging.getLogger(__name__)
 
-# Initialize Flask app context
-from app import app, db
-from models import DocumentChunk
-from utils.vector_store import VectorStore
+# Configuration
+TARGET_PERCENTAGE = 50.0  # Process until 50% of chunks are processed
+BATCH_SIZE = 5  # Number of chunks to process in a batch
+MAX_RETRIES = 3  # Maximum number of retries for a chunk
+BACKUP_INTERVAL = 20  # Number of chunks to process before making a backup
+DELAY_BETWEEN_BATCHES = 5  # Seconds to wait between batches
+PID_FILE = "process_50_percent.pid"  # PID file to check if process is running
 
-# Constants
-TARGET_PERCENTAGE = args.target_percentage
-BATCH_SIZE = args.batch_size
-MAX_BATCHES = 1000  # Increased safety limit for longer runs
+# Import necessary modules
+try:
+    sys.path.append('.')
+    from utils.vector_store import VectorStore
+    from utils.llm_service import get_embedding
+    from models import DocumentChunk, Document, db
+except ImportError as e:
+    logger.error(f"Failed to import modules: {e}")
+    sys.exit(1)
 
-def get_progress():
-    """Get current progress of vector store rebuilding."""
-    with app.app_context():
-        # Get total chunks in database
-        total_chunks = db.session.query(DocumentChunk).count()
-        
-        try:
-            # Get processed chunks from vector store
-            vector_store = VectorStore()
-            
-            # Force load if vector store is in sleep mode
-            if not hasattr(vector_store, 'documents') or vector_store.documents is None:
-                logger.info("Vector store is in sleep mode, loading from disk")
-                vector_store.load()
-                
-            processed_chunks = len(vector_store.documents)
-        except Exception as e:
-            logger.error(f"Error getting processed chunks: {str(e)}")
-            # Fallback to a safer method by counting the documents in the vector store file
-            try:
-                import pickle
-                with open("document_data.pkl", "rb") as f:
-                    documents = pickle.load(f)
-                processed_chunks = len(documents)
-                logger.info(f"Fallback method found {processed_chunks} processed chunks")
-            except Exception as fallback_error:
-                logger.error(f"Fallback method failed: {str(fallback_error)}")
-                processed_chunks = 0
-        
-        # Calculate percentage
-        percentage = round((processed_chunks / total_chunks) * 100, 1) if total_chunks > 0 else 0
-        
-        return {
-            "total_chunks": total_chunks,
-            "processed_chunks": processed_chunks,
-            "percentage": percentage,
-            "remaining_chunks": total_chunks - processed_chunks
-        }
 
-def get_unprocessed_chunks(batch_size):
-    """Get a batch of unprocessed chunks."""
+def write_pid_file():
+    """Write the current process ID to a file."""
+    with open(PID_FILE, 'w') as f:
+        f.write(str(os.getpid()))
+
+
+def remove_pid_file():
+    """Remove the PID file when the process exits."""
+    if os.path.exists(PID_FILE):
+        os.remove(PID_FILE)
+
+
+def get_processed_chunk_ids() -> Set[int]:
+    """
+    Get IDs of chunks that have already been processed.
+    
+    Returns:
+        Set of chunk IDs that are already in the vector store
+    """
     try:
-        # Initialize vector store
         vector_store = VectorStore()
+        processed_ids = set()
         
-        # Make sure vector store is loaded
-        if not hasattr(vector_store, 'documents') or vector_store.documents is None:
-            logger.info("Vector store is in sleep mode, loading from disk for chunk ID retrieval")
-            vector_store.load()
-            
-        # Get processed chunk IDs safely
-        try:
-            processed_ids = vector_store.get_processed_chunk_ids()
-            if not processed_ids:
-                logger.warning("No processed IDs found, using utils.get_processed_chunks as fallback")
-                from utils.get_processed_chunks import get_processed_chunk_ids
-                processed_ids = get_processed_chunk_ids()
-        except Exception as e:
-            logger.error(f"Error getting processed chunk IDs: {str(e)}")
-            processed_ids = []
-            
-        # Log the number of processed IDs found
-        logger.info(f"Found {len(processed_ids)} processed chunk IDs")
+        if vector_store and hasattr(vector_store, 'documents'):
+            for doc_id, doc in vector_store.documents.items():
+                chunk_id = doc.get('metadata', {}).get('chunk_id')
+                if chunk_id:
+                    processed_ids.add(int(chunk_id))
         
-        with app.app_context():
-            # Get a sample of unprocessed chunks
-            if processed_ids:
-                # Use join to eagerly load document relationship
-                chunks = db.session.query(DocumentChunk).options(
-                    db.joinedload(DocumentChunk.document)
-                ).filter(
-                    ~DocumentChunk.id.in_(processed_ids)
-                ).order_by(DocumentChunk.id).limit(batch_size).all()
-            else:
-                # If we couldn't get processed IDs, just get the first chunks
-                chunks = db.session.query(DocumentChunk).options(
-                    db.joinedload(DocumentChunk.document)
-                ).order_by(DocumentChunk.id).limit(batch_size).all()
-            
-            logger.info(f"Retrieved {len(chunks)} unprocessed chunks")
-            return chunks
+        logger.info(f"Found {len(processed_ids)} processed chunk IDs in vector store")
+        return processed_ids
     except Exception as e:
-        logger.error(f"Error getting unprocessed chunks: {str(e)}")
+        logger.error(f"Error getting processed chunk IDs: {e}")
+        return set()
+
+
+def get_total_chunks_count() -> int:
+    """
+    Get the total number of chunks in the database.
+    
+    Returns:
+        Total number of chunks
+    """
+    try:
+        from app import app
+        with app.app_context():
+            return db.session.query(DocumentChunk).count()
+    except Exception as e:
+        logger.error(f"Error getting total chunks count: {e}")
+        return 0
+
+
+def get_progress() -> Dict[str, Any]:
+    """
+    Get the current progress of processing.
+    
+    Returns:
+        Dictionary with progress information
+    """
+    processed_ids = get_processed_chunk_ids()
+    total_chunks = get_total_chunks_count()
+    
+    if total_chunks == 0:
+        percentage = 0.0
+    else:
+        percentage = (len(processed_ids) / total_chunks) * 100.0
+    
+    return {
+        'processed_chunks': len(processed_ids),
+        'total_chunks': total_chunks,
+        'percentage': percentage,
+        'target_percentage': TARGET_PERCENTAGE
+    }
+
+
+def get_next_chunk_batch(processed_ids: Set[int], batch_size: int = BATCH_SIZE) -> List[DocumentChunk]:
+    """
+    Get the next batch of chunks to process.
+    
+    Args:
+        processed_ids: Set of chunk IDs that have already been processed
+        batch_size: Number of chunks to retrieve
+        
+    Returns:
+        List of DocumentChunk objects
+    """
+    try:
+        from app import app
+        with app.app_context():
+            # Query for chunks that haven't been processed yet
+            unprocessed_chunks = (
+                db.session.query(DocumentChunk)
+                .filter(~DocumentChunk.id.in_(processed_ids))
+                .limit(batch_size)
+                .all()
+            )
+            
+            logger.info(f"Retrieved {len(unprocessed_chunks)} unprocessed chunks")
+            return unprocessed_chunks
+    except Exception as e:
+        logger.error(f"Error getting next chunk batch: {e}")
         return []
 
-def process_chunk(chunk, vector_store):
-    """Process a single chunk and add it to vector store."""
+
+def backup_vector_store():
+    """
+    Create a backup of the vector store.
+    
+    Returns:
+        True if successful, False otherwise
+    """
     try:
-        # Create safe version of metadata
-        chunk_id = chunk.id
-        document_id = chunk.document_id
-        chunk_index = chunk.chunk_index
-        text_content = chunk.text_content
-        
-        # Safe document properties
-        document_filename = ""
-        document_title = ""
-        formatted_citation = None
-        document_doi = None
-        
-        # Extract document properties safely
-        if hasattr(chunk, 'document') and chunk.document:
-            document = chunk.document
-            document_filename = document.filename or ""
-            document_title = document.title or ""
-            
-            if hasattr(document, 'formatted_citation'):
-                formatted_citation = document.formatted_citation
-                
-            if hasattr(document, 'doi'):
-                document_doi = document.doi
-        
-        # Create metadata
-        metadata = {
-            "chunk_id": chunk_id,
-            "db_id": chunk_id,  # Include both for compatibility
-            "document_id": document_id,
-            "source_type": "pdf",  # Default value
-            "chunk_index": chunk_index,
-            "filename": document_filename,
-            "title": document_title
-        }
-        
-        # Add citation information if available
-        if formatted_citation:
-            metadata["citation"] = formatted_citation
-        if document_doi:
-            metadata["doi"] = document_doi
-        
-        # Add to vector store
-        vector_store.add_text(text_content, metadata=metadata)
-        
+        os.system("python backup_vector_store.py")
+        logger.info("Created vector store backup")
         return True
     except Exception as e:
-        logger.error(f"Error processing chunk {chunk.id}: {str(e)}")
+        logger.error(f"Error creating vector store backup: {e}")
         return False
 
-def main():
-    """Main function to process chunks until target percentage."""
+
+def process_chunk(chunk: DocumentChunk) -> bool:
+    """
+    Process a single chunk and add it to the vector store.
+    
+    Args:
+        chunk: The DocumentChunk object to process
+        
+    Returns:
+        True if successful, False otherwise
+    """
     try:
-        logger.info("Initializing vector store")
+        # Initialize services
         vector_store = VectorStore()
         
-        # Get initial progress
-        logger.info("Calculating initial progress")
-        progress = get_progress()
-        logger.info(f"Starting batch processing to reach {TARGET_PERCENTAGE}%")
-        logger.info(f"Initial progress: {progress['percentage']}% "
-                   f"({progress['processed_chunks']}/{progress['total_chunks']} chunks)")
+        # Get text from chunk
+        text = chunk.text_content
+        if not text:
+            logger.warning(f"Empty text for chunk ID {chunk.id}, skipping")
+            return False
         
-        # Process in batches until target reached
-        batches_processed = 0
-        chunks_processed = 0
-        consecutive_failures = 0
-        max_consecutive_failures = 3
+        # Get metadata
+        document = chunk.document
+        if not document:
+            logger.warning(f"No document found for chunk ID {chunk.id}, skipping")
+            return False
         
-        while progress["percentage"] < TARGET_PERCENTAGE and batches_processed < MAX_BATCHES:
-            try:
-                # Get next batch
-                logger.info(f"Fetching batch {batches_processed + 1}")
-                chunks = get_unprocessed_chunks(BATCH_SIZE)
-                
-                if not chunks:
-                    logger.info("No more chunks to process")
-                    break
-                
-                # Process the batch
-                logger.info(f"Processing batch {batches_processed + 1} with {len(chunks)} chunks")
-                batch_success = 0
-                
-                for chunk in chunks:
-                    try:
-                        logger.info(f"Processing chunk {chunk.id}")
-                        success = process_chunk(chunk, vector_store)
-                        
-                        if success:
-                            batch_success += 1
-                            chunks_processed += 1
-                            consecutive_failures = 0
-                            logger.info(f"Successfully processed chunk {chunk.id}")
-                        else:
-                            logger.error(f"Failed to process chunk {chunk.id}")
-                            consecutive_failures += 1
-                    except Exception as e:
-                        logger.error(f"Error processing chunk {chunk.id}: {str(e)}")
-                        consecutive_failures += 1
-                        
-                    # If too many consecutive failures, save and take a break
-                    if consecutive_failures >= max_consecutive_failures:
-                        logger.warning(f"Too many consecutive failures ({consecutive_failures}), saving and pausing")
-                        vector_store.save()
-                        logger.info("Vector store saved during error recovery")
-                        time.sleep(5)  # Take a short break
-                        consecutive_failures = 0
-                
-                # Save vector store after each batch
-                logger.info("Saving vector store")
-                vector_store.save()
-                logger.info(f"Saved vector store after processing batch {batches_processed + 1}")
-                
-                # Update progress
-                batches_processed += 1
-                progress = get_progress()
-                
-                # Log progress
-                logger.info(f"Batch {batches_processed} completed: "
-                          f"{batch_success}/{len(chunks)} chunks successful")
-                logger.info(f"Progress: {progress['percentage']}% "
-                          f"({progress['processed_chunks']}/{progress['total_chunks']} chunks)")
-                
-                # Check if target reached
-                if progress["percentage"] >= TARGET_PERCENTAGE:
-                    logger.info(f"Target percentage of {TARGET_PERCENTAGE}% reached!")
-                    break
-                    
-                # Short pause between batches to prevent API rate limits
-                time.sleep(1)
-                
-            except Exception as batch_error:
-                logger.error(f"Error processing batch: {str(batch_error)}")
-                time.sleep(5)  # Take a break before trying the next batch
+        metadata = {
+            'document_id': document.id,
+            'chunk_id': chunk.id,
+            'url': document.source_url,
+            'title': document.title,
+            'author': document.authors,
+            'publication_year': document.publication_year,
+            'doi': document.doi,
+            'chunk_index': chunk.chunk_index
+        }
         
-        # Final progress
-        progress = get_progress()
-        logger.info(f"Processing completed")
-        logger.info(f"Final progress: {progress['percentage']}% "
-                   f"({progress['processed_chunks']}/{progress['total_chunks']} chunks)")
-        logger.info(f"Processed {chunks_processed} chunks in {batches_processed} batches")
-    
+        # Generate embedding
+        embedding = get_embedding(text)
+        if embedding is None:
+            logger.error(f"Failed to generate embedding for chunk ID {chunk.id}")
+            return False
+        
+        # Add to vector store 
+        doc_id = vector_store.add_embedding(text, embedding, metadata)
+        if not doc_id:
+            logger.error(f"Failed to add chunk ID {chunk.id} to vector store")
+            return False
+        
+        # Save the vector store
+        vector_store.save()
+        
+        logger.info(f"Successfully processed chunk ID {chunk.id}")
+        return True
     except Exception as e:
-        logger.critical(f"Critical error in main processing loop: {str(e)}")
-        # Try to save vector store if it was initialized
-        try:
-            if 'vector_store' in locals():
-                vector_store.save()
-                logger.info("Vector store saved during error recovery")
-        except Exception as save_error:
-            logger.error(f"Could not save vector store during error recovery: {str(save_error)}")
+        logger.error(f"Error processing chunk ID {chunk.id}: {e}")
+        return False
+
+
+def process_batch(chunks: List[DocumentChunk]) -> Dict[str, Any]:
+    """
+    Process a batch of chunks.
+    
+    Args:
+        chunks: List of DocumentChunk objects to process
+        
+    Returns:
+        Dictionary with processing results
+    """
+    results = {
+        'total': len(chunks),
+        'successful': 0,
+        'failed': 0,
+        'details': []
+    }
+    
+    for chunk in chunks:
+        success = False
+        retries = 0
+        
+        while not success and retries < MAX_RETRIES:
+            if retries > 0:
+                logger.info(f"Retrying chunk ID {chunk.id} (attempt {retries+1})")
+                time.sleep(random.uniform(1, 3))  # Random backoff
+            
+            success = process_chunk(chunk)
+            retries += 1
+        
+        if success:
+            results['successful'] += 1
+            results['details'].append({
+                'chunk_id': chunk.id,
+                'success': True,
+                'retries': retries
+            })
+        else:
+            results['failed'] += 1
+            results['details'].append({
+                'chunk_id': chunk.id,
+                'success': False,
+                'retries': retries
+            })
+    
+    return results
+
+
+def run_until_target() -> bool:
+    """
+    Process chunks in batches until the target percentage is reached.
+    
+    Returns:
+        True if target reached successfully, False otherwise
+    """
+    processed_count = 0
+    
+    while True:
+        # Get current progress
+        progress = get_progress()
+        logger.info(f"Current progress: {progress['percentage']:.2f}% ({progress['processed_chunks']}/{progress['total_chunks']})")
+        
+        # Check if target reached
+        if progress['percentage'] >= TARGET_PERCENTAGE:
+            logger.info(f"🎉 Target percentage {TARGET_PERCENTAGE}% reached! Processing complete.")
+            return True
+        
+        # Get next batch of chunks
+        processed_ids = get_processed_chunk_ids()
+        chunks = get_next_chunk_batch(processed_ids)
+        
+        if not chunks:
+            logger.warning("No more chunks to process, but target not reached")
+            return False
+        
+        # Process batch
+        logger.info(f"Processing batch of {len(chunks)} chunks")
+        results = process_batch(chunks)
+        logger.info(f"Batch results: {results['successful']} successful, {results['failed']} failed")
+        
+        # Update processed count
+        processed_count += results['successful']
+        
+        # Create backup if needed
+        if processed_count % BACKUP_INTERVAL == 0:
+            backup_vector_store()
+        
+        # Delay between batches
+        time.sleep(DELAY_BETWEEN_BATCHES)
+
+
+def handle_exit(*args):
+    """Handle exit signals by creating a final backup."""
+    logger.info("Received exit signal, creating final backup...")
+    backup_vector_store()
+    remove_pid_file()
+    logger.info("Final backup created, exiting")
+    sys.exit(0)
+
+
+def main():
+    """Main function to run the processing."""
+    logger.info(f"Starting processing to {TARGET_PERCENTAGE}% target")
+    
+    # Register signal handlers
+    signal.signal(signal.SIGINT, handle_exit)
+    signal.signal(signal.SIGTERM, handle_exit)
+    atexit.register(remove_pid_file)
+    
+    # Write PID file
+    write_pid_file()
+    
+    # Create initial backup
+    backup_vector_store()
+    
+    # Run until target reached
+    success = run_until_target()
+    
+    # Create final backup
+    backup_vector_store()
+    
+    # Remove PID file
+    remove_pid_file()
+    
+    if success:
+        logger.info("Processing completed successfully")
+        return 0
+    else:
+        logger.warning("Processing finished but target not reached")
+        return 1
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

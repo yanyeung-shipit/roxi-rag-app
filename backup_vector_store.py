@@ -7,11 +7,10 @@ It uses both a daily backup cycle and a separate versioned backup system.
 """
 
 import os
-import sys
 import shutil
-import logging
-import time
 from datetime import datetime
+import logging
+import sys
 
 # Configure logging
 logging.basicConfig(
@@ -28,17 +27,18 @@ logger = logging.getLogger(__name__)
 # Configuration
 VECTOR_FILES = ['document_data.pkl', 'faiss_index.bin']
 BACKUP_DIR = './backups'
-DAILY_BACKUP_DIR = os.path.join(BACKUP_DIR, 'daily')
 VERSION_BACKUP_DIR = os.path.join(BACKUP_DIR, 'versions')
-MAX_DAILY_BACKUPS = 7  # Keep one week of daily backups
-MAX_VERSION_BACKUPS = 10  # Keep 10 version backups
+DAILY_BACKUP_DIR = os.path.join(BACKUP_DIR, 'daily')
+MAX_DAILY_BACKUPS = 7   # Keep at most 7 daily backups
+MAX_VERSION_BACKUPS = 30  # Keep at most 30 version backups
 
 
 def ensure_backup_dirs():
     """Create backup directories if they don't exist."""
-    os.makedirs(DAILY_BACKUP_DIR, exist_ok=True)
-    os.makedirs(VERSION_BACKUP_DIR, exist_ok=True)
-    logger.info(f"Backup directories created/verified: {BACKUP_DIR}")
+    for directory in [BACKUP_DIR, VERSION_BACKUP_DIR, DAILY_BACKUP_DIR]:
+        if not os.path.exists(directory):
+            os.makedirs(directory, exist_ok=True)
+            logger.info(f"Created backup directory: {directory}")
 
 
 def get_timestamp():
@@ -48,27 +48,21 @@ def get_timestamp():
 
 def create_daily_backup():
     """Create a daily backup of vector store files."""
-    today = datetime.now().strftime('%Y%m%d')
-    backup_path_base = os.path.join(DAILY_BACKUP_DIR, today)
-    
-    # Check if we already have a backup for today
-    if any(f.startswith(today) for f in os.listdir(DAILY_BACKUP_DIR)):
-        logger.info(f"Daily backup for {today} already exists, skipping")
-        return False
+    # Use date only for daily backups
+    date_str = datetime.now().strftime('%Y%m%d')
     
     success = True
     for file in VECTOR_FILES:
-        if not os.path.exists(file):
-            logger.warning(f"Vector store file {file} does not exist, skipping")
-            success = False
-            continue
-        
-        backup_path = f"{backup_path_base}_{file}"
-        try:
-            shutil.copy2(file, backup_path)
-            logger.info(f"Created daily backup: {backup_path}")
-        except Exception as e:
-            logger.error(f"Failed to create daily backup for {file}: {e}")
+        if os.path.exists(file):
+            dest = os.path.join(DAILY_BACKUP_DIR, f"{date_str}_{file}")
+            try:
+                shutil.copy2(file, dest)
+                logger.info(f"Created daily backup: {dest}")
+            except Exception as e:
+                logger.error(f"Failed to create daily backup for {file}: {e}")
+                success = False
+        else:
+            logger.warning(f"Source file {file} does not exist, skipping daily backup")
             success = False
     
     return success
@@ -77,21 +71,19 @@ def create_daily_backup():
 def create_version_backup():
     """Create a versioned backup of vector store files."""
     timestamp = get_timestamp()
-    backup_path_base = os.path.join(VERSION_BACKUP_DIR, timestamp)
     
     success = True
     for file in VECTOR_FILES:
-        if not os.path.exists(file):
-            logger.warning(f"Vector store file {file} does not exist, skipping")
-            success = False
-            continue
-        
-        backup_path = f"{backup_path_base}_{file}"
-        try:
-            shutil.copy2(file, backup_path)
-            logger.info(f"Created version backup: {backup_path}")
-        except Exception as e:
-            logger.error(f"Failed to create version backup for {file}: {e}")
+        if os.path.exists(file):
+            dest = os.path.join(VERSION_BACKUP_DIR, f"{timestamp}_{file}")
+            try:
+                shutil.copy2(file, dest)
+                logger.info(f"Created version backup: {dest}")
+            except Exception as e:
+                logger.error(f"Failed to create version backup for {file}: {e}")
+                success = False
+        else:
+            logger.warning(f"Source file {file} does not exist, skipping version backup")
             success = False
     
     return success
@@ -100,62 +92,87 @@ def create_version_backup():
 def clean_old_backups():
     """Remove old backups to save space."""
     # Clean old daily backups
-    daily_backups = []
-    for file in os.listdir(DAILY_BACKUP_DIR):
-        # Group files by date part
-        date_part = file.split('_')[0]
-        if date_part not in [item[0] for item in daily_backups]:
-            daily_backups.append((date_part, os.path.join(DAILY_BACKUP_DIR, file)))
-    
-    # Sort by date (newest first)
-    daily_backups.sort(reverse=True)
-    
-    # Remove old daily backups
-    for date_part, file_path in daily_backups[MAX_DAILY_BACKUPS:]:
-        try:
-            os.remove(file_path)
-            logger.info(f"Removed old daily backup: {file_path}")
-        except Exception as e:
-            logger.error(f"Failed to remove old daily backup {file_path}: {e}")
-    
-    # Clean old version backups (more sophisticated approach for versions)
-    version_files = {}
-    for file in os.listdir(VERSION_BACKUP_DIR):
-        timestamp = file.split('_')[0]
-        if timestamp not in version_files:
-            version_files[timestamp] = []
-        version_files[timestamp].append(os.path.join(VERSION_BACKUP_DIR, file))
-    
-    # Sort timestamps (newest first)
-    timestamps = sorted(version_files.keys(), reverse=True)
-    
-    # Remove old version backups
-    for timestamp in timestamps[MAX_VERSION_BACKUPS:]:
-        for file_path in version_files[timestamp]:
-            try:
-                os.remove(file_path)
-                logger.info(f"Removed old version backup: {file_path}")
-            except Exception as e:
-                logger.error(f"Failed to remove old version backup {file_path}: {e}")
+    try:
+        # Get list of daily backups for document_data.pkl (as a reference)
+        daily_backups = []
+        for file in os.listdir(DAILY_BACKUP_DIR):
+            if file.endswith(VECTOR_FILES[0]):  # document_data.pkl
+                daily_backups.append(file)
+        
+        # Sort by date (first part of filename)
+        daily_backups.sort()
+        
+        # Remove oldest backups if we have too many
+        if len(daily_backups) > MAX_DAILY_BACKUPS:
+            backups_to_remove = daily_backups[:-MAX_DAILY_BACKUPS]
+            for old_backup in backups_to_remove:
+                date_prefix = old_backup.split('_')[0]
+                for file in VECTOR_FILES:
+                    old_file = os.path.join(DAILY_BACKUP_DIR, f"{date_prefix}_{file}")
+                    if os.path.exists(old_file):
+                        os.remove(old_file)
+                        logger.info(f"Removed old daily backup: {old_file}")
+    except Exception as e:
+        logger.error(f"Error cleaning old daily backups: {e}")
+
+    # Clean old version backups
+    try:
+        # Get list of version backups for document_data.pkl (as a reference)
+        version_backups = []
+        for file in os.listdir(VERSION_BACKUP_DIR):
+            if file.endswith(VECTOR_FILES[0]):  # document_data.pkl
+                version_backups.append(file)
+        
+        # Sort by timestamp (first part of filename)
+        version_backups.sort()
+        
+        # Remove oldest backups if we have too many
+        if len(version_backups) > MAX_VERSION_BACKUPS:
+            backups_to_remove = version_backups[:-MAX_VERSION_BACKUPS]
+            for old_backup in backups_to_remove:
+                timestamp_prefix = old_backup.split('_')[0]
+                for file in VECTOR_FILES:
+                    old_file = os.path.join(VERSION_BACKUP_DIR, f"{timestamp_prefix}_{file}")
+                    if os.path.exists(old_file):
+                        os.remove(old_file)
+                        logger.info(f"Removed old version backup: {old_file}")
+    except Exception as e:
+        logger.error(f"Error cleaning old version backups: {e}")
 
 
 def check_and_backup():
     """Check and create backups if needed."""
-    logger.info("Starting backup process")
     ensure_backup_dirs()
     
-    # Create daily backup if needed
-    daily_result = create_daily_backup()
+    # Always create a version backup with timestamp
+    version_success = create_version_backup()
     
-    # Create version backup (at greater intervals than daily)
-    version_result = create_version_backup()
+    # Check if we need a daily backup (based on date in filename)
+    create_daily = True
+    date_str = datetime.now().strftime('%Y%m%d')
     
-    # Clean old backups
+    # Check if today's daily backup already exists
+    for file in os.listdir(DAILY_BACKUP_DIR):
+        if file.startswith(date_str) and file.endswith(VECTOR_FILES[0]):
+            create_daily = False
+            break
+    
+    if create_daily:
+        daily_success = create_daily_backup()
+        logger.info(f"Daily backup created: {daily_success}")
+    else:
+        logger.info("Daily backup already exists for today, skipping")
+    
+    # Clean up old backups
     clean_old_backups()
     
-    logger.info("Backup process completed")
-    return daily_result or version_result
+    return version_success
 
 
 if __name__ == "__main__":
-    check_and_backup()
+    logger.info("Starting vector store backup process")
+    result = check_and_backup()
+    if result:
+        logger.info("Backup completed successfully")
+    else:
+        logger.warning("Backup completed with some issues. Check the logs for details.")

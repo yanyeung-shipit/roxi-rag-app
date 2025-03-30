@@ -1,0 +1,26 @@
+2025-03-30 19:58:19,493 - INFO - Found 345 processed chunk IDs in vector store
+2025-03-30 19:58:20,247 - INFO - Loading faiss with AVX2 support.
+2025-03-30 19:58:20,281 - INFO - Successfully loaded faiss with AVX2 support.
+2025-03-30 19:58:20,287 - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-03-30 19:58:21,214 - INFO - Loading existing vector store from disk
+2025-03-30 19:58:21,219 - INFO - Loaded 345 documents from disk
+2025-03-30 19:58:21,219 - INFO - Starting in deep sleep mode with vector store unloaded
+2025-03-30 19:58:21,221 - INFO - Loading existing vector store from disk
+2025-03-30 19:58:21,226 - INFO - Loaded 345 documents from disk
+2025-03-30 19:58:21,226 - INFO - Starting in deep sleep mode with vector store unloaded
+2025-03-30 19:58:21,226 - WARNING - Memory before vector store unload: 167.0MB
+2025-03-30 19:58:21,234 - WARNING - MAXIMUM MEMORY RELEASE: unloading vector store with 345 documents
+2025-03-30 19:58:21,435 - WARNING - OS memory release: malloc_trim called, result=1
+2025-03-30 19:58:21,436 - WARNING - VECTOR STORE MEMORY: Before=167.0MB, After=160.8MB, Freed=6.2MB
+2025-03-30 19:58:21,436 - WARNING - VECTOR STORE MAXIMUM MEMORY RELEASE COMPLETE: 345 documents unloaded
+2025-03-30 19:58:21,436 - INFO - Background processing loop started
+2025-03-30 19:58:21,436 - INFO - Background processor started
+2025-03-30 19:58:21,447 - INFO - Background document processor started
+{
+  "total_chunks": 1261,
+  "processed_chunks": 345,
+  "percentage": 27.36,
+  "remaining_chunks": 916,
+  "target_percentage": 50.0,
+  "timestamp": "2025-03-30T19:58:22.071296"
+}
