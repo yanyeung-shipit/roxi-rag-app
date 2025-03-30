@@ -1,15 +1,20 @@
 #!/bin/bash
 
-# Run the chunk processor with a target of 75% completion
-# This script processes chunks until 75% of the documents are in the vector store
-# Usage: ./run_to_75_percent.sh [batch_size] [delay_seconds]
+# Stop any existing processing
+pkill -f "python process_to_75_percent.py" 2>/dev/null
 
-# Default values
-BATCH_SIZE=${1:-5}
-DELAY_SECONDS=${2:-3}
+# Clear log
+echo "Starting process_to_75_percent.py at $(date)" > process_75_percent_enhanced.log
 
-echo "Starting chunk processor to reach 75% target..."
-echo "Using batch size: $BATCH_SIZE with $DELAY_SECONDS seconds delay between batches"
+# Run the script with nohup to keep it running even if the terminal is closed
+nohup python process_to_75_percent.py --batch-size 5 --target 75.0 --delay 3 >> process_75_percent_enhanced.log 2>&1 &
 
-# Run in the Flask app context
-python run_chunk_processor.py --batch-size $BATCH_SIZE --target 75.0 --delay $DELAY_SECONDS
+# Store the process ID
+PID=$!
+echo $PID > rebuild_process.pid
+
+echo "Started process_to_75_percent.py with PID $PID"
+echo "Log file: process_75_percent_enhanced.log"
+echo ""
+echo "To check progress, run: python process_to_75_percent.py --check"
+echo "To monitor the log, run: tail -f process_75_percent_enhanced.log"

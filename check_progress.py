@@ -1,18 +1,26 @@
+#!/usr/bin/env python3
 """
 Script to check our progress in rebuilding the vector store.
 This script logs progress information and returns structured data
 that can be used by other scripts.
 """
+
+import os
 import sys
+import pickle
 import json
 import logging
-from datetime import datetime
-from app import app, Document, DocumentChunk
-from utils.vector_store import VectorStore
+from typing import Set, Dict, Any
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
-logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger()
+
+DOCUMENT_DATA_FILE = "document_data.pkl"
 
 def check_progress(json_output=False):
     """
@@ -25,87 +33,76 @@ def check_progress(json_output=False):
         dict: Progress information as a dictionary
     """
     try:
-        # Get vector store stats
-        vector_store = VectorStore()
-        vector_stats = vector_store.get_stats()
-        
-        # Get database stats
-        with app.app_context():
-            # Get document counts
-            db_doc_count = Document.query.count()
-            db_chunk_count = DocumentChunk.query.count()
-            
-            # Get counts of chunks per document
-            doc_with_chunks = Document.query.filter(Document.chunks.any()).all()
-            doc_with_chunks_count = len(doc_with_chunks)
-            
-            # Get unprocessed documents (have chunks but no vector embeddings yet)
-            # This is an approximation since we don't track which document each vector belongs to
-            docs_unprocessed = db_doc_count - (vector_stats.get('pdfs', 0) + vector_stats.get('websites', 0))
-            if docs_unprocessed < 0:
-                docs_unprocessed = 0
+        # Get processed chunks from vector store
+        processed_ids = set()
+        if os.path.exists(DOCUMENT_DATA_FILE):
+            try:
+                with open(DOCUMENT_DATA_FILE, 'rb') as f:
+                    loaded_data = pickle.load(f)
+                    documents = loaded_data.get('documents', {})
+                    
+                    # Extract chunk_id from metadata if it exists
+                    for doc_id, doc_data in documents.items():
+                        metadata = doc_data.get('metadata', {})
+                        if 'chunk_id' in metadata and metadata['chunk_id'] is not None:
+                            try:
+                                chunk_id = int(metadata['chunk_id'])
+                                processed_ids.add(chunk_id)
+                            except (ValueError, TypeError):
+                                pass
                 
-            # Calculate progress percentages
-            chunk_progress = vector_stats['total_documents'] / db_chunk_count * 100 if db_chunk_count > 0 else 0
-            doc_progress = (vector_stats.get('pdfs', 0) + vector_stats.get('websites', 0)) / db_doc_count * 100 if db_doc_count > 0 else 0
+                logger.info(f"Found {len(processed_ids)} processed chunk IDs in vector store")
+            except Exception as e:
+                logger.error(f"Error loading vector store data: {e}")
+        else:
+            logger.warning(f"Vector store data file {DOCUMENT_DATA_FILE} not found")
+        
+        # Get database info within Flask app context
+        from app import app, db
+        from models import DocumentChunk
+        from sqlalchemy import func
+        
+        with app.app_context():
+            # Count total chunks
+            total_chunks = db.session.query(func.count(DocumentChunk.id)).scalar()
             
-            # Time estimate (very rough)
-            chunks_remaining = db_chunk_count - vector_stats['total_documents']
-            seconds_per_chunk = 3  # Assuming 3 seconds per chunk for embedding
-            estimated_seconds_remaining = chunks_remaining * seconds_per_chunk
-            estimated_hours = estimated_seconds_remaining // 3600
-            estimated_minutes = (estimated_seconds_remaining % 3600) // 60
-            
-            # Prepare structured data
+            # Calculate progress
+            processed_count = len(processed_ids)
+            if total_chunks > 0:
+                percentage = (processed_count / total_chunks) * 100
+            else:
+                percentage = 0
+                
+            # Prepare result data
             result = {
-                "timestamp": datetime.now().isoformat(),
-                "vector_count": vector_stats['total_documents'],
-                "db_count": db_chunk_count,
-                "doc_count": db_doc_count,
-                "progress_pct": chunk_progress,
-                "remaining": chunks_remaining,
-                "docs_with_chunks": doc_with_chunks_count,
-                "docs_unprocessed": docs_unprocessed,
-                "vector_stats": vector_stats,
-                "estimate": {
-                    "seconds_remaining": estimated_seconds_remaining,
-                    "hours": int(estimated_hours),
-                    "minutes": int(estimated_minutes)
-                }
+                "total_chunks": total_chunks,
+                "processed_chunks": processed_count,
+                "percentage_complete": round(percentage, 2),
+                "remaining_chunks": total_chunks - processed_count,
+                "timestamp": None  # Will be filled in when converted to JSON
             }
             
-            # If JSON output is requested, print as JSON and return
+            # Output
             if json_output:
+                import datetime
+                result["timestamp"] = datetime.datetime.now().isoformat()
                 print(json.dumps(result, indent=2))
-                return result
-            
-            # Print human-readable report
-            logger.info("=" * 40)
-            logger.info("VECTOR STORE REBUILD PROGRESS")
-            logger.info("=" * 40)
-            logger.info(f"Vector store:   {vector_stats['total_documents']} chunks")
-            logger.info(f"Database:       {db_chunk_count} chunks in {db_doc_count} documents")
-            logger.info("-" * 40)
-            logger.info(f"Progress:       {vector_stats['total_documents']}/{db_chunk_count} chunks")
-            logger.info(f"                {chunk_progress:.1f}% complete")
-            
-            # Add time estimate if chunks are remaining
-            if chunks_remaining > 0:
-                logger.info(f"Remaining:      {chunks_remaining} chunks")
-                logger.info(f"Est. time:      {estimated_hours}h {estimated_minutes}m remaining")
-            
-            logger.info("=" * 40)
+            else:
+                logger.info(f"Progress: {processed_count}/{total_chunks} chunks ({percentage:.2f}%)")
+                logger.info(f"Remaining: {total_chunks - processed_count} chunks")
             
             return result
     
     except Exception as e:
-        logger.error(f"Error checking progress: {e}")
+        error_msg = f"Error checking progress: {e}"
+        logger.error(error_msg)
+        
         if json_output:
-            print(json.dumps({"error": str(e)}))
-        return {"error": str(e)}
+            print(json.dumps({"error": error_msg}))
+        
+        return {"error": error_msg}
 
 if __name__ == "__main__":
     # Check if JSON output is requested
-    json_output = "--json" in sys.argv
-    # Run the progress check
-    check_progress(json_output=json_output)
+    json_flag = "--json" in sys.argv
+    check_progress(json_output=json_flag)
