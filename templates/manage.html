@@ -429,7 +429,42 @@
         refreshBackgroundStatus();
         // Auto-refresh every 30 seconds
         setInterval(refreshBackgroundStatus, 30000);
+        
+        // Check for element existence every 5 seconds
+        // This ensures we can recover if the element is removed from the DOM
+        setInterval(function() {
+            ensureBackgroundStatusElement();
+        }, 5000);
     });
+    
+    // Function to ensure the background-status-content element exists
+    function ensureBackgroundStatusElement() {
+        if (!document.getElementById('background-status-content')) {
+            console.log("Restoring background-status-content element...");
+            
+            // Find the background-status-section
+            const statusSection = document.getElementById('background-status-section');
+            if (statusSection) {
+                // Find the card-body inside it
+                const cardBody = statusSection.querySelector('.card-body');
+                if (cardBody) {
+                    // Recreate the content element
+                    cardBody.innerHTML = `
+                        <div id="background-status-content">
+                            <div class="d-flex justify-content-center my-4">
+                                <div class="spinner-border text-secondary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                            </div>
+                            <p class="text-center text-muted">Loading background processing status...</p>
+                        </div>
+                    `;
+                    // Trigger a refresh
+                    setTimeout(refreshBackgroundStatus, 500);
+                }
+            }
+        }
+    }
     
     function refreshBackgroundStatus() {
         console.log("Loading background processing status...");
@@ -437,6 +472,7 @@
         
         if (!statusContent) {
             console.error("Cannot load background status: background-status-content element not found");
+            ensureBackgroundStatusElement();
             return;
         }
         
