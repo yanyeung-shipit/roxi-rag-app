@@ -244,6 +244,10 @@ def upload_pdf():
             filename = secure_filename(file.filename)
             logger.info(f"Processing PDF: {filename}")
             
+            # New document being uploaded - always exit deep sleep mode
+            from utils.background_processor import exit_deep_sleep
+            exit_deep_sleep()
+            
             # Check if the document already exists
             if document_exists(filename):
                 logger.warning(f"Document with filename '{filename}' already exists")
@@ -477,6 +481,10 @@ def bulk_upload_pdfs():
                 'success': False,
                 'message': 'No valid PDF files provided. Only PDF files are allowed.'
             }), 400
+            
+        # New documents being uploaded - always exit deep sleep mode
+        from utils.background_processor import exit_deep_sleep
+        exit_deep_sleep()
         
         # Maximum number of files to queue at once
         max_files = 50  # Increased limit to 50 files
@@ -640,6 +648,10 @@ def add_website():
                 'success': False, 
                 'message': 'URL is required'
             }), 400
+            
+        # New document being uploaded - always exit deep sleep mode
+        from utils.background_processor import exit_deep_sleep
+        exit_deep_sleep()
         
         logger.info(f"Processing website with multi-page crawling: {url}")
         
@@ -948,10 +960,13 @@ def remove_documents_by_url():
         
 # New endpoint specifically for adding multiple rheum.reviews topic pages at once
 @app.route('/add_topic_pages', methods=['POST'])
-@app.route('/add_topic_pages', methods=['POST'])
 def add_topic_pages():
     """Add multiple rheum.reviews topic pages at once. Memory-optimized version with incremental processing."""
     try:
+        # New document being uploaded - always exit deep sleep mode
+        from utils.background_processor import exit_deep_sleep
+        exit_deep_sleep()
+        
         # Try to get data from JSON or form data
         topics = None
         
@@ -1347,6 +1362,10 @@ def process_document(document_id):
         try:
             logger.info(f"Starting manual processing of document: {doc.filename}")
             
+            # Document being manually processed - always exit deep sleep mode
+            from utils.background_processor import exit_deep_sleep
+            exit_deep_sleep()
+            
             # Process this PDF
             chunks, metadata = process_pdf(doc.file_path, doc.filename)
             
@@ -1523,6 +1542,10 @@ def load_more_document_content(document_id):
         chunks_to_load = min(100, total_possible_chunks - current_chunk_count)
         
         logger.info(f"Attempting to load {chunks_to_load} more chunks for document {document_id}")
+        
+        # Loading more content - always exit deep sleep mode
+        from utils.background_processor import exit_deep_sleep
+        exit_deep_sleep()
         
         # Extract the topic name from the URL for crawling parameters
         parsed_url = urllib.parse.urlparse(url)

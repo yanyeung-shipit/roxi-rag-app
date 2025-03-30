@@ -53,12 +53,45 @@ def force_deep_sleep():
         # Optional: Set an even longer sleep time for manual activation
         _background_processor.sleep_time = _background_processor.deep_sleep_time * 2  # 20 minutes
         
+        # Set a flag to indicate manual activation, which will prevent auto-exit
+        _background_processor.manually_activated_sleep = True
+        
         logger.info(f"Deep sleep mode activated manually. Sleep time set to {_background_processor.sleep_time}s")
         # Pass 0.0 as rate when manually activating deep sleep
         set_processing_status("deep_sleep", 0.0)
         return True
     except Exception as e:
         logger.error(f"Error forcing deep sleep mode: {str(e)}")
+        return False
+
+def exit_deep_sleep():
+    """
+    Exit deep sleep mode and reset to normal processing.
+    This function is called when a new document is uploaded, to ensure it gets processed.
+    
+    Returns:
+        bool: True if deep sleep mode was exited, False otherwise
+    """
+    global _background_processor
+    
+    if _background_processor is None:
+        logger.warning("Background processor not initialized, cannot exit deep sleep")
+        return False
+        
+    try:
+        if _background_processor.in_deep_sleep:
+            logger.info("Exiting deep sleep mode due to new document upload")
+            _background_processor.in_deep_sleep = False
+            _background_processor.manually_activated_sleep = False
+            _background_processor.consecutive_idle_cycles = 0
+            _background_processor.sleep_time = _background_processor.base_sleep_time
+            
+            logger.info(f"Deep sleep mode exited. Sleep time reset to {_background_processor.sleep_time}s")
+            set_processing_status("active", 0.0)  # Reset status to active
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Error exiting deep sleep mode: {str(e)}")
         return False
         
 def is_in_deep_sleep():
@@ -124,6 +157,7 @@ class BackgroundProcessor:
         self.consecutive_idle_cycles = 0  # Track consecutive idle cycles
         self.deep_sleep_threshold = 10  # Cycles before entering deep sleep
         self.in_deep_sleep = False    # Deep sleep mode flag
+        self.manually_activated_sleep = False  # Flag for when sleep mode was manually activated
         self.running = False
         self.thread = None
         self.last_run_time = None
@@ -365,10 +399,20 @@ class BackgroundProcessor:
                 self.consecutive_idle_cycles = 0
                 self.sleep_time = self.base_sleep_time  # Reset sleep time to base value
                 
-                # If we were in deep sleep, exit that mode
+                # If we were in deep sleep, check if we should exit that mode
                 if self.in_deep_sleep:
-                    self.in_deep_sleep = False
-                    logger.info(f"Exiting deep sleep mode, work found!")
+                    # Only exit deep sleep if it wasn't manually activated
+                    if not self.manually_activated_sleep:
+                        self.in_deep_sleep = False
+                        logger.info(f"Exiting deep sleep mode, work found!")
+                    else:
+                        # When in manually activated sleep mode, we ignore work until next upload
+                        logger.info(f"Staying in deep sleep mode despite work (manually activated)")
+                        
+                        # Skip processing - go straight to sleep
+                        session.close()
+                        time.sleep(self.sleep_time)
+                        continue
                 
                 logger.debug(f"Found work to do, resetting sleep time to {self.sleep_time}s")
                 
