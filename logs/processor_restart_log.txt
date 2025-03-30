@@ -1,0 +1,8 @@
+========================================
+[2025-03-30 23:23:17] Running processor check
+[2025-03-30 23:23:17] Process with PID 25965 is not running, but PID file exists.
+[2025-03-30 23:23:17] Restarting processor...
+[2025-03-30 23:23:22] Processor restarted
+[2025-03-30 23:23:23] Current progress: 33.78%
+[2025-03-30 23:23:23] Still processing. Target: 66.0%, Current: 33.78%
+[2025-03-30 23:23:23] Chunks remaining to reach target: 406

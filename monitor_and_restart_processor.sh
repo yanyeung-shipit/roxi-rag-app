@@ -17,8 +17,8 @@ PROCESSOR_SCRIPT="./run_to_66_percent.sh"
 PID_FILE="processor_66_percent.pid"
 CHECK_SCRIPT="./check_adaptive_processor.py"
 TARGET_PERCENTAGE=66.0
-CHECK_INTERVAL=300  # Check every 5 minutes
-MAX_INACTIVE_TIME=1800  # 30 minutes
+CHECK_INTERVAL=20   # Check every 20 seconds
+MAX_INACTIVE_TIME=300   # 5 minutes
 MONITOR_PID_FILE="monitor_66percent.pid"
 
 # Create logs directory if it doesn't exist
@@ -52,11 +52,27 @@ check_processor_running() {
 
 # Function to check the completion percentage
 check_completion() {
-    # Use the check script to get completion percentage
-    completion_output=$(python "${CHECK_SCRIPT}" --target "${TARGET_PERCENTAGE}" --json)
+    # Check if the script exists
+    if [ ! -f "${CHECK_SCRIPT}" ]; then
+        log_message "Check script not found: ${CHECK_SCRIPT}"
+        return 1
+    fi
     
-    # Extract the completion percentage
-    percentage=$(echo "${completion_output}" | grep -o '"percentage": [0-9.]*' | grep -o '[0-9.]*')
+    # Use the check script to get completion percentage with a simplified approach
+    # First, get the raw output from running python check_adaptive_processor.py
+    log_message "Running check script: ${CHECK_SCRIPT}"
+    
+    # Run the check script and store the output
+    completion_output=$(python "${CHECK_SCRIPT}" --target "${TARGET_PERCENTAGE}" 2>&1)
+    log_message "Raw output from check script: ${completion_output}"
+    
+    # Use a more robust regex to extract the percentage, looking for something like 32.83% within the output
+    percentage=$(echo "${completion_output}" | grep -o '[0-9][0-9]*\.[0-9][0-9]*%' | head -1 | sed 's/%//')
+    
+    # If that fails, try another approach
+    if [ -z "${percentage}" ]; then
+        percentage=$(echo "${completion_output}" | grep -o 'OVERALL PROGRESS:.*%' | grep -o '[0-9][0-9]*\.[0-9][0-9]*')
+    fi
     
     if [ -z "${percentage}" ]; then
         log_message "Failed to get completion percentage."
@@ -65,8 +81,8 @@ check_completion() {
     
     log_message "Current completion: ${percentage}%"
     
-    # Check if completion is at or above target
-    if (( $(echo "${percentage} >= ${TARGET_PERCENTAGE}" | bc -l) )); then
+    # Check if completion is at or above target using awk (bc might not be available)
+    if awk -v p="$percentage" -v t="$TARGET_PERCENTAGE" 'BEGIN {exit !(p >= t)}'; then
         log_message "Target completion of ${TARGET_PERCENTAGE}% reached!"
         return 0
     else
