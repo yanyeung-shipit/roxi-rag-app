@@ -1982,6 +1982,27 @@ def delete_collection(collection_id):
             'message': f'Error deleting collection: {str(e)}'
         }), 500
         
+@app.route('/force_sleep_mode', methods=['POST'])
+def force_sleep_mode():
+    """
+    Force the background processor into deep sleep mode.
+    This endpoint allows users to manually trigger deep sleep mode
+    when they are done using the system for extended periods.
+    """
+    try:
+        from utils.background_processor import force_deep_sleep
+        success = force_deep_sleep()
+        return jsonify({
+            'success': success,
+            'message': 'System is now in deep sleep mode. It will use minimal resources until new work is available.'
+        })
+    except Exception as e:
+        app.logger.error(f"Error forcing sleep mode: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'Failed to enter deep sleep mode: {str(e)}'
+        }), 500
+
 @app.route('/background_status', methods=['GET'])
 def get_background_status():
     """Get status of background processing and detailed information on unprocessed documents."""

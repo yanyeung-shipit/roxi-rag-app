@@ -29,6 +29,37 @@ vector_store = VectorStore()
 # Global background processor instance
 _background_processor = None
 
+def force_deep_sleep():
+    """
+    Force the background processor into deep sleep mode.
+    This function immediately puts the background processor into deep sleep
+    mode, which significantly reduces CPU and memory usage.
+    
+    Returns:
+        bool: True if deep sleep mode was activated, False otherwise
+    """
+    global _background_processor
+    
+    if _background_processor is None:
+        logger.warning("Background processor not initialized, cannot force deep sleep")
+        return False
+        
+    try:
+        logger.info("Manually forcing deep sleep mode via API request")
+        _background_processor.consecutive_idle_cycles = _background_processor.deep_sleep_threshold + 1
+        _background_processor.in_deep_sleep = True
+        _background_processor.sleep_time = _background_processor.deep_sleep_time
+        
+        # Optional: Set an even longer sleep time for manual activation
+        _background_processor.sleep_time = _background_processor.deep_sleep_time * 2  # 20 minutes
+        
+        logger.info(f"Deep sleep mode activated manually. Sleep time set to {_background_processor.sleep_time}s")
+        set_processing_status("deep_sleep")
+        return True
+    except Exception as e:
+        logger.error(f"Error forcing deep sleep mode: {str(e)}")
+        return False
+
 def initialize_background_processor(batch_size=1, sleep_time=5):
     """
     Initialize and start the background processor.
