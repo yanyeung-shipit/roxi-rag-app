@@ -1095,3 +1095,13 @@ class VectorStore:
             list: List of all document IDs
         """
         return list(self.documents.keys())
+        
+    # Alias for unload_from_memory for better compatibility
+    def unload(self):
+        """
+        Alias for unload_from_memory() for better API compatibility.
+        
+        Returns:
+            int: Number of documents unloaded
+        """
+        return self.unload_from_memory()

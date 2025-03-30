@@ -66,7 +66,7 @@ def reduce_memory_usage():
             # Access the vector store instance and unload it
             if hasattr(_background_processor, 'vector_store') and _background_processor.vector_store:
                 logger.info("Unloading vector store to reduce memory footprint")
-                docs_unloaded = _background_processor.vector_store.unload_from_memory()
+                docs_unloaded = _background_processor.vector_store.unload()
                 logger.info(f"Unloaded {docs_unloaded} documents from vector store")
                 # Mark vector store as unloaded so we know to reload it when needed
                 _background_processor.vector_store_unloaded = True
@@ -338,11 +338,31 @@ class BackgroundProcessor:
             # If we can't create a session through the scoped session, try direct creation
             return sessionmaker(bind=self.engine)()
         
-    def start(self):
-        """Start the background processor if it's not already running."""
+    def start(self, start_in_deep_sleep=True):
+        """
+        Start the background processor if it's not already running.
+        
+        Args:
+            start_in_deep_sleep (bool): Whether to start in deep sleep mode to conserve resources
+        """
         if self.running:
             logger.info("Background processor already running")
             return
+        
+        # Set deep sleep mode before starting if requested
+        if start_in_deep_sleep:
+            self.in_deep_sleep = True
+            self.sleep_time = self.deep_sleep_time
+            self.consecutive_idle_cycles = self.deep_sleep_threshold * 2
+            logger.info("Starting in deep sleep mode with vector store unloaded")
+            
+            # Make sure vector store is unloaded to save memory at startup
+            try:
+                # Unload vector store to save memory
+                self.vector_store.unload()
+                self.vector_store_unloaded = True
+            except Exception as e:
+                logger.warning(f"Failed to unload vector store during startup: {str(e)}")
         
         self.running = True
         self.thread = threading.Thread(target=self._processing_loop)
@@ -540,7 +560,7 @@ class BackgroundProcessor:
                             from utils.vector_store import vector_store
                             unloaded_docs = 0
                             if not self.vector_store_unloaded:
-                                unloaded_docs = vector_store.unload_from_memory()
+                                unloaded_docs = vector_store.unload()
                                 self.vector_store_unloaded = True
                                 logger.info(f"Unloaded vector store with {unloaded_docs} documents to save memory")
                             
@@ -840,7 +860,7 @@ class BackgroundProcessor:
         # Create status object with comprehensive information
         return {
             # Basic status
-            'running': self.running,
+            'running': self.running and not self.in_deep_sleep,  # Show as not running when in deep sleep
             'last_run': self.last_run_time.isoformat() if self.last_run_time else None,
             'documents_processed': self.documents_processed,
             'unprocessed_documents': unprocessed_documents,

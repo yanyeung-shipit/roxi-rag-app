@@ -107,8 +107,8 @@ async function loadBackgroundStatus(forceRefresh = false) {
                         <div class="row">
                             <div class="col-md-6">
                                 <h5 class="card-title">
-                                    <span class="badge ${status.running ? 'bg-success' : 'bg-danger'} me-2">
-                                        ${status.running ? 'Running' : 'Stopped'}
+                                    <span class="badge ${status.in_deep_sleep ? 'bg-warning text-dark' : (status.running ? 'bg-success' : 'bg-danger')} me-2">
+                                        ${status.in_deep_sleep ? 'Deep Sleep' : (status.running ? 'Running' : 'Stopped')}
                                     </span>
                                     Background Processor
                                 </h5>
