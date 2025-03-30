@@ -60,6 +60,7 @@ def _cleanup_embedding_cache():
     """
     Clean up expired cache entries and enforce maximum cache size.
     """
+    global _last_cache_cleanup_time
     global _embedding_cache
     
     current_time = time.time()
@@ -106,7 +107,7 @@ def get_embedding(text):
     Returns:
         numpy.ndarray: Embedding vector
     """
-    global _last_cache_cleanup_time
+    global _last_cache_cleanup_time, _embedding_cache
     if not text:
         logger.warning("Empty text provided for embedding")
         return np.zeros(1536, dtype=np.float32)
@@ -126,7 +127,6 @@ def get_embedding(text):
         
         # Automatic cache cleanup on cache hits
         # Also run cleanup on a time interval regardless of cache size
-        global _last_cache_cleanup_time
         if (len(_embedding_cache) > _MAX_CACHE_SIZE or 
             (current_time - timestamp > _CACHE_TTL) or
             (current_time - _last_cache_cleanup_time > _CACHE_CLEANUP_INTERVAL)):
@@ -151,9 +151,9 @@ def get_embedding(text):
         _embedding_cache[text_hash] = (embedding, time.time())
         
         # Run cache cleanup if cache is getting large
-        global _last_cache_cleanup_time
         if len(_embedding_cache) >= _MAX_CACHE_SIZE * 0.9:  # At 90% capacity
             _cleanup_embedding_cache()
+            # Update the global cleanup time
             _last_cache_cleanup_time = time.time()
         
         return embedding
