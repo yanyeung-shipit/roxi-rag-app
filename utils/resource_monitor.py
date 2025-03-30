@@ -19,13 +19,13 @@ from typing import Dict, Any, Tuple, Optional, List
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Constants
-HIGH_CPU_THRESHOLD = 75.0  # percent
-HIGH_MEMORY_THRESHOLD = 80.0  # percent
-CRITICAL_MEMORY_THRESHOLD = 85.0  # percent - threshold for emergency memory cleanup
-RESOURCE_UPDATE_INTERVAL = 5  # seconds
-MEMORY_SAMPLE_SIZE = 10  # Number of memory readings to keep for trend analysis
-LEAK_DETECTION_THRESHOLD = 5.0  # MB increase over last 5 readings indicates potential leak
+# Constants - more aggressive memory management
+HIGH_CPU_THRESHOLD = 70.0  # percent - reduced from 75%
+HIGH_MEMORY_THRESHOLD = 75.0  # percent - reduced from 80%
+CRITICAL_MEMORY_THRESHOLD = 80.0  # percent - threshold for emergency memory cleanup (reduced from 85%)
+RESOURCE_UPDATE_INTERVAL = 3  # seconds - check more frequently (was 5)
+MEMORY_SAMPLE_SIZE = 15  # Number of memory readings to keep for trend analysis (increased from 10)
+LEAK_DETECTION_THRESHOLD = 3.0  # MB increase over last readings indicates potential leak (reduced from 5.0)
 
 # Global state
 _resource_data = {
@@ -209,30 +209,125 @@ def detect_memory_leak() -> Tuple[bool, str]:
 
 def perform_emergency_memory_cleanup():
     """
-    Perform emergency memory cleanup when memory usage is critical.
+    Perform ULTRA-AGGRESSIVE emergency memory cleanup when memory usage is critical.
+    This implements a comprehensive multi-stage cleanup process to reclaim as much memory
+    as possible using every available technique.
     """
-    logger.warning("Performing emergency memory cleanup")
+    logger.warning("!!! INITIATING MAXIMUM EMERGENCY MEMORY CLEANUP !!!")
     
-    # Force garbage collection
-    gc.collect()
+    # Record memory before cleanup
+    pmem = psutil.Process().memory_info()
+    before_mb = pmem.rss / (1024 * 1024)
+    logger.warning(f"EMERGENCY: Memory before cleanup: {before_mb:.1f}MB")
     
-    # Try to clear caches if available
+    # ----- STAGE 1: Clear all Python interpreter caches first -----
+    
+    # Clear sys module caches
+    sys.path_importer_cache.clear()
+    
+    # Create local references to clear __loader__ and __spec__ attributes
+    sys_modules_copy = list(sys.modules.values())
+    
+    # Clear module loader and spec references which can hold memory
+    for module in sys_modules_copy:
+        try:
+            if hasattr(module, '__loader__') and not module.__loader__ is None:
+                module.__loader__ = None
+            if hasattr(module, '__spec__') and not module.__spec__ is None:
+                module.__spec__ = None
+        except:
+            pass
+    
+    # ----- STAGE 2: Clear all application caches -----
+    
+    # Try to clear embedding cache first (fastest win)
     try:
-        # Clear embedding cache if available
         from utils.llm_service import clear_embedding_cache
         num_cleared = clear_embedding_cache()
-        logger.info(f"Cleared {num_cleared} items from embedding cache")
+        logger.warning(f"EMERGENCY: Cleared {num_cleared} items from embedding cache")
     except ImportError:
         pass
     
-    # Try to clear background processor caches
+    # ----- STAGE 3: Unload vector store and perform deep cleanup -----
+    
+    # If that's not enough, try to force vector store unloading and memory reduction
     try:
-        # Clear vector store if loaded
         from utils.background_processor import reduce_memory_usage
         stats = reduce_memory_usage()
-        logger.info(f"Reduced memory usage: {stats}")
+        logger.warning(f"EMERGENCY: Aggressive memory reduction: {stats}")
     except ImportError:
         pass
+    
+    # ----- STAGE 4: Force deep sleep mode if we're not already in it -----
+    
+    try:
+        from utils.background_processor import is_in_deep_sleep, force_deep_sleep
+        
+        # Check if we're in deep sleep, and if not, force it
+        if not is_in_deep_sleep():
+            logger.warning("EMERGENCY: Forcing deep sleep mode to conserve memory")
+            force_deep_sleep()
+    except ImportError:
+        pass
+    
+    # ----- STAGE 4: Aggressive garbage collection and memory defragmentation -----
+    
+    # Run multiple garbage collection passes
+    gc.collect(generation=2)
+    gc.collect(generation=1)
+    gc.collect(generation=0)
+    
+    # Try to break reference cycles
+    try:
+        # Get count of objects before clearing cycles
+        objects_before = len(gc.get_objects())
+        
+        # Clear dictionary objects (common source of reference cycles)
+        for obj in gc.get_objects():
+            try:
+                if isinstance(obj, dict) and not hasattr(obj, '__dict__'):
+                    obj.clear()
+            except:
+                pass
+        
+        # Run another collection to clean up the cleared dictionaries
+        gc.collect(generation=2)
+        
+        # Get count after to see if we made progress
+        objects_after = len(gc.get_objects())
+        logger.warning(f"EMERGENCY: Cleared {objects_before - objects_after} objects through cycle breaking")
+    except Exception as e:
+        logger.error(f"Error during reference cycle clearing: {e}")
+    
+    # ----- STAGE 5: OS-level memory trimming -----
+    
+    # Try to return memory to the OS using malloc_trim
+    try:
+        import ctypes
+        try:
+            libc = ctypes.CDLL('libc.so.6')
+            if hasattr(libc, 'malloc_trim'):
+                result = libc.malloc_trim(0)
+                logger.warning(f"EMERGENCY: Called malloc_trim(0) to release memory to OS: result={result}")
+        except:
+            pass
+    except:
+        pass
+    
+    # ----- STAGE 6: Final memory reporting -----
+    
+    # Get memory usage after cleanup
+    try:
+        process = psutil.Process()
+        after_mem = process.memory_info().rss / (1024 * 1024)  # MB
+        
+        # Get system memory
+        system_memory = psutil.virtual_memory()
+        system_memory_percent = system_memory.percent
+        
+        logger.warning(f"EMERGENCY CLEANUP COMPLETE - Process memory: {after_mem:.1f}MB, System: {system_memory_percent:.1f}%")
+    except:
+        logger.warning("EMERGENCY CLEANUP COMPLETE - Unable to get memory statistics")
     
     # Update timestamp of last cleanup
     with _lock:

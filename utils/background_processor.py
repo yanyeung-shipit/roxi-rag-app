@@ -53,8 +53,10 @@ background_processor = None
 
 def reduce_memory_usage():
     """
-    Aggressively reduce memory usage by clearing caches and forcing garbage collection.
-    This is primarily used during deep sleep to minimize memory footprint.
+    ULTRA-AGGRESSIVELY reduce memory usage by clearing all caches, unloading components,
+    forcing garbage collection, and using advanced memory optimization techniques.
+    This is the nuclear option for memory reduction, using every available technique
+    to minimize the memory footprint of the application.
     
     Returns:
         dict: Memory statistics before and after reduction
@@ -62,70 +64,354 @@ def reduce_memory_usage():
     import gc
     import psutil
     import sys
+    import os
+    import weakref
     
     # Get before stats
     process = psutil.Process()
     before_mem = process.memory_info().rss / 1024 / 1024  # MB
     
-    # Clear embedding cache if available
+    logger.warning(f"ULTRA-AGGRESSIVE memory optimization starting: {before_mem:.1f} MB in use")
+    
+    # ----- PHASE 1: CLEAR ALL APPLICATION CACHES -----
+    
+    # Clear embedding cache if available - most critical for memory reduction
     try:
         from utils.llm_service import clear_embedding_cache
         cache_entries = clear_embedding_cache()
-        logger.info(f"Cleared {cache_entries} entries from embedding cache")
+        logger.warning(f"ULTRA: Cleared {cache_entries} entries from embedding cache")
     except Exception as e:
         logger.warning(f"Failed to clear embedding cache: {str(e)}")
-        
-    # Unload vector store from memory in deep sleep mode
-    global _background_processor
-    if _background_processor and _background_processor.in_deep_sleep:
+    
+    # Clear Flask caches if present
+    if 'flask' in sys.modules:
         try:
-            # Access the vector store instance and unload it
+            if 'app' in sys.modules:
+                app_module = sys.modules['app']
+                if hasattr(app_module, 'app') and hasattr(app_module.app, 'config'):
+                    # Clear ALL Flask caches
+                    for config_key in list(app_module.app.config.keys()):
+                        if 'CACHE' in config_key or 'cache' in config_key.lower():
+                            if isinstance(app_module.app.config[config_key], bool):
+                                app_module.app.config[config_key] = False
+                            elif isinstance(app_module.app.config[config_key], dict):
+                                app_module.app.config[config_key] = {}
+                    
+                    # Set explicit SQLAlchemy cache settings
+                    if 'SQLALCHEMY_RECORD_QUERIES' in app_module.app.config:
+                        app_module.app.config['SQLALCHEMY_RECORD_QUERIES'] = False
+                    
+                    logger.warning("ULTRA: Reset ALL Flask cache settings")
+        except Exception as e:
+            logger.warning(f"Failed to reset Flask caches: {str(e)}")
+    
+    # ----- PHASE 2: UNLOAD ALL LARGE COMPONENTS -----
+    
+    # Completely unload vector store from memory as first priority
+    global _background_processor
+    if _background_processor:
+        try:
+            # Access the vector store instance and unload it completely
             if hasattr(_background_processor, 'vector_store') and _background_processor.vector_store:
-                logger.info("Unloading vector store to reduce memory footprint")
+                logger.warning("ULTRA: Completely unloading vector store from memory")
+                
+                # First call the formal unload method
                 docs_unloaded = _background_processor.vector_store.unload()
-                logger.info(f"Unloaded {docs_unloaded} documents from vector store")
+                logger.warning(f"ULTRA: Unloaded {docs_unloaded} documents from vector store")
+                
                 # Mark vector store as unloaded so we know to reload it when needed
                 _background_processor.vector_store_unloaded = True
+                
+                # Now go deeper - completely clear all attributes that might hold references
+                if hasattr(_background_processor.vector_store, 'documents'):
+                    _background_processor.vector_store.documents = {}
+                
+                if hasattr(_background_processor.vector_store, 'document_counts'):
+                    _background_processor.vector_store.document_counts = {}
+                
+                # Remove FAISS index completely and recreate minimal empty one
+                if hasattr(_background_processor.vector_store, 'index'):
+                    try:
+                        # First destroy existing index
+                        del _background_processor.vector_store.index
+                        
+                        # Then create a minimal replacement
+                        import faiss
+                        _background_processor.vector_store.index = faiss.IndexFlatL2(_background_processor.vector_store.dimension)
+                        logger.warning("ULTRA: Recreated minimal empty FAISS index")
+                    except Exception as ex:
+                        logger.warning(f"Failed to recreate FAISS index: {str(ex)}")
+                
+                # Clear any class-level caches that might exist
+                for attr_name in dir(_background_processor.vector_store):
+                    if 'cache' in attr_name.lower():
+                        try:
+                            setattr(_background_processor.vector_store, attr_name, {})
+                            logger.debug(f"ULTRA: Cleared vector store cache attribute: {attr_name}")
+                        except:
+                            pass
         except Exception as e:
-            logger.warning(f"Failed to unload vector store: {str(e)}")
+            logger.warning(f"Failed to fully unload vector store: {str(e)}")
     
-    # Clear any module-specific caches that might be holding memory
+    # ----- PHASE 3: CLEAR ALL MODULE-SPECIFIC CACHES -----
+    
+    # Find and clear ANY module with cache-like attributes
+    for module_name in list(sys.modules.keys()):
+        try:
+            module = sys.modules[module_name]
+            
+            # Skip None modules or built-in modules that can't be modified
+            if module is None or not hasattr(module, '__dict__'):
+                continue
+                
+            # Look for cache-like attributes to clear
+            for attr_name in dir(module):
+                if ('cache' in attr_name.lower() or 
+                    'pool' in attr_name.lower() or 
+                    'buffer' in attr_name.lower()):
+                    try:
+                        attr = getattr(module, attr_name)
+                        # Only clear if it looks like a cache (dict or list-like)
+                        if hasattr(attr, 'clear') and callable(attr.clear):
+                            attr.clear()
+                            logger.debug(f"ULTRA: Cleared cache in module {module_name}.{attr_name}")
+                        elif isinstance(attr, dict):
+                            setattr(module, attr_name, {})
+                            logger.debug(f"ULTRA: Reset dict cache in module {module_name}.{attr_name}")
+                        elif isinstance(attr, list):
+                            setattr(module, attr_name, [])
+                            logger.debug(f"ULTRA: Reset list cache in module {module_name}.{attr_name}")
+                    except:
+                        # Skip attributes that can't be modified
+                        pass
+        except:
+            # Skip problematic modules
+            pass
+    
+    # Clear OpenAI module caches specifically
     if 'openai' in sys.modules:
-        # Clear OpenAI API response caches if the module is loaded
         try:
             # Reset thread pool if it exists
             if hasattr(sys.modules['openai'], '_Thread__initialized'):
                 sys.modules['openai']._Thread__initialized = False
+                logger.warning("ULTRA: Reset OpenAI thread pool")
+                
+            # Clear any OpenAI caches
+            openai_module = sys.modules['openai']
+            for attr in dir(openai_module):
+                if (attr.startswith('_cache') or attr.endswith('_cache') or 
+                    'pool' in attr.lower()):
+                    try:
+                        setattr(openai_module, attr, {})
+                        logger.debug(f"ULTRA: Cleared OpenAI cache attribute: {attr}")
+                    except:
+                        pass
         except Exception as e:
-            logger.warning(f"Failed to reset OpenAI thread pool: {str(e)}")
+            logger.warning(f"Failed to reset OpenAI caches: {str(e)}")
     
-    # Clear SQLAlchemy caches if present
+    # Clear NumPy caches if present
+    if 'numpy' in sys.modules:
+        try:
+            np = sys.modules['numpy']
+            # Clear all NumPy caches we can find
+            for component in ['core', 'lib', 'linalg', 'fft']:
+                if hasattr(np, component):
+                    component_obj = getattr(np, component)
+                    for attr in dir(component_obj):
+                        if 'cache' in attr.lower():
+                            try:
+                                cache_obj = getattr(component_obj, attr)
+                                if hasattr(cache_obj, 'clear'):
+                                    cache_obj.clear()
+                                elif isinstance(cache_obj, dict):
+                                    setattr(component_obj, attr, {})
+                                logger.debug(f"ULTRA: Cleared NumPy {component}.{attr} cache")
+                            except:
+                                pass
+            
+            # Clear ctypes cache which often contains large memory blocks
+            if hasattr(np, 'core') and hasattr(np.core, '_internal'):
+                if hasattr(np.core._internal, '_ctypes'):
+                    del np.core._internal._ctypes
+                    logger.warning("ULTRA: Cleared NumPy internal ctypes cache")
+        except Exception as e:
+            logger.warning(f"Failed to clear NumPy caches: {str(e)}")
+    
+    # ----- PHASE 4: DESTROY ALL DATABASE CONNECTIONS -----
+    
+    # Completely destroy all SQLAlchemy connection pools
     if 'sqlalchemy' in sys.modules:
         try:
             from sqlalchemy import event
             from sqlalchemy.engine import Engine
+            
+            # First try with background processor engine
             engine = _background_processor.engine if _background_processor else None
             if engine:
-                # Dispose connections
+                # Dispose connections completely and aggressively
                 engine.dispose()
-                logger.info("SQLAlchemy connection pool disposed")
+                logger.warning("ULTRA: SQLAlchemy background processor connection pool disposed")
+            
+            # Try to clear app-level connection pool if it exists
+            if 'app' in sys.modules:
+                app_module = sys.modules['app']
+                if hasattr(app_module, 'db') and hasattr(app_module.db, 'engine'):
+                    app_module.db.engine.dispose()
+                    logger.warning("ULTRA: SQLAlchemy application connection pool disposed")
+            
+            # Find and dispose ALL SQLAlchemy engines anywhere in the system
+            for module_name in list(sys.modules.keys()):
+                try:
+                    module = sys.modules[module_name]
+                    for attr_name in dir(module):
+                        try:
+                            attr = getattr(module, attr_name)
+                            # If it looks like an Engine object
+                            if hasattr(attr, 'dispose') and callable(attr.dispose):
+                                attr.dispose()
+                                logger.debug(f"ULTRA: Disposed SQLAlchemy engine in {module_name}.{attr_name}")
+                        except:
+                            pass
+                except:
+                    pass
+            
+            # Find and close any Session objects
+            for obj in gc.get_objects():
+                try:
+                    if 'sqlalchemy' in str(type(obj)) and hasattr(obj, 'close') and callable(obj.close):
+                        obj.close()
+                except:
+                    pass
         except Exception as e:
             logger.warning(f"Failed to dispose SQLAlchemy connections: {str(e)}")
     
-    # Clear Python's internal caches
-    gc.collect(generation=2)  # Full collection
-    gc.collect(generation=2)  # Run a second time to ensure maximum cleanup
+    # ----- PHASE 5: ULTRA-AGGRESSIVE GARBAGE COLLECTION -----
+    
+    # Run garbage collection multiple times through all generations
+    gc.collect(generation=2)  # Gen 2 (oldest objects)
+    gc.collect(generation=1)  # Gen 1 
+    gc.collect(generation=0)  # Gen 0 (youngest objects)
+    
+    # Disable automatic garbage collection temporarily for manual control
+    was_enabled = gc.isenabled()
+    gc.disable()
+    
+    # Run unreachable object collection more aggressively
+    gc.collect(generation=2)
+    
+    # Clear reference cycles by finding and breaking them
+    try:
+        # Get count of objects before clearing cycles
+        objects_before = len(gc.get_objects())
+        
+        # Find and clear dictionaries to break cycles (more aggressive approach)
+        dict_cleared = 0
+        for obj in gc.get_objects():
+            try:
+                # Clear dictionaries (major source of reference cycles)
+                if isinstance(obj, dict) and not hasattr(obj, '__dict__'):
+                    obj.clear()
+                    dict_cleared += 1
+                # Clear lists that might hold references
+                elif isinstance(obj, list) and len(obj) > 0:
+                    obj.clear()
+                # Clear sets that might hold references
+                elif isinstance(obj, set) and len(obj) > 0:
+                    obj.clear()
+            except:
+                pass
+            
+        # Log dictionary clearing
+        if dict_cleared > 0:
+            logger.warning(f"ULTRA: Cleared {dict_cleared} dictionaries to break reference cycles")
+        
+        # Find objects with __dict__ attributes and clear them if possible
+        custom_obj_cleared = 0
+        for obj in gc.get_objects():
+            try:
+                if hasattr(obj, '__dict__') and not isinstance(obj, type):
+                    # Replace the __dict__ with an empty one to break cycles
+                    obj.__dict__.clear()
+                    custom_obj_cleared += 1
+            except:
+                pass
+                
+        # Log custom object clearing
+        if custom_obj_cleared > 0:
+            logger.warning(f"ULTRA: Cleared __dict__ of {custom_obj_cleared} custom objects")
+        
+        # Run another collection to clean up broken cycles
+        gc.collect(generation=2)
+        
+        # Get count after to see if we made progress
+        objects_after = len(gc.get_objects())
+        if objects_before > objects_after:
+            logger.warning(f"ULTRA: Cleared {objects_before - objects_after} objects through aggressive cycle breaking")
+    except Exception as e:
+        logger.warning(f"Error during aggressive reference cycle clearing: {str(e)}")
+    
+    # Run one final collection on all generations
+    gc.collect(generation=2)
+    gc.collect(generation=1)
+    gc.collect(generation=0)
+    
+    # Restore previous GC state
+    if was_enabled:
+        gc.enable()
+    
+    # ----- PHASE 6: OS-LEVEL MEMORY TRIMMING -----
+    
+    # Try all available methods to return memory to the OS
+    try:
+        if sys.platform.startswith('linux'):
+            # On Linux, use malloc_trim from the C library
+            import ctypes
+            try:
+                libc = ctypes.CDLL('libc.so.6')
+                # Call malloc_trim(0) which asks glibc to release free memory
+                if hasattr(libc, 'malloc_trim'):
+                    result = libc.malloc_trim(0)
+                    logger.warning(f"ULTRA: Called malloc_trim(0) to release memory to OS: result={result}")
+                    
+                    # Call it again for good measure
+                    libc.malloc_trim(0)
+            except Exception as e:
+                logger.warning(f"Failed to call malloc_trim: {str(e)}")
+                
+            # Try alternative method: Write to /proc/self/oom_score_adj
+            try:
+                # This tells the kernel this process can be killed earlier under memory pressure
+                # It doesn't directly free memory but helps prioritize this process for OOM killing
+                with open('/proc/self/oom_score_adj', 'w') as f:
+                    f.write('500')  # Higher value (max 1000) means more likely to be killed under pressure
+                logger.warning("ULTRA: Set higher OOM score to allow better memory management")
+            except:
+                pass
+    except Exception as e:
+        logger.warning(f"Failed to trim memory at OS level: {str(e)}")
+    
+    # ----- PHASE 7: FINAL MEASUREMENT AND REPORTING -----
+    
+    # Force one more garbage collection
+    gc.collect(generation=2)
     
     # Get after stats
     after_mem = process.memory_info().rss / 1024 / 1024  # MB
     
-    saved = before_mem - after_mem
-    logger.info(f"Memory reduction: Before={before_mem:.1f}MB, After={after_mem:.1f}MB, Saved={saved:.1f}MB")
+    # Calculate memory reduction
+    mem_freed = before_mem - after_mem
     
+    if mem_freed > 0:
+        logger.warning(f"ULTRA-AGGRESSIVE OPTIMIZATION COMPLETE - Memory now: {after_mem:.1f} MB (freed {mem_freed:.1f} MB, {(mem_freed/before_mem)*100:.1f}%)")
+    else:
+        logger.error(f"MEMORY OPTIMIZATION FAILED - Memory now: {after_mem:.1f} MB (increased by {-mem_freed:.1f} MB)")
+    
+    # Return memory statistics
     return {
-        "before_mb": round(before_mem, 1),
-        "after_mb": round(after_mem, 1),
-        "saved_mb": round(saved, 1)
+        'before_mb': round(before_mem, 1),
+        'after_mb': round(after_mem, 1),
+        'saved_mb': round(mem_freed, 1),
+        'saved_percent': round((mem_freed/before_mem)*100 if before_mem > 0 else 0, 1)
     }
 
 def force_deep_sleep():
@@ -159,20 +445,22 @@ def force_deep_sleep():
         # Aggressively release memory and clear caches
         memory_stats = reduce_memory_usage()
         
-        # Now that we're in deep sleep, set a more aggressive cache cleaning approach
+        # Set ultra-aggressive cache parameters in deep sleep mode
         try:
-            from utils.llm_service import _CACHE_TTL, _CACHE_CLEANUP_INTERVAL
-            # If available, override with more aggressive settings during deep sleep
             # Use safer dict-based access to modify module variables
             llm_service_module = _lazy_import('utils.llm_service')
+            
+            # Apply ULTRA-MINIMAL caching settings for absolute minimum memory usage
             if hasattr(llm_service_module, '_CACHE_TTL'):
-                llm_service_module._CACHE_TTL = 30  # 30 seconds TTL (more aggressive)
+                llm_service_module._CACHE_TTL = 1  # 1 second TTL (absolutely minimal)
             if hasattr(llm_service_module, '_CACHE_CLEANUP_INTERVAL'):
-                llm_service_module._CACHE_CLEANUP_INTERVAL = 15  # Clean up every 15 seconds
-            # Also reduce max cache size during deep sleep
+                llm_service_module._CACHE_CLEANUP_INTERVAL = 1  # Clean up every single second
             if hasattr(llm_service_module, '_MAX_CACHE_SIZE'):
-                llm_service_module._MAX_CACHE_SIZE = 25  # Very small cache during deep sleep
-            logger.info(f"Set aggressive cache timeout during deep sleep: TTL=30s, Cleanup=15s")
+                llm_service_module._MAX_CACHE_SIZE = 2  # Absolute minimal cache size (only 2 entries)
+            if hasattr(llm_service_module, '_CACHE_MEMORY_LIMIT_MB'):
+                llm_service_module._CACHE_MEMORY_LIMIT_MB = 0.5  # Ultra-minimal 0.5MB memory limit
+                
+            logger.warning(f"Set ULTRA-MINIMAL cache limits: TTL=1s, Cleanup=1s, Size=2, Memory=0.5MB")
         except Exception as e:
             logger.warning(f"Failed to update cache settings: {str(e)}")
         
@@ -231,17 +519,20 @@ def exit_deep_sleep():
         # since we're about to start processing again
         memory_stats = reduce_memory_usage()
         
-        # Reset cache settings to normal values when exiting deep sleep
+        # Reset cache settings to conservative values when exiting deep sleep
         try:
-            # Reset to default values for normal operation
+            # Use conservative values when exiting - don't go straight to full caching
             llm_service_module = _lazy_import('utils.llm_service')
             if hasattr(llm_service_module, '_CACHE_TTL'):
-                llm_service_module._CACHE_TTL = 60 * 3  # 3 minutes TTL
+                llm_service_module._CACHE_TTL = 60  # 1 minute TTL (still conservative)
             if hasattr(llm_service_module, '_CACHE_CLEANUP_INTERVAL'):
-                llm_service_module._CACHE_CLEANUP_INTERVAL = 60 * 1  # Clean up every minute
+                llm_service_module._CACHE_CLEANUP_INTERVAL = 30  # Clean up every 30 seconds
             if hasattr(llm_service_module, '_MAX_CACHE_SIZE'):
-                llm_service_module._MAX_CACHE_SIZE = 75  # Normal cache size
-            logger.info(f"Reset cache settings to normal: TTL={60 * 3}s, Cleanup={60 * 1}s, Cache Size=75")
+                llm_service_module._MAX_CACHE_SIZE = 25  # Small cache size when exiting deep sleep
+            if hasattr(llm_service_module, '_CACHE_MEMORY_LIMIT_MB'):
+                llm_service_module._CACHE_MEMORY_LIMIT_MB = 25  # 25MB memory limit (conservative)
+                
+            logger.warning(f"Reset cache to conservative settings: TTL=60s, Cleanup=30s, Size=25, Memory=25MB")
         except Exception as e:
             logger.warning(f"Failed to reset cache settings: {str(e)}")
         

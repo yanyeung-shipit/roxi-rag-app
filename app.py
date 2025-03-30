@@ -26,13 +26,19 @@ app.secret_key = os.environ.get("SESSION_SECRET")
 # Configure database
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-# Improve connection pool settings to handle connection timeouts
+# Optimized connection pool settings for minimal memory usage
 app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
-    "pool_pre_ping": True,  # Test connections before use to avoid stale connections
-    "pool_recycle": 280,    # Recycle connections after 280 seconds (before default 5-min timeout)
-    "pool_timeout": 30,     # Maximum time to wait for connection from pool
-    "pool_size": 10,        # Maximum number of connections to keep persistently
-    "max_overflow": 20      # Maximum number of connections to create above pool_size
+    "pool_pre_ping": True,    # Test connections before use to avoid stale connections
+    "pool_recycle": 240,      # Recycle connections more frequently (4 minutes)
+    "pool_timeout": 20,       # Reduced maximum time to wait for connection from pool
+    "pool_size": 5,           # Reduced number of persistent connections
+    "max_overflow": 10,       # Reduced maximum overflow connections
+    "echo_pool": False,       # Turn off connection pool logging
+    "poolclass": None,        # Use the default QueuePool
+    "connect_args": {
+        "connect_timeout": 10,  # Timeout for establishing new connections
+        "application_name": "ROXI-Optimized"  # Helps identify connections in pg_stat_activity
+    }
 }
 db.init_app(app)
 

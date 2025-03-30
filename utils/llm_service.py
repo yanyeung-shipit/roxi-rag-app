@@ -32,12 +32,12 @@ logger = logging.getLogger(__name__)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Embedding cache with time-based expiration - optimized for memory efficiency
+# Embedding cache with ULTRA-MINIMAL settings for absolute minimal memory usage
 _embedding_cache: Dict[str, Tuple[np.ndarray, float]] = {}
-_CACHE_TTL = 60 * 1  # 1 minute cache TTL in seconds (reduced from 2)
-_MAX_CACHE_SIZE = 50  # Maximum number of embeddings to cache (reduced from 75)
-_CACHE_CLEANUP_INTERVAL = 20  # Clean up every 20 seconds (reduced from 30)
-_CACHE_MEMORY_LIMIT_MB = 10  # Maximum cache size in MB to prevent excessive memory usage
+_CACHE_TTL = 1  # 1 second cache TTL (extremely aggressive - down from 3)
+_MAX_CACHE_SIZE = 2  # Maximum 2 embeddings in cache (absolute minimum)
+_CACHE_CLEANUP_INTERVAL = 1   # Clean up every second (maximum frequency)
+_CACHE_MEMORY_LIMIT_MB = 0.5  # Ultra-strict 0.5MB memory limit
 
 # Create a last cleanup tracker
 _last_cache_cleanup_time = time.time()
@@ -82,16 +82,16 @@ def _cleanup_embedding_cache():
         # Sort by timestamp (oldest first)
         sorted_items = sorted(_embedding_cache.items(), key=lambda x: x[1][1])
         
-        # Calculate how many entries to keep based on both constraints
+        # Calculate how many entries to keep based on both constraints (ultra-minimal)
         keep_count = _MAX_CACHE_SIZE
         
         if cache_size_mb > _CACHE_MEMORY_LIMIT_MB:
-            # Start with an aggressive cut - keep only 50% of items if we exceed memory limit
-            memory_based_keep_count = len(sorted_items) // 2
+            # ULTRA-AGGRESSIVE cut - keep only 25% of items if we exceed memory limit
+            memory_based_keep_count = max(1, len(sorted_items) // 4)
             keep_count = min(keep_count, memory_based_keep_count)
             
-            # Ensure we keep at least some minimum number of entries
-            keep_count = max(5, keep_count)
+            # Ensure we keep at most 2 entries in memory to minimize memory usage
+            keep_count = min(2, keep_count)
         
         # Keep only the newest entries
         _embedding_cache = dict(sorted_items[-keep_count:])
@@ -130,7 +130,7 @@ def get_embedding(text):
     # Handle empty text case efficiently
     if not text:
         logger.warning("Empty text provided for embedding")
-        return np.zeros(1536, dtype=np.float32)
+        return np.zeros(1536, dtype=np.float16)  # Use float16 instead of float32 to reduce memory usage
     
     # Optimize text length - use more aggressive truncation to save memory
     # 8000 chars is the absolute max for the API, but we can use less for memory efficiency

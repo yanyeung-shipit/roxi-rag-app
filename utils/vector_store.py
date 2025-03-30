@@ -58,31 +58,143 @@ class VectorStore:
             
     def unload_from_memory(self):
         """
-        Unload the vector store from memory to reduce memory usage.
-        This saves the current state to disk, then releases the memory.
+        ULTRA-AGGRESSIVELY unload the vector store from memory to minimize memory footprint.
+        This saves current state to disk, completely releases all memory structures, 
+        and forces multiple garbage collection passes to minimize retained memory.
         
         Returns:
             int: Number of documents unloaded
         """
         try:
-            # Save current state first
+            # Save current state first to ensure we don't lose data
             self._save()
             
             # Get the current count for reporting
             doc_count = len(self.documents)
             
-            # Clear the in-memory data structures
+            logger.warning(f"ULTRA-AGGRESSIVELY unloading vector store: {doc_count} documents")
+            
+            # First pass: set all embeddings to None to release the largest memory consumers
+            for doc_id in list(self.documents.keys()):
+                # Clear embeddings (these use the most memory)
+                if 'embedding' in self.documents[doc_id]:
+                    self.documents[doc_id]['embedding'] = None
+                    
+                # Also aggressively truncate any long text strings
+                if 'text' in self.documents[doc_id] and isinstance(self.documents[doc_id]['text'], str) and len(self.documents[doc_id]['text']) > 100:
+                    # Keep only a tiny prefix for debugging purposes
+                    self.documents[doc_id]['text'] = self.documents[doc_id]['text'][:50] + "..."
+                    
+                # Clear any other data structures that might be memory-intensive
+                if 'metadata' in self.documents[doc_id] and isinstance(self.documents[doc_id]['metadata'], dict):
+                    # Create a shallow copy with only essential metadata
+                    minimal_metadata = {}
+                    for key in ['doc_id', 'id', 'document_id', 'type']:
+                        if key in self.documents[doc_id]['metadata']:
+                            minimal_metadata[key] = self.documents[doc_id]['metadata'][key]
+                    self.documents[doc_id]['metadata'] = minimal_metadata
+            
+            # Force a first garbage collection to release memory from the cleared embeddings
+            import gc
+            gc.collect(generation=2)
+            
+            # Second pass: completely clear all data structures
+            old_documents = self.documents
             self.documents = {}
             self.document_counts = defaultdict(int)
             
-            # Replace the index with a new empty one
+            # Explicitly delete the old documents dict to ensure it's garbage collected
+            del old_documents
+            
+            # Replace the index with a new minimal empty one and release old index memory
+            old_index = self.index
             self.index = faiss.IndexFlatL2(self.dimension)
             
-            # Force garbage collection
-            import gc
-            gc.collect()
+            # Delete the old index explicitly and immediately
+            del old_index
             
-            logger.info(f"Unloaded vector store from memory: {doc_count} documents")
+            # Clear ALL caches and intermediate data structures
+            # First, find and clear any attribute that looks like a cache
+            for attr_name in dir(self):
+                if 'cache' in attr_name.lower():
+                    try:
+                        cache_obj = getattr(self, attr_name)
+                        if isinstance(cache_obj, dict):
+                            # Don't just clear - replace with new empty dict to release memory
+                            setattr(self, attr_name, {})
+                            logger.debug(f"Cleared vector store cache: {attr_name}")
+                    except:
+                        pass
+            
+            # Clear specific known caches
+            self._processed_chunk_ids_cache = None
+            self._last_cache_update_time = 0
+            
+            if hasattr(self, '_search_cache'):
+                self._search_cache = {}
+            
+            if hasattr(self, '_document_lookup_cache'):
+                self._document_lookup_cache = {}
+                
+            # Force multiple aggressive garbage collection passes
+            gc.collect(generation=2)  # Collect oldest generation first
+            gc.collect(generation=1)  # Then middle generation
+            gc.collect(generation=0)  # Finally youngest generation
+            
+            # ULTRA-AGGRESSIVE cycle breaking - find and break ref cycles
+            cycle_count = 0
+            for obj in gc.get_objects():
+                try:
+                    # Clear all dictionaries to break cycles
+                    if isinstance(obj, dict) and not hasattr(obj, '__dict__'):
+                        obj.clear()
+                        cycle_count += 1
+                    # Clear lists that might be holding references
+                    elif isinstance(obj, list) and len(obj) > 0:
+                        obj.clear()
+                        cycle_count += 1
+                    # Clear sets that might be holding references
+                    elif isinstance(obj, set) and len(obj) > 0:
+                        obj.clear()
+                        cycle_count += 1
+                except:
+                    pass
+            
+            logger.debug(f"Cleared {cycle_count} potential reference cycles")
+            
+            # Run final collections after clearing cycles
+            gc.collect(generation=2)
+            gc.collect()  # Extra collection
+            
+            # OS-level memory release - try multiple approaches
+            try:
+                # Try to use lower-level memory management functions if available
+                import ctypes
+                import os
+                
+                if os.name == 'posix':  # Linux/Unix
+                    # On Linux, we can use malloc_trim to release memory back to the OS
+                    try:
+                        libc = ctypes.CDLL('libc.so.6')
+                        if hasattr(libc, 'malloc_trim'):
+                            # Call twice for good measure
+                            libc.malloc_trim(0)
+                            result = libc.malloc_trim(0)
+                            logger.warning(f"Called malloc_trim(0) to release vector store memory: {result}")
+                    except Exception as e:
+                        logger.debug(f"malloc_trim failed: {e}")
+                    
+                    # Try to set process as a good candidate for OOM killing if memory pressure occurs
+                    try:
+                        with open('/proc/self/oom_score_adj', 'w') as f:
+                            f.write('500')  # Higher value (max 1000) = more likely to be killed under pressure
+                        logger.debug("Set higher OOM score to help with memory management")
+                    except:
+                        pass
+            except Exception as e:
+                logger.debug(f"OS-level memory trimming failed: {str(e)}")
+            
+            logger.warning(f"VECTOR STORE ULTRA-AGGRESSIVELY UNLOADED: {doc_count} documents")
             return doc_count
         except Exception as e:
             logger.exception(f"Error unloading vector store: {str(e)}")
