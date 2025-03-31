@@ -1,0 +1,9 @@
+services:
+- type: web
+  name: roxi-app
+  runtime: python
+  buildCommand: ""
+  startCommand: gunicorn main:app
+  envVars:
+    - key: OPENAI_API_KEY
+      value: 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
