@@ -54,13 +54,16 @@
 
         <div class="card bg-dark border-secondary mb-4">
             <div class="card-header bg-dark text-light">
-                <h5><i class="fas fa-chart-bar me-2"></i>Knowledge Base Stats</h5>
+                <h5><i class="fas fa-database me-2"></i>Knowledge Base</h5>
             </div>
             <div class="card-body">
-                <div id="statsContent">
-                    <p>Loading stats...</p>
-                </div>
-                <div class="mt-3">
+                <p class="mb-3">
+                    Manage your knowledge base or clear all data.
+                </p>
+                <div class="d-flex gap-2">
+                    <a href="/manage" class="btn btn-primary">
+                        <i class="fas fa-folder-open me-1"></i> Manage Documents
+                    </a>
                     <button id="clearKnowledgeBtn" class="btn btn-danger">
                         <i class="fas fa-trash me-1"></i> Clear Knowledge Base
                     </button>

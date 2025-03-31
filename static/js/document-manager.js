@@ -7,6 +7,12 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
     }
     
+    // Fetch and display stats if the stats content element exists
+    const statsContent = document.getElementById('statsContent');
+    if (statsContent) {
+        fetchStats();
+    }
+    
     // DOM element references - all elements are optional and get checked before use
     const elements = {
         // Form elements
