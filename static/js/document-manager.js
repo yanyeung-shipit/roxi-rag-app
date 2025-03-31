@@ -2293,6 +2293,16 @@ async function showDocumentDetailsModal(docId) {
                                 <span>ID:</span>
                                 <span>${doc.id}</span>
                             </li>
+                            <li class="list-group-item bg-transparent d-flex">
+                                <div class="d-flex justify-content-between w-100 align-items-center">
+                                    <span>Title:</span>
+                                    <div>
+                                        <button id="documentDetailsEditBtn" class="btn btn-sm btn-outline-info" data-id="${doc.id}" data-title="${doc.title || doc.filename || 'Untitled Document'}">
+                                            <i class="fas fa-edit me-1"></i> Edit Title
+                                        </button>
+                                    </div>
+                                </div>
+                            </li>
                             <li class="list-group-item bg-transparent d-flex justify-content-between">
                                 <span>Type:</span>
                                 <span class="badge bg-${doc.file_type === 'pdf' ? 'warning' : 'info'}">
