@@ -65,6 +65,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let documentToDeleteId = null;
     let collectionToDeleteId = null;
     let sourceCollectionSelect = null; // Track which collection select triggered the modal
+    
+    // Pagination and search state
+    let currentPage = 1;
+    let itemsPerPage = 10;
+    let totalDocuments = 0;
+    let totalPages = 1;
+    let currentSearchTerm = '';
 
     // Initialize
     loadDocuments();
@@ -86,6 +93,83 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 console.warn(`Element ${elementKey} not found, cannot add ${event} event listener`);
             }
+        }
+        
+        // Setup pagination event listeners
+        const firstPageBtn = document.getElementById('firstPageBtn');
+        if (firstPageBtn) {
+            firstPageBtn.addEventListener('click', () => loadDocuments(1, currentSearchTerm));
+        }
+        
+        const prevPageBtn = document.getElementById('prevPageBtn');
+        if (prevPageBtn) {
+            prevPageBtn.addEventListener('click', () => {
+                if (currentPage > 1) {
+                    loadDocuments(currentPage - 1, currentSearchTerm);
+                }
+            });
+        }
+        
+        const nextPageBtn = document.getElementById('nextPageBtn');
+        if (nextPageBtn) {
+            nextPageBtn.addEventListener('click', () => {
+                if (currentPage < totalPages) {
+                    loadDocuments(currentPage + 1, currentSearchTerm);
+                }
+            });
+        }
+        
+        const lastPageBtn = document.getElementById('lastPageBtn');
+        if (lastPageBtn) {
+            lastPageBtn.addEventListener('click', () => loadDocuments(totalPages, currentSearchTerm));
+        }
+        
+        // Setup search functionality
+        const documentSearchBtn = document.getElementById('documentSearchBtn');
+        if (documentSearchBtn) {
+            documentSearchBtn.addEventListener('click', () => {
+                const searchInput = document.getElementById('documentSearchInput');
+                if (searchInput) {
+                    loadDocuments(1, searchInput.value.trim());
+                }
+            });
+        }
+        
+        const documentSearchInput = document.getElementById('documentSearchInput');
+        if (documentSearchInput) {
+            documentSearchInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    loadDocuments(1, documentSearchInput.value.trim());
+                }
+            });
+        }
+        
+        // Setup document title editing
+        document.addEventListener('click', (e) => {
+            // Check if the clicked element has the edit-title class
+            if (e.target.classList.contains('edit-title-btn') || e.target.closest('.edit-title-btn')) {
+                const button = e.target.classList.contains('edit-title-btn') ? e.target : e.target.closest('.edit-title-btn');
+                const docId = button.dataset.id;
+                const docTitle = button.dataset.title;
+                
+                // Populate the edit modal with the document info
+                const editDocumentId = document.getElementById('editDocumentId');
+                const editDocumentTitle = document.getElementById('editDocumentTitle');
+                
+                if (editDocumentId && editDocumentTitle) {
+                    editDocumentId.value = docId;
+                    editDocumentTitle.value = docTitle;
+                    
+                    // Show the modal
+                    showModal('editDocumentTitleModal');
+                }
+            }
+        });
+        
+        // Save title changes
+        const updateDocumentTitleBtn = document.getElementById('updateDocumentTitleBtn');
+        if (updateDocumentTitleBtn) {
+            updateDocumentTitleBtn.addEventListener('click', updateDocumentTitle);
         }
         
         // Setup the new collection buttons for each form
@@ -303,20 +387,36 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log(`Removed ${backdrops.length} backdrops`);
     }
 
-    // Load all documents
-    async function loadDocuments() {
+    // Load documents with pagination and search
+    async function loadDocuments(page = 1, searchTerm = '') {
         try {
-            console.log("Loading documents...");
+            console.log(`Loading documents page ${page} with search: "${searchTerm}"`);
+            currentPage = page;
+            currentSearchTerm = searchTerm;
+            
             if (elements.documentsTableBody) {
                 elements.documentsTableBody.innerHTML = '<tr><td colspan="6" class="text-center">Loading documents...</td></tr>';
             }
             
-            const response = await fetch('/documents');
+            // Build the URL with query parameters
+            let url = `/documents?page=${page}&per_page=${itemsPerPage}`;
+            if (searchTerm) {
+                url += `&search=${encodeURIComponent(searchTerm)}`;
+            }
+            
+            const response = await fetch(url);
             const data = await response.json();
             
             if (data.success) {
-                console.log(`Loaded ${data.documents.length} documents`);
+                console.log(`Loaded ${data.documents.length} documents (page ${page} of ${data.total_pages})`);
                 currentDocuments = data.documents;
+                totalDocuments = data.total;
+                totalPages = data.total_pages;
+                
+                // Update pagination display
+                updatePaginationDisplay();
+                
+                // Render the documents table
                 renderDocumentsTable();
             } else {
                 console.error("Error loading documents:", data.message);
@@ -343,6 +443,34 @@ document.addEventListener('DOMContentLoaded', () => {
                     </tr>
                 `;
             }
+        }
+    }
+    
+    // Update pagination display
+    function updatePaginationDisplay() {
+        // Update text indicators
+        if (document.getElementById('documentsCurrentPage')) {
+            document.getElementById('documentsCurrentPage').textContent = `Page ${currentPage}`;
+        }
+        if (document.getElementById('documentsTotalPages')) {
+            document.getElementById('documentsTotalPages').textContent = totalPages;
+        }
+        if (document.getElementById('documentsTotalCount')) {
+            document.getElementById('documentsTotalCount').textContent = totalDocuments;
+        }
+        
+        // Update button states
+        if (document.getElementById('firstPageBtn')) {
+            document.getElementById('firstPageBtn').disabled = currentPage === 1;
+        }
+        if (document.getElementById('prevPageBtn')) {
+            document.getElementById('prevPageBtn').disabled = currentPage === 1;
+        }
+        if (document.getElementById('nextPageBtn')) {
+            document.getElementById('nextPageBtn').disabled = currentPage === totalPages;
+        }
+        if (document.getElementById('lastPageBtn')) {
+            document.getElementById('lastPageBtn').disabled = currentPage === totalPages;
         }
     }
 
@@ -405,10 +533,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td>${dateStr}</td>
                 <td>
                     <div class="btn-group" role="group">
-                        <button type="button" class="btn btn-sm btn-outline-info view-doc-btn" data-id="${doc.id}">
+                        <button type="button" class="btn btn-sm btn-outline-info view-doc-btn" data-id="${doc.id}" title="View Document">
                             <i class="fas fa-eye"></i>
                         </button>
-                        <button type="button" class="btn btn-sm btn-outline-danger delete-doc-btn" data-id="${doc.id}" data-title="${safeTitle}">
+                        <button type="button" class="btn btn-sm btn-outline-primary edit-title-btn" data-id="${doc.id}" data-title="${safeTitle}" title="Edit Title">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-danger delete-doc-btn" data-id="${doc.id}" data-title="${safeTitle}" title="Delete Document">
                             <i class="fas fa-trash"></i>
                         </button>
                     </div>
@@ -2057,6 +2188,65 @@ async function loadMoreContent(documentId) {
 }
 
 // Global function to manually process a document
+// Update document title
+async function updateDocumentTitle() {
+    console.log("Updating document title");
+    
+    const documentId = document.getElementById('editDocumentId').value;
+    const newTitle = document.getElementById('editDocumentTitle').value.trim();
+    
+    if (!newTitle) {
+        alert("Please enter a valid title.");
+        return;
+    }
+    
+    try {
+        // Create a FormData object for the request
+        const formData = new FormData();
+        formData.append('title', newTitle);
+        
+        // Show loading state
+        document.getElementById('updateDocumentTitleBtn').innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status"></span>Saving...';
+        document.getElementById('updateDocumentTitleBtn').disabled = true;
+        
+        // Submit the update request
+        const response = await fetch(`/documents/${documentId}/update`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            // Hide the modal
+            hideModal('editDocumentTitleModal');
+            
+            // Update the document in the current list
+            for (let i = 0; i < currentDocuments.length; i++) {
+                if (currentDocuments[i].id == documentId) {
+                    currentDocuments[i].title = newTitle;
+                    break;
+                }
+            }
+            
+            // Re-render the table
+            renderDocumentsTable();
+            
+            // Show success notification
+            alert("Document title updated successfully.");
+        } else {
+            alert(`Error: ${data.message}`);
+        }
+    } catch (error) {
+        console.error("Error updating document title:", error);
+        alert(`Error updating document title: ${error.message}`);
+    } finally {
+        // Reset button state
+        document.getElementById('updateDocumentTitleBtn').innerHTML = 'Save Changes';
+        document.getElementById('updateDocumentTitleBtn').disabled = false;
+    }
+}
+
 async function processDocument(documentId) {
     try {
         const processBtn = document.getElementById('processDocBtn');

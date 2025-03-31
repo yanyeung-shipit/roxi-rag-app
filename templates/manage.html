@@ -191,6 +191,17 @@
                 </div>
             </div>
             <div class="card-body">
+                <!-- Search Box -->
+                <div class="mb-3">
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="documentSearchInput" placeholder="Search documents...">
+                        <button class="btn btn-outline-secondary" type="button" id="documentSearchBtn">
+                            <i class="fas fa-search"></i>
+                        </button>
+                    </div>
+                    <small class="form-text text-muted">Search by title, filename, or citation information</small>
+                </div>
+                
                 <div id="documentsTableContainer">
                     <div class="table-responsive">
                         <table class="table table-hover table-dark" id="documentsTable">
@@ -210,6 +221,28 @@
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                    
+                    <!-- Pagination Controls -->
+                    <div class="d-flex justify-content-between align-items-center mt-3" id="documentsPagination">
+                        <div>
+                            <span id="documentsCurrentPage">Page 1</span> of <span id="documentsTotalPages">1</span>
+                            (<span id="documentsTotalCount">0</span> documents)
+                        </div>
+                        <div class="btn-group" role="group">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="firstPageBtn">
+                                <i class="fas fa-angle-double-left"></i>
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="prevPageBtn">
+                                <i class="fas fa-angle-left"></i>
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="nextPageBtn">
+                                <i class="fas fa-angle-right"></i>
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="lastPageBtn">
+                                <i class="fas fa-angle-double-right"></i>
+                            </button>
+                        </div>
                     </div>
                 </div>
                 <div id="documentDetailContainer" class="d-none">
@@ -411,6 +444,32 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-danger" id="confirmDeleteCollectionBtn">Delete Collection</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Document Title Modal -->
+<div class="modal fade" id="editDocumentTitleModal" tabindex="-1" aria-labelledby="editDocumentTitleModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark text-light">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editDocumentTitleModalLabel">Edit Document Title</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editDocumentTitleForm">
+                    <input type="hidden" id="editDocumentId">
+                    <div class="mb-3">
+                        <label for="editDocumentTitle" class="form-label">Document Title</label>
+                        <input type="text" class="form-control" id="editDocumentTitle" required>
+                    </div>
+                    <p class="text-muted small">Only the document title will be changed. All other properties will remain the same.</p>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="updateDocumentTitleBtn">Save Changes</button>
             </div>
         </div>
     </div>

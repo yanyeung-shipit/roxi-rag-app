@@ -1272,13 +1272,43 @@ def add_topic_pages():
 
 @app.route('/documents', methods=['GET'])
 def get_documents():
-    """Get a list of all documents, sorted by most recent first."""
+    """Get a list of all documents, sorted by most recent first with pagination and search."""
     try:
-        documents = Document.query.order_by(Document.created_at.desc()).all()
-        results = []
+        # Get pagination parameters
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 10, type=int)
+        search_term = request.args.get('search', '', type=str)
         
+        # Start with base query
+        query = Document.query.order_by(Document.created_at.desc())
+        
+        # Apply search filter if a search term is provided
+        if search_term:
+            search_pattern = f"%{search_term}%"
+            query = query.filter(
+                db.or_(
+                    Document.title.ilike(search_pattern),
+                    Document.filename.ilike(search_pattern),
+                    Document.source_url.ilike(search_pattern),
+                    # Include citation-related fields if they exist in the model
+                    getattr(Document, 'author', None) and Document.author.ilike(search_pattern),
+                    getattr(Document, 'journal', None) and Document.journal.ilike(search_pattern),
+                    getattr(Document, 'year', None) and Document.year.ilike(search_pattern),
+                    getattr(Document, 'doi', None) and Document.doi.ilike(search_pattern)
+                )
+            )
+        
+        # Get total count for pagination
+        total_count = query.count()
+        
+        # Apply pagination
+        paginated = query.paginate(page=page, per_page=per_page, error_out=False)
+        documents = paginated.items
+        
+        results = []
         for doc in documents:
-            results.append({
+            # Build base document info
+            doc_info = {
                 'id': doc.id,
                 'title': doc.title,
                 'filename': doc.filename,
@@ -1290,11 +1320,25 @@ def get_documents():
                 'created_at': doc.created_at.isoformat() if doc.created_at else None,
                 'processed': doc.processed,
                 'chunk_count': len(doc.chunks)
-            })
+            }
             
+            # Add citation fields if they exist
+            for field in ['author', 'journal', 'year', 'doi']:
+                if hasattr(doc, field):
+                    doc_info[field] = getattr(doc, field)
+            
+            results.append(doc_info)
+            
+        # Calculate total pages
+        total_pages = (total_count + per_page - 1) // per_page  # Ceiling division
+        
         return jsonify({
             'success': True,
-            'documents': results
+            'documents': results,
+            'page': page,
+            'per_page': per_page,
+            'total': total_count,
+            'total_pages': total_pages
         })
     except Exception as e:
         logger.exception("Error retrieving documents")
@@ -1699,6 +1743,69 @@ def load_more_document_content(document_id):
         return jsonify({
             'success': False,
             'message': f'Error: {str(e)}'
+        }), 500
+
+@app.route('/documents/<int:document_id>/update', methods=['POST'])
+def update_document(document_id):
+    """Update a document's properties (currently only the title)."""
+    try:
+        # Ensure vector store is loaded if it was unloaded during deep sleep
+        from utils.background_processor import _background_processor
+        if _background_processor and hasattr(_background_processor, 'vector_store_unloaded') and _background_processor.vector_store_unloaded:
+            logger.info("Vector store was unloaded during deep sleep, reloading before updating document")
+            _background_processor.ensure_vector_store_loaded()
+            
+        # Find the document
+        doc = Document.query.get(document_id)
+        
+        if not doc:
+            return jsonify({
+                'success': False,
+                'message': f'Document with ID {document_id} not found'
+            }), 404
+        
+        # Get updated title from form data
+        new_title = request.form.get('title', None)
+        
+        if not new_title or new_title.strip() == '':
+            return jsonify({
+                'success': False,
+                'message': 'New title cannot be empty'
+            }), 400
+        
+        # Update the document title
+        old_title = doc.title
+        doc.title = new_title.strip()
+        
+        # Save changes
+        db.session.commit()
+        
+        # If vector store is loaded, update the document title in it
+        if vector_store and hasattr(vector_store, '_documents'):
+            document_updated = False
+            for doc_id, doc_data in vector_store._documents.items():
+                if doc_data.get('source_id') == document_id:
+                    doc_data['title'] = new_title.strip()
+                    document_updated = True
+            
+            if document_updated:
+                vector_store._save()
+                logger.info(f"Updated document title in vector store: {old_title} -> {new_title}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Document title updated successfully: {old_title} -> {new_title}',
+            'document': {
+                'id': doc.id,
+                'title': doc.title
+            }
+        })
+        
+    except Exception as e:
+        logger.exception(f"Error updating document {document_id}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'Error updating document: {str(e)}'
         }), 500
 
 @app.route('/documents/<int:document_id>', methods=['DELETE'])
