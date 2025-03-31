@@ -2462,8 +2462,8 @@ async function showDocumentDetailsModal(docId) {
                 editButton.onclick = function() {
                     const docId = this.getAttribute('data-id');
                     const docTitle = this.getAttribute('data-title');
-                    document.getElementById('editDocId').value = docId;
-                    document.getElementById('editDocTitle').value = docTitle;
+                    document.getElementById('editDocumentId').value = docId;
+                    document.getElementById('editDocumentTitle').value = docTitle;
                     showModal('editDocumentTitleModal');
                 };
             }
