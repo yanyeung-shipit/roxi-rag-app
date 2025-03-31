@@ -2285,7 +2285,12 @@ async function showDocumentDetailsModal(docId) {
             // Build detailed view
             let html = `
                 <div data-id="${doc.id}" class="document-details-wrapper">
-                <h4 id="documentDetailsTitle">${doc.title || doc.filename || 'Untitled Document'}</h4>
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h4 id="documentDetailsTitle">${doc.title || doc.filename || 'Untitled Document'}</h4>
+                    <button id="documentDetailsEditBtn" class="btn btn-sm btn-primary" data-id="${doc.id}" data-title="${doc.title || doc.filename || 'Untitled Document'}">
+                        <i class="fas fa-edit me-1"></i> Edit Title
+                    </button>
+                </div>
                 <div class="row mb-4">
                     <div class="col-md-6">
                         <ul class="list-group list-group-flush bg-transparent">
@@ -2295,12 +2300,7 @@ async function showDocumentDetailsModal(docId) {
                             </li>
                             <li class="list-group-item bg-transparent d-flex justify-content-between">
                                 <span>Title:</span>
-                                <div class="d-flex align-items-center gap-2">
-                                    <span class="text-truncate me-2">${doc.title || doc.filename || 'Untitled Document'}</span>
-                                    <a href="#" id="documentDetailsEditBtn" class="text-info ms-1" data-id="${doc.id}" data-title="${doc.title || doc.filename || 'Untitled Document'}">
-                                        <i class="fas fa-edit"></i> Edit
-                                    </a>
-                                </div>
+                                <span class="text-truncate">${doc.title || doc.filename || 'Untitled Document'}</span>
                             </li>
                             <li class="list-group-item bg-transparent d-flex justify-content-between">
                                 <span>Type:</span>
