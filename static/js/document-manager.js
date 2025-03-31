@@ -168,24 +168,37 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Handle edit button click in document details modal
         const documentDetailsEditBtn = document.getElementById('documentDetailsEditBtn');
+        console.log('Edit document button element:', documentDetailsEditBtn);
+        
         if (documentDetailsEditBtn) {
+            console.log('Adding click event listener to documentDetailsEditBtn');
             documentDetailsEditBtn.addEventListener('click', function() {
+                console.log('Edit document button clicked');
+                
                 // First close the document details modal
                 hideModal('documentDetailsModal');
                 
                 // Get the currently displayed document ID and title from the document detail view
                 const detailContainer = document.getElementById('documentDetailContent');
+                console.log('Detail container:', detailContainer);
+                
                 if (detailContainer) {
                     // Extract document ID from the current view - we need to find it in the DOM
                     // Look for any element with data-id attribute in the detail container
                     const docIdElement = detailContainer.querySelector('[data-id]');
+                    console.log('Document ID element:', docIdElement);
+                    
                     if (docIdElement && docIdElement.dataset.id) {
                         const docId = docIdElement.dataset.id;
+                        console.log('Found document ID:', docId);
                         
                         // Find the title in the h4 element that's the first child of the detail content
                         const titleElement = detailContainer.querySelector('h4');
+                        console.log('Title element:', titleElement);
+                        
                         if (titleElement) {
                             const docTitle = titleElement.textContent.trim();
+                            console.log('Found document title:', docTitle);
                             
                             // Populate the edit modal with the document info
                             const editDocumentId = document.getElementById('editDocumentId');
@@ -197,13 +210,24 @@ document.addEventListener('DOMContentLoaded', () => {
                                 
                                 // Show the edit modal after a short delay to allow the previous modal to close
                                 setTimeout(() => {
+                                    console.log('Showing edit modal');
                                     showModal('editDocumentTitleModal');
                                 }, 300);
+                            } else {
+                                console.error('Edit form elements not found');
                             }
+                        } else {
+                            console.error('Document title element not found');
                         }
+                    } else {
+                        console.error('Document ID element not found in the DOM');
                     }
+                } else {
+                    console.error('Document detail container not found');
                 }
             });
+        } else {
+            console.error('Document details edit button not found in the DOM');
         }
         
         // Save title changes
@@ -591,7 +615,15 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Add event listeners to buttons
         document.querySelectorAll('.view-doc-btn').forEach(btn => {
-            btn.addEventListener('click', () => viewDocument(btn.dataset.id));
+            btn.addEventListener('click', () => {
+                // Check if we're on the manage page with detail view
+                if (elements.documentDetailContent) {
+                    viewDocument(btn.dataset.id);
+                } else {
+                    // Show in modal instead
+                    showDocumentDetailsModal(btn.dataset.id);
+                }
+            });
         });
         
         document.querySelectorAll('.delete-doc-btn').forEach(btn => {
@@ -871,10 +903,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Add event listeners to the view buttons
                 elements.collectionDocumentsList.querySelectorAll('.view-doc-btn').forEach(btn => {
                     btn.addEventListener('click', () => {
-                        // Hide the collection details
-                        elements.collectionDetailCard.style.display = 'none';
-                        // Show the document
-                        viewDocument(btn.dataset.id);
+                        // Check if we're on the manage page with detail view
+                        if (elements.documentDetailContent) {
+                            // Hide the collection details and show the document
+                            elements.collectionDetailCard.style.display = 'none';
+                            viewDocument(btn.dataset.id);
+                        } else {
+                            // Show in modal instead
+                            showDocumentDetailsModal(btn.dataset.id);
+                        }
                     });
                 });
             } else {
@@ -2234,7 +2271,325 @@ async function loadMoreContent(documentId) {
 
 // Global function to manually process a document
 // Update document title
-// Move hideModal function to global scope so it's accessible outside the DOMContentLoaded event
+// Move functions to global scope so they're accessible outside the DOMContentLoaded event
+// Helper function to show a modal - global scope
+function showModal(modalId) {
+    console.log(`Attempting to show modal: ${modalId}`);
+    const modalElement = document.getElementById(modalId);
+    
+    if (!modalElement) {
+        console.error(`Modal element ${modalId} not found`);
+        return;
+    }
+    
+    // Try multiple approaches to show modal
+    try {
+        // Try Bootstrap 5 way
+        const bsModal = new bootstrap.Modal(modalElement);
+        bsModal.show();
+        console.log("Modal shown using Bootstrap 5 API");
+        return;
+    } catch (error1) {
+        console.warn("Bootstrap 5 modal show failed:", error1);
+        
+        try {
+            // Try jQuery way
+            $(modalElement).modal('show');
+            console.log("Modal shown using jQuery");
+            return;
+        } catch (error2) {
+            console.warn("jQuery modal show failed:", error2);
+            
+            try {
+                // Manual way
+                modalElement.classList.add('show');
+                modalElement.style.display = 'block';
+                document.body.classList.add('modal-open');
+                
+                // Create backdrop if it doesn't exist
+                let backdrop = document.querySelector('.modal-backdrop');
+                if (!backdrop) {
+                    backdrop = document.createElement('div');
+                    backdrop.className = 'modal-backdrop fade show';
+                    document.body.appendChild(backdrop);
+                }
+                
+                console.log("Modal shown using manual DOM manipulation");
+            } catch (error3) {
+                console.error("All modal show methods failed:", error3);
+            }
+        }
+    }
+}
+
+// Function to show document details in a modal - global scope
+async function showDocumentDetailsModal(docId) {
+    try {
+        console.log(`Showing document ${docId} in modal`);
+        const modalContainer = document.getElementById('documentDetailsContainer');
+        if (!modalContainer) {
+            console.error("Document details container not found");
+            return;
+        }
+        
+        modalContainer.innerHTML = '<p class="text-center">Loading document details...</p>';
+        showModal('documentDetailsModal');
+        
+        const response = await fetch(`/documents/${docId}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            const doc = data.document;
+            const createdDate = new Date(doc.created_at);
+            const dateStr = createdDate.toLocaleDateString();
+            
+            // Build detailed view
+            let html = `
+                <div data-id="${doc.id}" class="document-details-wrapper">
+                <h4>${doc.title || doc.filename || 'Untitled Document'}</h4>
+                <div class="row mb-4">
+                    <div class="col-md-6">
+                        <ul class="list-group list-group-flush bg-transparent">
+                            <li class="list-group-item bg-transparent d-flex justify-content-between">
+                                <span>ID:</span>
+                                <span>${doc.id}</span>
+                            </li>
+                            <li class="list-group-item bg-transparent d-flex justify-content-between">
+                                <span>Type:</span>
+                                <span class="badge bg-${doc.file_type === 'pdf' ? 'warning' : 'info'}">
+                                    ${doc.file_type === 'pdf' ? 'PDF Document' : 'Website'}
+                                </span>
+                            </li>
+                            <li class="list-group-item bg-transparent d-flex justify-content-between">
+                                <span>Added:</span>
+                                <span>${dateStr}</span>
+                            </li>
+            `;
+                
+            if (doc.file_type === 'pdf') {
+                html += `
+                    <li class="list-group-item bg-transparent d-flex justify-content-between">
+                        <span>File Size:</span>
+                        <span>${doc.file_size ? (doc.file_size / 1024 / 1024).toFixed(2) + ' MB' : 'N/A'}</span>
+                    </li>
+                    <li class="list-group-item bg-transparent d-flex justify-content-between">
+                        <span>Pages:</span>
+                        <span>${doc.page_count || 'N/A'}</span>
+                    </li>
+                `;
+                
+                // Add DOI if available
+                if (doc.doi) {
+                    html += `
+                        <li class="list-group-item bg-transparent">
+                            <div><strong>DOI:</strong></div>
+                            <div class="mt-1">
+                                <a href="https://doi.org/${doc.doi}" target="_blank" class="text-info">${doc.doi}</a>
+                            </div>
+                        </li>
+                    `;
+                }
+                
+                // Add citation if available
+                if (doc.formatted_citation) {
+                    html += `
+                        <li class="list-group-item bg-transparent">
+                            <div><strong>Citation:</strong></div>
+                            <div class="mt-1">
+                                <small>${doc.formatted_citation}</small>
+                            </div>
+                        </li>
+                    `;
+                }
+                
+                // Add view PDF button if we have a file path
+                if (doc.file_path) {
+                    html += `
+                        <li class="list-group-item bg-transparent">
+                            <a href="/view_pdf/${doc.id}" target="_blank" class="btn btn-sm btn-outline-info">
+                                <i class="fas fa-file-pdf me-1"></i> Open PDF in New Window
+                            </a>
+                        </li>
+                    `;
+                }
+                
+                // Add process button for unprocessed PDFs
+                if (!doc.processed && doc.file_path) {
+                    html += `
+                        </ul>
+                        <div class="alert alert-secondary mt-3">
+                            <p><i class="fas fa-exclamation-circle me-2"></i> This document needs to be processed to extract DOI and citation info.</p>
+                            <button id="processDocBtnModal" class="btn btn-sm btn-primary" onclick="processDocument(${doc.id})">
+                                <i class="fas fa-cogs me-1"></i> Process Document
+                            </button>
+                            <div id="processStatusModal" class="mt-2"></div>
+                        </div>
+                        <ul class="list-group list-group-flush bg-transparent">
+                    `;
+                }
+            } else if (doc.source_url) {
+                html += `
+                    <li class="list-group-item bg-transparent d-flex justify-content-between">
+                        <span>Source URL:</span>
+                        <span><a href="${doc.source_url}" target="_blank" class="text-info">${doc.source_url}</a></span>
+                    </li>
+                `;
+            }
+                
+            html += `
+                    <li class="list-group-item bg-transparent d-flex justify-content-between">
+                        <span>Text Chunks:</span>
+                        <span>${doc.chunks ? doc.chunks.length : 0}</span>
+                    </li>
+                </ul>
+            </div>
+            
+            <div class="col-md-6">
+                <h5 class="mb-3">Collections</h5>
+                <div id="modalDocCollectionsList">Loading...</div>
+            </div>
+        </div>
+        
+        <h5>Content Preview</h5>
+        <div class="card bg-dark border-secondary mb-4">
+            <div class="card-body">
+                <div style="max-height: 300px; overflow-y: auto;">
+            `;
+            
+            // Add content preview (first few chunks)
+            if (doc.chunks && doc.chunks.length > 0) {
+                const maxChunks = Math.min(3, doc.chunks.length);
+                for (let i = 0; i < maxChunks; i++) {
+                    html += `
+                        <div class="mb-3">
+                            <span class="badge bg-secondary mb-1">Chunk ${i+1}</span>
+                            <p class="text-muted small">${doc.chunks[i].text_content}</p>
+                        </div>
+                    `;
+                    
+                    // Add separator between chunks
+                    if (i < maxChunks - 1) {
+                        html += '<hr class="border-secondary">';
+                    }
+                }
+                
+                // Add indication if there are more chunks
+                if (doc.chunks.length > maxChunks) {
+                    html += `
+                        <div class="text-center mt-3">
+                            <span class="badge bg-secondary">+${doc.chunks.length - maxChunks} more chunks</span>
+                        </div>
+                    `;
+                }
+                
+                // Check if there are more content chunks available to load
+                if (doc.file_type === 'website' && doc.file_size > 0 && doc.chunks.length < doc.file_size) {
+                    const remainingChunks = doc.file_size - doc.chunks.length;
+                    html += `
+                        <div class="alert alert-info mt-3">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <i class="fas fa-info-circle me-2"></i>
+                                    Currently showing ${doc.chunks.length} of ${doc.file_size} available chunks.
+                                </div>
+                                <button id="loadMoreContentBtnModal" class="btn btn-primary btn-sm" 
+                                        onclick="loadMoreContent(${doc.id})">
+                                    <i class="fas fa-cloud-download-alt me-2"></i>
+                                    Load More Content (${Math.min(5, remainingChunks)} of ${remainingChunks})
+                                </button>
+                            </div>
+                            <div id="loadMoreStatusModal" class="mt-2" style="display: none;"></div>
+                        </div>
+                    `;
+                }
+            } else {
+                html += '<p class="text-center text-muted">No content available for preview</p>';
+            }
+            
+            html += `
+                    </div>
+                </div>
+            </div>
+            </div>
+            `;
+            
+            modalContainer.innerHTML = html;
+            
+            // Set up the edit button to open the edit document title modal
+            const editButton = document.getElementById('documentDetailsEditBtn');
+            if (editButton) {
+                editButton.setAttribute('data-id', doc.id);
+                editButton.setAttribute('data-title', doc.title || doc.filename || 'Untitled Document');
+                editButton.onclick = function() {
+                    const docId = this.getAttribute('data-id');
+                    const docTitle = this.getAttribute('data-title');
+                    document.getElementById('editDocId').value = docId;
+                    document.getElementById('editDocTitle').value = docTitle;
+                    showModal('editDocumentTitleModal');
+                };
+            }
+            
+            // Display collections for this document in the modal
+            displayDocumentCollectionsInModal(doc);
+        } else {
+            modalContainer.innerHTML = `
+                <div class="alert alert-danger" role="alert">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    ${data.message || 'Error loading document details'}
+                </div>
+            `;
+        }
+    } catch (error) {
+        console.error("Error showing document in modal:", error);
+        const modalContainer = document.getElementById('documentDetailsContainer');
+        if (modalContainer) {
+            modalContainer.innerHTML = `
+                <div class="alert alert-danger" role="alert">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    Error loading document: ${error.message}
+                </div>
+            `;
+        }
+    }
+}
+
+// Helper function to display document collections in the modal - global scope
+function displayDocumentCollectionsInModal(doc) {
+    const collectionsContainer = document.getElementById('modalDocCollectionsList');
+    if (!collectionsContainer) {
+        console.error("Modal collections container not found");
+        return;
+    }
+    
+    if (!doc.collections || doc.collections.length === 0) {
+        collectionsContainer.innerHTML = `
+            <div class="text-muted">
+                <i class="fas fa-info-circle me-2"></i>
+                This document is not in any collections.
+            </div>
+        `;
+        return;
+    }
+    
+    const ul = document.createElement('ul');
+    ul.className = 'list-group list-group-flush bg-transparent';
+    
+    doc.collections.forEach(collection => {
+        const li = document.createElement('li');
+        li.className = 'list-group-item bg-transparent d-flex justify-content-between align-items-center';
+        li.innerHTML = `
+            <div>
+                <span>${collection.name}</span>
+                <span class="badge bg-info ms-2">${collection.document_count || 0} docs</span>
+            </div>
+        `;
+        ul.appendChild(li);
+    });
+    
+    collectionsContainer.innerHTML = '';
+    collectionsContainer.appendChild(ul);
+}
+
 // Helper function to hide a modal - global scope
 function hideModal(modalId) {
     console.log(`Attempting to hide modal: ${modalId}`);
