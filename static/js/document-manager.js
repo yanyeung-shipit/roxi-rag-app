@@ -166,69 +166,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
         
-        // Handle edit button click in document details modal
-        const documentDetailsEditBtn = document.getElementById('documentDetailsEditBtn');
-        console.log('Edit document button element:', documentDetailsEditBtn);
-        
-        if (documentDetailsEditBtn) {
-            console.log('Adding click event listener to documentDetailsEditBtn');
-            documentDetailsEditBtn.addEventListener('click', function() {
-                console.log('Edit document button clicked');
-                
-                // First close the document details modal
-                hideModal('documentDetailsModal');
-                
-                // Get the currently displayed document ID and title from the document detail view
-                const detailContainer = document.getElementById('documentDetailContent');
-                console.log('Detail container:', detailContainer);
-                
-                if (detailContainer) {
-                    // Extract document ID from the current view - we need to find it in the DOM
-                    // Look for any element with data-id attribute in the detail container
-                    const docIdElement = detailContainer.querySelector('[data-id]');
-                    console.log('Document ID element:', docIdElement);
-                    
-                    if (docIdElement && docIdElement.dataset.id) {
-                        const docId = docIdElement.dataset.id;
-                        console.log('Found document ID:', docId);
-                        
-                        // Find the title in the h4 element that's the first child of the detail content
-                        const titleElement = detailContainer.querySelector('h4');
-                        console.log('Title element:', titleElement);
-                        
-                        if (titleElement) {
-                            const docTitle = titleElement.textContent.trim();
-                            console.log('Found document title:', docTitle);
-                            
-                            // Populate the edit modal with the document info
-                            const editDocumentId = document.getElementById('editDocumentId');
-                            const editDocumentTitle = document.getElementById('editDocumentTitle');
-                            
-                            if (editDocumentId && editDocumentTitle) {
-                                editDocumentId.value = docId;
-                                editDocumentTitle.value = docTitle;
-                                
-                                // Show the edit modal after a short delay to allow the previous modal to close
-                                setTimeout(() => {
-                                    console.log('Showing edit modal');
-                                    showModal('editDocumentTitleModal');
-                                }, 300);
-                            } else {
-                                console.error('Edit form elements not found');
-                            }
-                        } else {
-                            console.error('Document title element not found');
-                        }
-                    } else {
-                        console.error('Document ID element not found in the DOM');
-                    }
-                } else {
-                    console.error('Document detail container not found');
-                }
-            });
-        } else {
-            console.error('Document details edit button not found in the DOM');
-        }
+        // No longer handle edit button click in document details modal directly here
+        // The edit button for the document details modal is handled in the showDocumentDetailsModal function
         
         // Save title changes
         const updateDocumentTitleBtn = document.getElementById('updateDocumentTitleBtn');
