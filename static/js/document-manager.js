@@ -166,6 +166,46 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
         
+        // Handle edit button click in document details modal
+        const documentDetailsEditBtn = document.getElementById('documentDetailsEditBtn');
+        if (documentDetailsEditBtn) {
+            documentDetailsEditBtn.addEventListener('click', function() {
+                // First close the document details modal
+                hideModal('documentDetailsModal');
+                
+                // Get the currently displayed document ID and title from the document detail view
+                const detailContainer = document.getElementById('documentDetailContent');
+                if (detailContainer) {
+                    // Extract document ID from the current view - we need to find it in the DOM
+                    // Look for any element with data-id attribute in the detail container
+                    const docIdElement = detailContainer.querySelector('[data-id]');
+                    if (docIdElement && docIdElement.dataset.id) {
+                        const docId = docIdElement.dataset.id;
+                        
+                        // Find the title in the h4 element that's the first child of the detail content
+                        const titleElement = detailContainer.querySelector('h4');
+                        if (titleElement) {
+                            const docTitle = titleElement.textContent.trim();
+                            
+                            // Populate the edit modal with the document info
+                            const editDocumentId = document.getElementById('editDocumentId');
+                            const editDocumentTitle = document.getElementById('editDocumentTitle');
+                            
+                            if (editDocumentId && editDocumentTitle) {
+                                editDocumentId.value = docId;
+                                editDocumentTitle.value = docTitle;
+                                
+                                // Show the edit modal after a short delay to allow the previous modal to close
+                                setTimeout(() => {
+                                    showModal('editDocumentTitleModal');
+                                }, 300);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
         // Save title changes
         const updateDocumentTitleBtn = document.getElementById('updateDocumentTitleBtn');
         if (updateDocumentTitleBtn) {
@@ -583,10 +623,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 // Build detailed view
                 let html = `
+                    <div data-id="${doc.id}" class="document-details-wrapper">
                     <h4>${doc.title || doc.filename || 'Untitled Document'}</h4>
                     <div class="row mb-4">
                         <div class="col-md-6">
                             <ul class="list-group list-group-flush bg-transparent">
+                                <li class="list-group-item bg-transparent d-flex justify-content-between">
+                                    <span>ID:</span>
+                                    <span>${doc.id}</span>
+                                </li>
                                 <li class="list-group-item bg-transparent d-flex justify-content-between">
                                     <span>Type:</span>
                                     <span class="badge bg-${doc.file_type === 'pdf' ? 'warning' : 'info'}">
@@ -2189,6 +2234,81 @@ async function loadMoreContent(documentId) {
 
 // Global function to manually process a document
 // Update document title
+// Move hideModal function to global scope so it's accessible outside the DOMContentLoaded event
+// Helper function to hide a modal - global scope
+function hideModal(modalId) {
+    console.log(`Attempting to hide modal: ${modalId}`);
+    const modalElement = document.getElementById(modalId);
+    
+    if (!modalElement) {
+        console.error(`Modal element ${modalId} not found`);
+        return;
+    }
+    
+    // Try multiple approaches to hide modal
+    try {
+        // Try Bootstrap 5 way
+        const bsModal = bootstrap.Modal.getInstance(modalElement);
+        if (bsModal) {
+            bsModal.hide();
+            console.log("Modal hidden using Bootstrap 5 API");
+            
+            // Extra cleanup for backdrop
+            setTimeout(() => {
+                cleanupModalBackdrop();
+            }, 300);
+            return;
+        }
+    } catch (error1) {
+        console.warn("Bootstrap 5 modal hide failed:", error1);
+    }
+    
+    try {
+        // Try jQuery way
+        $(modalElement).modal('hide');
+        console.log("Modal hidden using jQuery");
+        
+        // Extra cleanup for backdrop
+        setTimeout(() => {
+            cleanupModalBackdrop();
+        }, 300);
+        return;
+    } catch (error2) {
+        console.warn("jQuery modal hide failed:", error2);
+        
+        try {
+            // Manual way
+            modalElement.classList.remove('show');
+            modalElement.style.display = 'none';
+            document.body.classList.remove('modal-open');
+            
+            // Remove backdrop
+            cleanupModalBackdrop();
+            console.log("Modal hidden manually by DOM manipulation");
+        } catch (error3) {
+            console.error("Manual modal hide failed:", error3);
+        }
+    }
+}
+
+// Helper function to clean up modal backdrops - global scope
+function cleanupModalBackdrop() {
+    console.log("Cleaning up modal backdrop");
+    
+    // Remove all modal-backdrop elements
+    const backdrops = document.querySelectorAll('.modal-backdrop');
+    backdrops.forEach(backdrop => {
+        backdrop.parentNode.removeChild(backdrop);
+    });
+    
+    // Make sure body doesn't have modal-open class
+    document.body.classList.remove('modal-open');
+    
+    // Remove inline style that might have been added to body
+    document.body.style.removeProperty('padding-right');
+    document.body.style.removeProperty('overflow');
+}
+
 async function updateDocumentTitle() {
     console.log("Updating document title");
     
