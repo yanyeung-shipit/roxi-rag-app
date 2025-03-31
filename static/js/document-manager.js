@@ -2285,7 +2285,7 @@ async function showDocumentDetailsModal(docId) {
             // Build detailed view
             let html = `
                 <div data-id="${doc.id}" class="document-details-wrapper">
-                <h4>${doc.title || doc.filename || 'Untitled Document'}</h4>
+                <h4 id="documentDetailsTitle">${doc.title || doc.filename || 'Untitled Document'}</h4>
                 <div class="row mb-4">
                     <div class="col-md-6">
                         <ul class="list-group list-group-flush bg-transparent">
@@ -2293,14 +2293,13 @@ async function showDocumentDetailsModal(docId) {
                                 <span>ID:</span>
                                 <span>${doc.id}</span>
                             </li>
-                            <li class="list-group-item bg-transparent d-flex">
-                                <div class="d-flex justify-content-between w-100 align-items-center">
-                                    <span>Title:</span>
-                                    <div>
-                                        <button id="documentDetailsEditBtn" class="btn btn-sm btn-outline-info" data-id="${doc.id}" data-title="${doc.title || doc.filename || 'Untitled Document'}">
-                                            <i class="fas fa-edit me-1"></i> Edit Title
-                                        </button>
-                                    </div>
+                            <li class="list-group-item bg-transparent d-flex justify-content-between">
+                                <span>Title:</span>
+                                <div class="d-flex align-items-center gap-2">
+                                    <span class="text-truncate me-2">${doc.title || doc.filename || 'Untitled Document'}</span>
+                                    <a href="#" id="documentDetailsEditBtn" class="text-info ms-1" data-id="${doc.id}" data-title="${doc.title || doc.filename || 'Untitled Document'}">
+                                        <i class="fas fa-edit"></i> Edit
+                                    </a>
                                 </div>
                             </li>
                             <li class="list-group-item bg-transparent d-flex justify-content-between">
@@ -2469,12 +2468,14 @@ async function showDocumentDetailsModal(docId) {
             if (editButton) {
                 editButton.setAttribute('data-id', doc.id);
                 editButton.setAttribute('data-title', doc.title || doc.filename || 'Untitled Document');
-                editButton.onclick = function() {
+                editButton.onclick = function(e) {
+                    e.preventDefault(); // Prevent the default link action
                     const docId = this.getAttribute('data-id');
                     const docTitle = this.getAttribute('data-title');
                     document.getElementById('editDocumentId').value = docId;
                     document.getElementById('editDocumentTitle').value = docTitle;
                     showModal('editDocumentTitleModal');
+                    return false; // Prevent any other default behavior
                 };
             }
             
@@ -2642,19 +2643,29 @@ async function updateDocumentTitle() {
         const data = await response.json();
         
         if (data.success) {
-            // Hide the modal
+            // Hide the edit title modal
             hideModal('editDocumentTitleModal');
             
-            // Update the document in the current list
-            for (let i = 0; i < currentDocuments.length; i++) {
-                if (currentDocuments[i].id == documentId) {
-                    currentDocuments[i].title = newTitle;
-                    break;
+            // Update the document in the current list if available
+            if (typeof currentDocuments !== 'undefined' && currentDocuments) {
+                for (let i = 0; i < currentDocuments.length; i++) {
+                    if (currentDocuments[i].id == documentId) {
+                        currentDocuments[i].title = newTitle;
+                        break;
+                    }
+                }
+                
+                // Re-render the table if available
+                if (typeof renderDocumentsTable === 'function') {
+                    renderDocumentsTable();
                 }
             }
             
-            // Re-render the table
-            renderDocumentsTable();
+            // Refresh the document details modal to show the updated title
+            if (document.getElementById('documentDetailsModal').classList.contains('show')) {
+                // Reload document details to show updated title
+                showDocumentDetailsModal(documentId);
+            }
             
             // Show success notification
             alert("Document title updated successfully.");
