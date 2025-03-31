@@ -42,6 +42,16 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 }
 db.init_app(app)
 
+@app.route('/init_db')
+def init_db():
+    try:
+        with app.app_context():
+            db.create_all()
+        return jsonify({"success": True, "message": "Database initialized successfully."})
+    except Exception as e:
+        logger.exception("Error initializing database")
+        return jsonify({"success": False, "message": f"Error: {str(e)}"}), 500
+
 # Create uploads directory if it doesn't exist
 UPLOAD_FOLDER = os.path.join(app.root_path, 'uploads')
 if not os.path.exists(UPLOAD_FOLDER):
