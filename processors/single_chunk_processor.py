@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 # Constants
 CHECKPOINT_DIR = os.path.join(LOG_DIR, "checkpoints")
 CHECKPOINT_FILE = os.path.join(CHECKPOINT_DIR, "adaptive_processor_checkpoint.pkl")
-TARGET_PERCENTAGE = 66.0  # Default target percentage
+TARGET_PERCENTAGE = 100.0  # Default target percentage
 
 def save_checkpoint(processed_chunk_ids: Set[int], chunk_id: int, document_id: int) -> None:
     """

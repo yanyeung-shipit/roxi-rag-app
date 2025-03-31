@@ -41,7 +41,7 @@ from utils.vector_store import VectorStore
 
 # Constants
 CHECKPOINT_DIR = "logs/checkpoints"
-DEFAULT_TARGET_PERCENTAGE = 66.0
+DEFAULT_TARGET_PERCENTAGE = 100.0
 DEFAULT_BATCH_SIZE = 5
 MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds

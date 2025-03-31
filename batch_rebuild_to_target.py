@@ -42,7 +42,7 @@ from utils.llm_service import get_embedding
 
 # Constants
 CHECKPOINT_DIR = "logs/checkpoints"
-DEFAULT_TARGET_PERCENTAGE = 66.0
+DEFAULT_TARGET_PERCENTAGE = 100.0
 DEFAULT_BATCH_SIZE = 5
 MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds

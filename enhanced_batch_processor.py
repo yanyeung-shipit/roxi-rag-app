@@ -36,7 +36,7 @@ logger = logging.getLogger("EnhancedBatchProcessor")
 
 # Constants
 DEFAULT_BATCH_SIZE = 5
-DEFAULT_TARGET_PERCENTAGE = 50.0  # Process up to 50% by default
+DEFAULT_TARGET_PERCENTAGE = 100.0  # Process up to 100% by default
 MAX_RETRY_ATTEMPTS = 5
 VECTOR_STORE_PATH = "document_data.pkl"
 FAISS_INDEX_PATH = "faiss_index.bin"

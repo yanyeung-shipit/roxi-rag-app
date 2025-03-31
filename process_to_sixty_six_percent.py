@@ -22,8 +22,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from batch_rebuild_to_target import BatchProcessor
 
-# Target percentage is 66% to match user requirements
-TARGET_PERCENTAGE = 66.0
+# Target percentage is 100% to match updated user requirements
+TARGET_PERCENTAGE = 100.0
 
 # Default batch size is 5 chunks at a time
 DEFAULT_BATCH_SIZE = 5

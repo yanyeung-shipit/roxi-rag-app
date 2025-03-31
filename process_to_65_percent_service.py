@@ -42,7 +42,7 @@ logger = logging.getLogger("Process65PercentService")
 # Constants
 DATABASE_URL = os.environ.get('DATABASE_URL')
 BATCH_SIZE = 5
-TARGET_PERCENTAGE = 65.0
+TARGET_PERCENTAGE = 100.0
 MAX_RETRIES = 5
 CHECKPOINT_FILE = "process_to_65_percent_checkpoint.json"
 PID_FILE = "process_to_65_percent.pid"

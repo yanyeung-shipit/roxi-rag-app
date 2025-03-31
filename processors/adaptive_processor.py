@@ -51,7 +51,7 @@ except ImportError as e:
 
 # Constants
 CHECKPOINT_DIR = "logs/checkpoints"
-DEFAULT_TARGET_PERCENTAGE = 66.0  # Default target completion percentage
+DEFAULT_TARGET_PERCENTAGE = 100.0  # Default target completion percentage
 MAX_BATCH_SIZE = 10  # Maximum batch size for optimal conditions
 MIN_BATCH_SIZE = 1  # Minimum batch size (single-chunk processing)
 MAX_RETRIES = 3     # Maximum number of retries for failed chunks
