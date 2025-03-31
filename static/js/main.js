@@ -1,136 +1,14 @@
 document.addEventListener('DOMContentLoaded', () => {
     // Form elements
-    const websiteForm = document.getElementById('websiteForm');
-    const pdfForm = document.getElementById('pdfForm');
     const queryForm = document.getElementById('queryForm');
-    const clearKnowledgeBtn = document.getElementById('clearKnowledgeBtn');
     
     // Results containers
-    const websiteResult = document.getElementById('websiteResult');
-    const pdfResult = document.getElementById('pdfResult');
     const answerContent = document.getElementById('answerContent');
     const sourcesList = document.getElementById('sourcesList');
     const sourcesHeader = document.getElementById('sourcesHeader');
     const answerSpinner = document.getElementById('answerSpinner');
-    const statsContent = document.getElementById('statsContent');
     
-    // Load initial stats
-    fetchStats();
-    
-    // Website form submission
-    websiteForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const formData = new FormData(websiteForm);
-        const url = formData.get('website_url');
-        
-        if (!url) {
-            showResult(websiteResult, 'Please enter a valid URL', false);
-            return;
-        }
-        
-        try {
-            websiteResult.innerHTML = `
-                <div class="alert alert-info" role="alert">
-                    <div class="d-flex align-items-center">
-                        <div class="spinner-border spinner-border-sm me-2" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                        <div>Processing website... (this may take a minute or two)</div>
-                    </div>
-                    <div class="small mt-2">For sites like rheum.reviews, we carefully extract content while managing memory usage. Please be patient.</div>
-                </div>
-            `;
-            
-            const response = await fetch('/add_website', {
-                method: 'POST',
-                body: formData,
-                // Add a longer timeout for larger websites
-                signal: AbortSignal.timeout(300000) // 5-minute timeout 
-            });
-            
-            // Check if the response is ok before parsing
-            if (!response.ok) {
-                if (response.status === 500) {
-                    // Server error might be due to memory issues
-                    throw new Error("The website processing failed, possibly due to the site being too large or complex. Try with a specific page URL instead of the homepage.");
-                }
-                const errorText = await response.text();
-                throw new Error(`Server error: ${response.status} ${errorText.substring(0, 100)}`);
-            }
-            
-            const data = await response.json();
-            
-            if (data.success) {
-                showResult(websiteResult, `${data.message} (${data.chunks} chunks extracted)`, true);
-                fetchStats();
-            } else {
-                if (data.message && data.message.includes("memory")) {
-                    // Specific memory error message
-                    showResult(websiteResult, `${data.message}. Try using a more specific URL instead of the homepage.`, false);
-                } else {
-                    showResult(websiteResult, data.message, false);
-                }
-            }
-        } catch (error) {
-            // Handle specific error types
-            if (error.name === 'AbortError') {
-                showResult(websiteResult, `Processing timed out. The website might be too large or complex. Try using a more specific URL instead of the homepage.`, false);
-            } else if (error.message.includes('Unexpected token')) {
-                showResult(websiteResult, `Error parsing server response. This often happens when the website is too large to process. Try using a more specific URL instead of the homepage.`, false);
-            } else {
-                showResult(websiteResult, `Error: ${error.message}`, false);
-            }
-        }
-    });
-    
-    // PDF form submission
-    pdfForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const formData = new FormData(pdfForm);
-        const file = formData.get('pdf_file');
-        
-        if (!file || file.size === 0) {
-            showResult(pdfResult, 'Please select a PDF file', false);
-            return;
-        }
-        
-        try {
-            pdfResult.innerHTML = `
-                <div class="alert alert-info" role="alert">
-                    <div class="d-flex align-items-center">
-                        <div class="spinner-border spinner-border-sm me-2" role="status">
-                            <span class="visually-hidden">Loading...</span>
-                        </div>
-                        <div>Processing PDF...</div>
-                    </div>
-                </div>
-            `;
-            
-            const response = await fetch('/upload_pdf', {
-                method: 'POST',
-                body: formData,
-                // Disable automatic redirect following
-                redirect: 'manual'
-            });
-            
-            // Check if the response is ok before parsing
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`Server error: ${response.status} ${errorText.substring(0, 100)}`);
-            }
-            
-            const data = await response.json();
-            
-            if (data.success) {
-                showResult(pdfResult, `${data.message} (${data.chunks} chunks extracted)`, true);
-                fetchStats();
-            } else {
-                showResult(pdfResult, data.message, false);
-            }
-        } catch (error) {
-            showResult(pdfResult, `Error: ${error.message}`, false);
-        }
-    });
+
     
     // Query form submission
     queryForm.addEventListener('submit', async (e) => {
@@ -244,77 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     
-    // Clear knowledge base button
-    clearKnowledgeBtn.addEventListener('click', async () => {
-        if (confirm('Are you sure you want to clear all knowledge base data? This cannot be undone.')) {
-            try {
-                // Create FormData to include clear_database parameter
-                const formData = new FormData();
-                formData.append('clear_database', 'true');
-                
-                const response = await fetch('/clear', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    fetchStats();
-                    alert('Knowledge base cleared successfully.');
-                } else {
-                    alert(`Error: ${data.message}`);
-                }
-            } catch (error) {
-                alert(`Error: ${error.message}`);
-            }
-        }
-    });
-    
-    // Fetch and display knowledge base stats
-    async function fetchStats() {
-        try {
-            const response = await fetch('/stats');
-            const data = await response.json();
-            
-            if (data.success) {
-                statsContent.innerHTML = `
-                    <ul class="list-group list-group-flush bg-transparent">
-                        <li class="list-group-item bg-transparent d-flex justify-content-between">
-                            <span>Total Documents:</span>
-                            <span class="badge bg-primary rounded-pill">${data.stats.total_documents}</span>
-                        </li>
-                        <li class="list-group-item bg-transparent d-flex justify-content-between">
-                            <span>Website Sources:</span>
-                            <span class="badge bg-info rounded-pill">${data.stats.websites}</span>
-                        </li>
-                        <li class="list-group-item bg-transparent d-flex justify-content-between">
-                            <span>PDF Documents:</span>
-                            <span class="badge bg-warning rounded-pill">${data.stats.pdfs}</span>
-                        </li>
-                        <li class="list-group-item bg-transparent d-flex justify-content-between">
-                            <span>Text Chunks:</span>
-                            <span class="badge bg-success rounded-pill">${data.stats.chunks}</span>
-                        </li>
-                    </ul>
-                `;
-            } else {
-                statsContent.innerHTML = `
-                    <div class="alert alert-danger" role="alert">
-                        <i class="fas fa-exclamation-circle me-2"></i>
-                        ${data.message}
-                    </div>
-                `;
-            }
-        } catch (error) {
-            statsContent.innerHTML = `
-                <div class="alert alert-danger" role="alert">
-                    <i class="fas fa-exclamation-circle me-2"></i>
-                    Error loading stats: ${error.message}
-                </div>
-            `;
-        }
-    }
+
     
     // Display result message
     function showResult(element, message, isSuccess) {
