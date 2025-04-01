@@ -16,8 +16,9 @@ import logging
 from typing import Dict, Any, Tuple, Optional, List
 
 # Restore built-in names in case they were shadowed
-int = __builtins__.int
-Exception = __builtins__.Exception
+import builtins
+int = builtins.int
+Exception = builtins.Exception
 
 # Configure logger
 logging.basicConfig(level=logging.INFO)
