@@ -58,8 +58,8 @@ MAX_RETRIES = 3     # Maximum number of retries for failed chunks
 RETRY_DELAY = 5     # Seconds to wait between retries
 
 # Resource thresholds
-HIGH_CPU_THRESHOLD = 75.0  # Percent
-HIGH_MEMORY_THRESHOLD = 80.0  # Percent
+HIGH_CPU_THRESHOLD = 85.0  # Percent
+HIGH_MEMORY_THRESHOLD = 85.0  # Percent
 
 # Ensure required directories exist
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
