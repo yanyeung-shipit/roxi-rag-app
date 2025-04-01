@@ -995,11 +995,17 @@ class BackgroundProcessor:
 
                             chunks = []
                             metadata = None
+                            max_chunks = 200  # Safety limit to avoid memory spike
                             
                             for i, (chunk, meta) in enumerate(process_pdf_generator(doc.file_path, doc.filename)):
+                                if i >= max_chunks:
+                                    logger.warning(f"PDF document {doc.id} exceeded max_chunks limit ({max_chunks}). Truncating.")
+                                    break
+                            
                                 chunks.append(chunk)
                                 if metadata is None:
-                                    metadata = meta  # Only set metadata once (it's the same for every yield)
+                                    metadata = meta  # Only set metadata once
+
                         
                         # Handle website documents
                         elif doc.file_type == 'website':
