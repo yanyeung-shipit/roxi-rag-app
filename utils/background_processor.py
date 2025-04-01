@@ -990,8 +990,7 @@ class BackgroundProcessor:
                                 session.commit()
                                 continue
                                 
-                            # Process the PDF
-                            chunks, metadata = process_pdf(doc.file_path, doc.filename)
+                            # Process the PDF                   
                             from utils.pdf_parser import process_pdf_generator
 
                             chunks = []
