@@ -332,7 +332,16 @@ def upload_pdf():
             
             try:
                 # Process PDF and add to vector store
-                chunks, metadata = process_pdf(file_path, filename)
+                from utils.pdf_parser import process_pdf_generator
+
+                chunks = []
+                metadata = None
+                
+                for chunk, meta in process_pdf_generator(file_path, filename):
+                    chunks.append(chunk)
+                    if metadata is None:
+                        metadata = meta  # Only capture metadata once
+
                 
                 if not chunks:
                     logger.warning("No chunks extracted from PDF")
