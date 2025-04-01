@@ -8,7 +8,7 @@ import threading
 from flask import Flask, render_template, request, jsonify, flash, redirect, url_for, abort, send_file
 from werkzeug.utils import secure_filename
 from werkzeug.security import safe_join
-from utils.document_processor import process_pdf, bulk_process_pdfs
+from utils.pdf_parser import process_pdf_generator
 from utils.web_scraper import scrape_website, create_minimal_content_for_topic
 from utils.vector_store import VectorStore
 from utils.llm_service import generate_response
