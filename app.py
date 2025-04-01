@@ -263,9 +263,12 @@ def upload_pdf():
         
         # Process valid file
         if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            logger.info(f"Processing PDF: {filename}")
-            
+            # Log file name and size before saving
+            file.seek(0, os.SEEK_END)
+            file_size = file.tell()
+            file.seek(0)
+            logger.info(f"Uploading document: {file.filename}, size: {file_size} bytes")
+                   
             # New document being uploaded - always exit deep sleep mode
             from utils.background_processor import exit_deep_sleep
             exit_deep_sleep()
@@ -278,12 +281,9 @@ def upload_pdf():
                     'message': f"Document with filename '{filename}' already exists. Please use a different filename or delete the existing document first."
                 }), 400
             
-            # Check file size before saving - limit to 50MB per file
-            file.seek(0, os.SEEK_END)
-            file_size = file.tell()
-            file.seek(0)  # Reset file pointer
-            
+            # File size already calculated earlier
             if file_size > 50 * 1024 * 1024:  # 50MB limit
+                
                 logger.warning(f"PDF file too large: {file_size / (1024*1024):.2f} MB")
                 return jsonify({
                     'success': False, 
