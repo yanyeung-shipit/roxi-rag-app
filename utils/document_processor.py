@@ -126,39 +126,6 @@ def extract_pdf_metadata(pdf_doc, file_name) -> Dict[str, Any]:
     
     return metadata
 
-def process_pdf_lazy(file_path, filename):
-    """
-    Generator that yields chunks one at a time.
-    """
-    import fitz  # PyMuPDF or whatever library you're using
-    doc = fitz.open(file_path)
-    
-    metadata = {
-        'page_count': len(doc),
-        # You can extract more metadata here if needed
-    }
-
-    for i, page in enumerate(doc):
-        try:
-            text = page.get_text()
-            if not text.strip():
-                continue
-
-            # You can add your own chunking logic here
-            yield {
-                'text': text,
-                'metadata': {
-                    'page': i + 1,
-                    'filename': filename
-                }
-            }
-        except Exception as e:
-            # Optional: yield a warning or log and skip
-            continue
-
-    doc.close()
-    yield {'__metadata__': metadata}  # final yield is metadata
-
 def bulk_process_pdfs(pdf_files, batch_size=3):
     """
     Process multiple PDF files in a memory-efficient way.
