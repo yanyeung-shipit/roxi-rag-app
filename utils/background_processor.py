@@ -1081,32 +1081,41 @@ class BackgroundProcessor:
                         # Import vector store to use for adding chunks
                         from utils.vector_store import vector_store
                         
+                        successful_chunks = 0
+
                         for i, chunk in enumerate(chunks):
-                            # Create metadata for the chunk
-                            chunk_metadata = {
-                                'document_id': doc.id,
-                                'chunk_index': i,
-                                'page_number': chunk.get('metadata', {}).get('page_number', None),
-                                'document_title': doc.title or doc.filename,
-                                'file_type': doc.file_type,
-                                'doi': doc.doi,
-                                'formatted_citation': doc.formatted_citation,
-                                'source_url': doc.source_url,
-                                'citation': chunk.get('metadata', {}).get('citation', doc.formatted_citation)
-                            }
-                            
-                            # Add to vector store
-                            vector_store.add_text(chunk['text'], chunk_metadata)
-                            
-                            # Create database record
-                            chunk_record = DocumentChunk(
-                                document_id=doc.id,
-                                chunk_index=i,
-                                page_number=chunk.get('metadata', {}).get('page_number', None),
-                                text_content=chunk['text']
-                            )
-                            
-                            session.add(chunk_record)
+                            try:
+                                # Create metadata for the chunk
+                                chunk_metadata = {
+                                    'document_id': doc.id,
+                                    'chunk_index': i,
+                                    'page_number': chunk.get('metadata', {}).get('page_number', None),
+                                    'document_title': doc.title or doc.filename,
+                                    'file_type': doc.file_type,
+                                    'doi': doc.doi,
+                                    'formatted_citation': doc.formatted_citation,
+                                    'source_url': doc.source_url,
+                                    'citation': chunk.get('metadata', {}).get('citation', doc.formatted_citation)
+                                }
+                        
+                                # Add to vector store
+                                vector_store.add_text(chunk['text'], chunk_metadata)
+                        
+                                # Create and store DB record
+                                chunk_record = DocumentChunk(
+                                    document_id=doc.id,
+                                    chunk_index=i,
+                                    page_number=chunk.get('metadata', {}).get('page_number', None),
+                                    text_content=chunk['text']
+                                )
+                                session.add(chunk_record)
+                        
+                                successful_chunks += 1
+                        
+                            except Exception as chunk_error:
+                                logger.warning(f"Error saving chunk {i} for document {doc.id}: {str(chunk_error)}")
+                                continue  # Keep processing next chunks
+
                         
                         # Save changes
                         session.commit()
