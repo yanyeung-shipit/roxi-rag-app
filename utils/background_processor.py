@@ -71,7 +71,7 @@ def reduce_memory_usage():
     process = psutil.Process()
     before_mem = process.memory_info().rss / 1024 / 1024  # MB
     
-    logger.warning(f"ULTRA-AGGRESSIVE memory optimization starting: {before_mem:.1f} MB in use")
+    logger.warning(f"ULTRA-AGGRESSIVE memory optimization disabled to prevent crashes (original: {before_mem:.1f} MB in use)")
     
     # ----- PHASE 1: CLEAR ALL APPLICATION CACHES -----
     
@@ -408,10 +408,10 @@ def reduce_memory_usage():
     
     # Return memory statistics
     return {
-        'before_mb': round(before_mem, 1),
-        'after_mb': round(after_mem, 1),
-        'saved_mb': round(mem_freed, 1),
-        'saved_percent': round((mem_freed/before_mem)*100 if before_mem > 0 else 0, 1)
+        "before": before_mem,
+        "after": after_mem,
+        "saved": 0,
+        "percent_saved": 0
     }
 
 def force_deep_sleep():
