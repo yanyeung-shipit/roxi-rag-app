@@ -484,6 +484,30 @@ def bulk_upload_pdfs():
             }), 400
         
         # Get all files
+        from flask import stream_with_context
+
+        files = request.files.getlist('pdf_files[]')
+
+        if not files or files[0].filename == '':
+            logger.warning("No files selected")
+            return jsonify({
+                'success': False,
+                'message': 'No files selected'
+            }), 400
+
+        # For safety and sanity, limit number of files
+        max_files = 50
+        if len(files) > max_files:
+            logger.warning(f"Too many files: {len(files)}. Limit is {max_files}")
+            return jsonify({
+                'success': False,
+                'message': f'Maximum {max_files} files allowed per upload.'
+            }), 400
+
+        # Stream one file at a time to save memory
+        processed_files = []
+        skipped_files = []
+
         files = request.files.getlist('pdf_files[]')
         
         # Check if files were selected
