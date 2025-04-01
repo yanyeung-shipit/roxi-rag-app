@@ -30,7 +30,7 @@ HIGH_MEMORY_THRESHOLD = 85.0  # percent - increased from 80%
 CRITICAL_MEMORY_THRESHOLD = 90.0  # percent - threshold for emergency memory cleanup (increased from 80%)
 RESOURCE_UPDATE_INTERVAL = 3  # seconds - check more frequently (was 5)
 MEMORY_SAMPLE_SIZE = 15  # Number of memory readings to keep for trend analysis (increased from 10)
-LEAK_DETECTION_THRESHOLD = 3.0  # MB increase over last readings indicates potential leak (reduced from 5.0)
+LEAK_DETECTION_THRESHOLD = 5.0  # MB increase over last readings indicates potential leak (increased from 5.0)
 
 # Global state
 _resource_data = {
