@@ -25,9 +25,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Constants - more aggressive memory management
-HIGH_CPU_THRESHOLD = 70.0  # percent - reduced from 75%
-HIGH_MEMORY_THRESHOLD = 75.0  # percent - reduced from 80%
-CRITICAL_MEMORY_THRESHOLD = 80.0  # percent - threshold for emergency memory cleanup (reduced from 85%)
+HIGH_CPU_THRESHOLD = 85.0  # percent - increased from 70%
+HIGH_MEMORY_THRESHOLD = 85.0  # percent - increased from 80%
+CRITICAL_MEMORY_THRESHOLD = 90.0  # percent - threshold for emergency memory cleanup (increased from 80%)
 RESOURCE_UPDATE_INTERVAL = 3  # seconds - check more frequently (was 5)
 MEMORY_SAMPLE_SIZE = 15  # Number of memory readings to keep for trend analysis (increased from 10)
 LEAK_DETECTION_THRESHOLD = 3.0  # MB increase over last readings indicates potential leak (reduced from 5.0)
