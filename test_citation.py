@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO,
 
 logger = logging.getLogger(__name__)
 
-from utils.document_processor import process_pdf
+from utils.pdf_parser import process_pdf_generator
 from utils.citation_manager import extract_citation_info
 
 def test_document_citation(file_path, file_name):
