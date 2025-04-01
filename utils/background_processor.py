@@ -992,6 +992,15 @@ class BackgroundProcessor:
                                 
                             # Process the PDF
                             chunks, metadata = process_pdf(doc.file_path, doc.filename)
+                            from utils.pdf_parser import process_pdf_generator
+
+                            chunks = []
+                            metadata = None
+                            
+                            for i, (chunk, meta) in enumerate(process_pdf_generator(doc.file_path, doc.filename)):
+                                chunks.append(chunk)
+                                if metadata is None:
+                                    metadata = meta  # Only set metadata once (it's the same for every yield)
                         
                         # Handle website documents
                         elif doc.file_type == 'website':
