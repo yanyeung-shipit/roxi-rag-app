@@ -183,6 +183,79 @@ def bulk_process_pdfs(pdf_files, batch_size=3):
                 # Add sleep to allow some background processes to complete
                 time.sleep(0.5)
                 
+                # Use new generator-based PDF processor
+                generator = process_pdf_generator(file_path, filename)
+
+                # Get metadata (first yield)
+                metadata = next(generator)
+
+                if not metadata:
+                    logger.warning("No metadata extracted from PDF")
+                    return jsonify({
+                        'success': False, 
+                        'message': 'Could not extract metadata from PDF. The file may be scanned images or protected.'
+                    }), 400
+
+                # Limit total chunks for safety
+                max_chunks = 50
+                success_count = 0
+                chunk_records = []
+                batch_size = 10
+                chunks_processed = 0
+                
+                try:
+                    for chunk in generator:
+                        if chunks_processed >= max_chunks:
+                            logger.warning(f"Limiting chunks to {max_chunks}")
+                            break
+                        
+                        try:
+                            vector_store.add_text(chunk['text'], chunk['metadata'])
+                            chunk_record = DocumentChunk(
+                                document_id=new_document.id,
+                                chunk_index=chunks_processed,
+                                page_number=chunk['metadata'].get('page', None),
+                                text_content=chunk['text']
+                            )
+                            chunk_records.append(chunk_record)
+                            success_count += 1
+                            chunks_processed += 1
+                        except Exception as chunk_error:
+                            logger.warning(f"Error processing chunk: {chunk_error}")
+                        
+                        if len(chunk_records) >= batch_size:
+                            db.session.add_all(chunk_records)
+                            db.session.commit()
+                            chunk_records = []
+                except Exception as gen_error:
+                    logger.warning(f"Error during chunk processing: {gen_error}")
+                finally:
+                    if chunk_records:
+                        db.session.add_all(chunk_records)
+                        db.session.commit()
+                
+                # Update metadata on document
+                for key, value in metadata.items():
+                    if hasattr(new_document, key) and value is not None:
+                        setattr(new_document, key, value)
+                db.session.commit()
+                
+                # Mark processed if any chunks succeeded
+                if success_count > 0:
+                    new_document.processed = True
+                    db.session.commit()
+                    return jsonify({
+                        'success': True,
+                        'message': f'Successfully processed {filename} ({success_count} chunks)',
+                        'document_id': new_document.id,
+                        'chunks': success_count
+                    })
+                else:
+                    return jsonify({
+                        'success': False,
+                        'message': 'File saved but no valid content was extracted.'
+                    }), 500
+                
                 chunks, metadata = process_pdf(file_path, file_name)
                 batch_results.append((chunks, metadata))
                 
