@@ -15,6 +15,10 @@ import gc
 import logging
 from typing import Dict, Any, Tuple, Optional, List
 
+# Restore built-in names in case they were shadowed
+int = __builtins__.int
+Exception = __builtins__.Exception
+
 # Configure logger
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
