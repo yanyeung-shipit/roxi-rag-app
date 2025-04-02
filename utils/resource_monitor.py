@@ -505,7 +505,10 @@ def _resource_monitor_thread():
                         counter = 0
             
         except Exception as e:
-            logger.error(f"Error in resource monitor thread: {e}", exc_info=True)
+            logger.error(f"Resource monitor thread error: {str(e)}")
+            logger.error("Resource monitoring disabled due to error")
+            # Don't crash the application, just disable monitoring
+            time.sleep(60)  # Sleep to prevent tight error loops
         
         # Sleep until next update
         time.sleep(RESOURCE_UPDATE_INTERVAL)
